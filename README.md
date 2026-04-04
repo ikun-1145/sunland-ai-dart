@@ -1,17 +1,66 @@
-# sunland_ai_app
+# Sunland AI App
 
-A new Flutter project.
+🚀 基于 Flutter 开发的 AI 助手应用
 
-## Getting Started
+## ✨ 项目简介
+Sunland AI 是一个轻量、现代化的 AI 应用，支持：
+- 🤖 AI 对话
+- ✍️ 文本优化 / 润色
+- 📊 内容分析
+- 🔄 多场景智能交互
 
-This project is a starting point for a Flutter application.
+本项目使用 **Flutter + Dart** 开发，目标是打造一个跨平台的 AI 客户端。
 
-A few resources to get you started if this is your first Flutter project:
+---
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## 🛠️ 技术栈
+- Flutter
+- Dart
+- （后续可接入）Supabase / OpenAI API
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+---
+
+## 📱 运行方式
+
+确保你已经安装：
+- Flutter SDK
+- Dart 环境
+
+运行项目：
+
+```
+flutter pub get
+flutter run
+```
+
+---
+
+## 📂 项目结构（简要）
+
+```
+lib/        # 主代码
+assets/     # 资源文件
+android/    # Android 平台
+ios/        # iOS 平台
+```
+
+---
+
+## 📌 开发计划
+
+- [ ] AI 对话界面优化
+- [ ] 登录系统（Supabase）
+- [ ] 多端数据同步
+- [ ] UI 动效升级
+
+---
+
+## 🤝 贡献
+
+欢迎提交 Issue 或 PR，一起完善这个项目！
+
+---
+
+## 📄 License
+
+MIT License
