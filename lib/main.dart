@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:convert';
+import 'dart:io';
+import 'package:image_picker/image_picker.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -28,8 +31,73 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: '霜蓝AI',
-      theme: ThemeData.dark(),
-      home: const ChatPage(),
+      theme: ThemeData.light(),
+      home: const SplashPage(),
+    );
+  }
+}
+
+class SplashPage extends StatefulWidget {
+  const SplashPage({super.key});
+
+  @override
+  State<SplashPage> createState() => _SplashPageState();
+}
+
+class _SplashPageState extends State<SplashPage>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    );
+
+    _scale = Tween<double>(
+      begin: 0.6,
+      end: 1.2,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    _controller.forward();
+
+    Future.delayed(const Duration(milliseconds: 1200), () {
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 400),
+          pageBuilder: (_, __, ___) => const ChatPage(),
+          transitionsBuilder: (_, animation, __, child) {
+            return FadeTransition(opacity: animation, child: child);
+          },
+        ),
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      body: Center(
+        child: ScaleTransition(
+          scale: _scale,
+          child: Image.asset(
+            'assets/logo.jpg', // ⚠️ 这里放你的 logo
+            width: 120,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -49,6 +117,7 @@ class _ChatPageState extends State<ChatPage> {
 
   List<Map<String, dynamic>> messages = [];
   bool isGenerating = false;
+  List<String> pickedImages = [];
 
   Future<void> loadMessages() async {
     final user = supabase.auth.currentUser;
@@ -87,9 +156,126 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     loadMessages();
+    supabase.auth.onAuthStateChange.listen((data) {
+      final session = data.session;
+      if (session != null) {
+        loadMessages();
+      }
+    });
+  }
+
+  void showLoginSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) {
+        return Container(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Text(
+                "登录霜蓝AI",
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                "同步你的聊天记录",
+                style: TextStyle(color: Colors.black45, fontSize: 13),
+              ),
+              const SizedBox(height: 20),
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  signInWithGitHub();
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SvgPicture.asset(
+                        "assets/icons/github.svg",
+                        width: 18,
+                        color: Colors.white,
+                      ),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "使用 GitHub 登录",
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  signInWithGoogle();
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.black12),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Image.asset("assets/icons/google.png", width: 18),
+                      const SizedBox(width: 8),
+                      const Text(
+                        "使用 Google 登录",
+                        style: TextStyle(fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: () => Navigator.pop(context),
+                child: const Text(
+                  "暂不登录",
+                  style: TextStyle(color: Colors.black38),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   Future<void> sendMessage() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      showLoginSheet(); // 仅提示，不拦截
+    }
     final text = controller.text.trim();
     if (text.isEmpty) return;
 
@@ -103,7 +289,6 @@ class _ChatPageState extends State<ChatPage> {
       });
     });
 
-    final user = supabase.auth.currentUser;
     if (user != null) {
       await supabase.from('messages').insert({
         'user_id': user.id,
@@ -117,11 +302,8 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       final response = await http.post(
-        Uri.parse("https://api.deepseek.com/v1/chat/completions"),
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer sk-34431c6657ca450893e6047d0e26f03d",
-        },
+        Uri.parse("https://sunlandai.liuxizekali.workers.dev"),
+        headers: {"Content-Type": "application/json"},
         // 构建上下文（最近20条）
         body: () {
           List<Map<String, String>> history = [];
@@ -189,255 +371,378 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  Widget buildQuickBtn(String text) {
+    return GestureDetector(
+      onTap: () {
+        controller.text = text.replaceAll(
+          RegExp(r'^[^ ]+ '),
+          '',
+        ); // 去掉 emoji 前缀
+        sendMessage();
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(text, style: const TextStyle(fontSize: 14)),
+      ),
+    );
+  }
+
+  Future<void> pickImage() async {
+    // 📱 移动端：使用 image_picker
+    if (Platform.isAndroid || Platform.isIOS) {
+      final picker = ImagePicker();
+      final picked = await picker.pickMultiImage();
+
+      if (picked.isEmpty) return;
+
+      setState(() {
+        for (var img in picked) {
+          pickedImages.add(img.path);
+        }
+      });
+      return;
+    }
+
+    // 💻 桌面端：使用 file_picker
+    final result = await FilePicker.platform.pickFiles(
+      allowMultiple: true,
+      type: FileType.image,
+    );
+
+    if (result == null || result.files.isEmpty) return;
+
+    setState(() {
+      for (var file in result.files) {
+        if (file.path != null) {
+          pickedImages.add(file.path!);
+        }
+      }
+    });
+  }
+
+  void showUserMenu() {
+    showModalBottomSheet(
+      context: context,
+      builder: (_) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                title: const Text("退出登录"),
+                onTap: () async {
+                  await supabase.auth.signOut();
+                  Navigator.pop(context);
+                  setState(() {
+                    messages.clear();
+                  });
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+      ),
+    );
     return Scaffold(
+      extendBodyBehindAppBar: true,
       backgroundColor: Colors.transparent,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.black87,
         elevation: 0,
-        title: const Text("霜蓝AI"),
-        actions: [
-          Row(
-            children: [
-              const Text("深度思考"),
-              Switch(
-                value: useReasoner,
-                onChanged: (v) {
-                  setState(() {
-                    useReasoner = v;
-                  });
-                },
-              ),
-              const SizedBox(width: 8),
-            ],
-          ),
-        ],
-      ),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFFEAF3F9), Color(0xFFDCEAF5)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+        systemOverlayStyle: const SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarIconBrightness: Brightness.dark,
+          statusBarBrightness: Brightness.light,
         ),
-        child: Column(
+        title: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            if (supabase.auth.currentUser == null)
-              Padding(
-                padding: const EdgeInsets.only(top: 40),
-                child: Column(
+            const Text("霜蓝AI"),
+            Builder(
+              builder: (_) {
+                final user = supabase.auth.currentUser;
+                if (user == null) {
+                  return GestureDetector(
+                    onTap: showLoginSheet,
+                    child: const Text("登录", style: TextStyle(fontSize: 14)),
+                  );
+                }
+                return Row(
                   children: [
-                    const Text(
-                      "登录后同步聊天记录",
-                      style: TextStyle(fontSize: 16, color: Colors.black54),
+                    const Icon(Icons.account_circle, size: 20),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: showUserMenu,
+                      child: const Text("已登录", style: TextStyle(fontSize: 14)),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+      body: Stack(
+        children: [
+          // 背景渐变（更高级）
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFFF3F8FF), Color(0xFFE6F2FF)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
+
+          Column(
+            children: [
+              const SizedBox(height: 80),
+
+              // 欢迎区（仿 Gemini）
+              if (messages.where((m) => m["isUser"] == true).isEmpty)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20),
+                      child: Text(
+                        "霜蓝，你好",
+                        style: TextStyle(fontSize: 20, color: Colors.black54),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    const Padding(
+                      padding: EdgeInsets.symmetric(horizontal: 20),
+                      child: Text(
+                        "需要我为你做些什么？",
+                        style: TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
                     ),
                     const SizedBox(height: 20),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+
+                    // 快捷按钮
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
                       children: [
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(30),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.08),
-                                blurRadius: 10,
-                              ),
-                            ],
-                          ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(30),
-                            onTap: signInWithGoogle,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                children: [
-                                  Image.asset(
-                                    'assets/icons/google.png',
-                                    width: 18,
-                                    height: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    "Google 登录",
-                                    style: TextStyle(
-                                      color: Colors.black87,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.black,
-                            borderRadius: BorderRadius.circular(30),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.2),
-                                blurRadius: 10,
-                              ),
-                            ],
-                          ),
-                          child: InkWell(
-                            borderRadius: BorderRadius.circular(30),
-                            onTap: signInWithGitHub,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 18,
-                                vertical: 10,
-                              ),
-                              child: Row(
-                                children: [
-                                  SvgPicture.asset(
-                                    'assets/icons/github.svg',
-                                    width: 18,
-                                    height: 18,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const Text(
-                                    "GitHub 登录",
-                                    style: TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
+                        buildQuickBtn("🧠 激发我的活力"),
+                        buildQuickBtn("✨ 给我一点灵感"),
+                        buildQuickBtn("📄 随便聊聊"),
                       ],
                     ),
                   ],
                 ),
-              ),
-            Expanded(
-              child: ListView.builder(
-                controller: scrollController,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 12,
-                ),
-                itemCount: messages.length,
-                itemBuilder: (_, i) {
-                  final msg = messages[i];
-                  final isUser = msg["isUser"];
 
-                  return Container(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    alignment: isUser
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 12,
-                      ),
-                      constraints: BoxConstraints(
-                        maxWidth: MediaQuery.of(context).size.width * 0.65,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isUser
-                            ? const Color(0xFF38BDF8)
-                            : Colors.white.withOpacity(0.9),
-                        borderRadius: BorderRadius.only(
-                          topLeft: const Radius.circular(16),
-                          topRight: const Radius.circular(16),
-                          bottomLeft: isUser
-                              ? const Radius.circular(16)
-                              : Radius.zero,
-                          bottomRight: isUser
-                              ? Radius.zero
-                              : const Radius.circular(16),
+              // 聊天区
+              Expanded(
+                child: ListView.builder(
+                  controller: scrollController,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 12,
+                  ),
+                  itemCount: messages.length,
+                  itemBuilder: (_, i) {
+                    final msg = messages[i];
+                    final isUser = msg["isUser"];
+
+                    return Container(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      alignment: isUser
+                          ? Alignment.centerRight
+                          : Alignment.centerLeft,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
                         ),
-                      ),
-                      child: isUser
-                          ? Text(
-                              msg["text"],
-                              style: const TextStyle(
-                                fontSize: 15,
-                                color: Colors.white,
-                              ),
-                            )
-                          : MarkdownBody(
-                              data: msg["text"],
-                              selectable: true,
-                              styleSheet: MarkdownStyleSheet(
-                                p: const TextStyle(
+                        constraints: BoxConstraints(
+                          maxWidth: MediaQuery.of(context).size.width * 0.65,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isUser
+                              ? const Color(0xFF22D3EE)
+                              : Colors.white.withOpacity(0.95),
+                          borderRadius: BorderRadius.circular(18),
+                        ),
+                        child: isUser
+                            ? Text(
+                                msg["text"],
+                                style: const TextStyle(
                                   fontSize: 15,
-                                  color: Colors.black87,
+                                  color: Colors.white,
                                 ),
-                                code: const TextStyle(
-                                  backgroundColor: Color(0xFFF1F5F9),
-                                  fontFamily: 'monospace',
-                                ),
+                              )
+                            : MarkdownBody(
+                                data: msg["text"],
+                                selectable: true,
+                                builders: {'code': CodeElementBuilder()},
                               ),
-                              builders: {'code': CodeElementBuilder()},
-                            ),
-                    ),
-                  );
-                },
-              ),
-            ),
-            SafeArea(
-              child: Container(
-                margin: const EdgeInsets.all(12),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(30),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                    ),
-                  ],
+                      ),
+                    );
+                  },
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: controller,
-                        style: const TextStyle(fontSize: 15),
-                        decoration: const InputDecoration(
-                          hintText: "有问题，尽管问",
-                          hintStyle: TextStyle(color: Colors.grey),
-                          border: InputBorder.none,
+              ),
+
+              // 输入框（更像 Gemini）
+              SafeArea(
+                child: Container(
+                  margin: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.9),
+                    borderRadius: BorderRadius.circular(30),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.08),
+                        blurRadius: 20,
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: pickImage,
+                        child: const Icon(Icons.add, color: Colors.grey),
+                      ),
+
+                      const SizedBox(width: 6),
+
+                      if (pickedImages.isNotEmpty)
+                        SizedBox(
+                          height: 40,
+                          child: ListView.builder(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: pickedImages.length,
+                            itemBuilder: (_, i) {
+                              return Container(
+                                margin: const EdgeInsets.only(right: 6),
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade300,
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Stack(
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(10),
+                                      child: Image.file(
+                                        File(pickedImages[i]),
+                                        fit: BoxFit.cover,
+                                        width: 40,
+                                        height: 40,
+                                      ),
+                                    ),
+
+                                    Positioned(
+                                      top: -4,
+                                      right: -4,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          setState(() {
+                                            pickedImages.removeAt(i);
+                                          });
+                                        },
+                                        child: Container(
+                                          width: 18,
+                                          height: 18,
+                                          decoration: const BoxDecoration(
+                                            color: Colors.red,
+                                            shape: BoxShape.circle,
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            size: 12,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+
+                      const SizedBox(width: 6),
+
+                      GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            useReasoner = !useReasoner;
+                          });
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 6,
+                          ),
+                          decoration: BoxDecoration(
+                            color: useReasoner
+                                ? const Color(0xFF22D3EE).withOpacity(0.2)
+                                : Colors.black.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                              color: useReasoner
+                                  ? const Color(0xFF22D3EE)
+                                  : Colors.transparent,
+                            ),
+                          ),
+                          child: Icon(
+                            Icons.auto_awesome,
+                            size: 16,
+                            color: useReasoner
+                                ? const Color(0xFF22D3EE)
+                                : Colors.black54,
+                          ),
                         ),
                       ),
-                    ),
-                    isGenerating
-                        ? IconButton(
-                            icon: const Icon(Icons.stop),
-                            color: Colors.red,
-                            onPressed: () {
-                              setState(() {
-                                isGenerating = false;
-                              });
-                            },
-                          )
-                        : IconButton(
-                            icon: const Icon(Icons.send),
-                            color: const Color(0xFF38BDF8),
-                            onPressed: sendMessage,
+
+                      const SizedBox(width: 6),
+
+                      Expanded(
+                        child: TextField(
+                          controller: controller,
+                          decoration: const InputDecoration(
+                            hintText: "问点什么...",
+                            border: InputBorder.none,
                           ),
-                  ],
+                        ),
+                      ),
+
+                      IconButton(
+                        icon: const Icon(Icons.send),
+                        color: const Color(0xFF22D3EE),
+                        onPressed: sendMessage,
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
-        ),
+            ],
+          ),
+        ],
       ),
     );
   }
