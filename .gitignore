@@ -1,12 +1,14 @@
-# Dart / Flutter
+# Flutter / Dart
 .dart_tool/
 .packages
 .pub-cache/
 build/
+.flutter-plugins-dependencies
 
 # IDE
 .vscode/
 .idea/
+*.iml
 
 # macOS
 .DS_Store
