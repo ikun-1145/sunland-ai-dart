@@ -113,11 +113,16 @@ class _ChatPageState extends State<ChatPage> {
   final supabase = Supabase.instance.client;
   bool useReasoner = false;
   final TextEditingController controller = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
   final ScrollController scrollController = ScrollController();
 
   List<Map<String, dynamic>> messages = [];
+  List<Map<String, dynamic>> conversations = [];
+  String? currentConversationId;
   bool isGenerating = false;
   List<String> pickedImages = [];
+  DateTime? lastEmailSendTime;
+  bool isUploadingAvatar = false;
 
   Future<void> loadMessages() async {
     final user = supabase.auth.currentUser;
@@ -138,6 +143,21 @@ class _ChatPageState extends State<ChatPage> {
     scrollToBottom();
   }
 
+  Future<void> loadConversations() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final data = await supabase
+        .from('conversations')
+        .select()
+        .eq('user_id', user.id)
+        .order('created_at', ascending: false);
+
+    setState(() {
+      conversations = List<Map<String, dynamic>>.from(data);
+    });
+  }
+
   Future<void> signInWithGitHub() async {
     await supabase.auth.signInWithOAuth(
       OAuthProvider.github,
@@ -152,16 +172,49 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  Future<void> sendMagicLink(String email) async {
+    await supabase.auth.signInWithOtp(
+      email: email,
+      emailRedirectTo: 'io.supabase.flutter://login-callback/',
+    );
+  }
+
   @override
   void initState() {
     super.initState();
-    loadMessages();
+    _initData();
+
     supabase.auth.onAuthStateChange.listen((data) {
       final session = data.session;
       if (session != null) {
-        loadMessages();
+        if (!mounted) return;
+        setState(() {});
+        loadConversations();
       }
     });
+  }
+
+  Future<void> _initData() async {
+    await loadConversations();
+
+    if (conversations.isNotEmpty) {
+      final convo = conversations.first;
+      currentConversationId = convo["id"];
+
+      final msgs = await supabase
+          .from('messages')
+          .select()
+          .eq('conversation_id', currentConversationId!)
+          .order('created_at');
+
+      if (!mounted) return;
+
+      setState(() {
+        messages = (msgs as List)
+            .map((e) => {"text": e['content'], "isUser": e['is_user']})
+            .toList();
+      });
+    }
   }
 
   void showLoginSheet() {
@@ -257,6 +310,65 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ),
               const SizedBox(height: 10),
+              TextField(
+                controller: emailController,
+                keyboardType: TextInputType.emailAddress,
+                decoration: InputDecoration(
+                  hintText: "输入邮箱",
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 10,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              GestureDetector(
+                onTap: () async {
+                  final email = emailController.text.trim();
+                  if (email.isEmpty) return;
+
+                  final now = DateTime.now();
+                  if (lastEmailSendTime != null &&
+                      now.difference(lastEmailSendTime!).inSeconds < 60) {
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text("请60秒后再试")));
+                    return;
+                  }
+
+                  lastEmailSendTime = now;
+
+                  await sendMagicLink(email);
+                  if (!mounted) return;
+
+                  Navigator.pop(context);
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("邮件已发送，请检查收件箱或垃圾邮件")),
+                  );
+                },
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  decoration: BoxDecoration(
+                    color: Color(0xFF22D3EE),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Center(
+                    child: Text(
+                      "发送登录链接",
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
               GestureDetector(
                 onTap: () => Navigator.pop(context),
                 child: const Text(
@@ -290,8 +402,24 @@ class _ChatPageState extends State<ChatPage> {
       });
     });
 
+    // Insert conversation and user message if needed
+    if (currentConversationId == null) {
+      final convo = await supabase
+          .from('conversations')
+          .insert({
+            'user_id': user.id,
+            'title': text.length > 15 ? text.substring(0, 15) + "..." : text,
+          })
+          .select()
+          .single();
+
+      currentConversationId = convo['id'];
+      loadConversations();
+    }
+
     await supabase.from('messages').insert({
       'user_id': user.id,
+      'conversation_id': currentConversationId,
       'content': text,
       'is_user': true,
     });
@@ -317,7 +445,12 @@ class _ChatPageState extends State<ChatPage> {
         body: () {
           List<Map<String, String>> history = [];
 
-          for (var msg in messages.take(20)) {
+          for (var msg
+              in messages
+                  .where(
+                    (m) => m["text"] != "思考中..." && m["text"] != "深度思考中...",
+                  )
+                  .take(20)) {
             history.add({
               "role": msg["isUser"] ? "user" : "assistant",
               "content": msg["text"],
@@ -348,14 +481,15 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
+      // Save assistant message
       await supabase.from('messages').insert({
         'user_id': user.id,
+        'conversation_id': currentConversationId,
         'content': messages.last["text"],
         'is_user': false,
       });
 
       isGenerating = false;
-
       scrollToBottom();
     } catch (e) {
       setState(() {
@@ -367,7 +501,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void scrollToBottom() {
-    Future.delayed(const Duration(milliseconds: 100), () {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (scrollController.hasClients) {
         scrollController.animateTo(
           scrollController.position.maxScrollExtent,
@@ -431,7 +565,48 @@ class _ChatPageState extends State<ChatPage> {
     });
   }
 
+  Future<void> pickAndUploadAvatar() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    setState(() {
+      isUploadingAvatar = true;
+    });
+
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery);
+    if (picked == null) {
+      setState(() {
+        isUploadingAvatar = false;
+      });
+      return;
+    }
+
+    final file = File(picked.path);
+    final fileName = '${user.id}.png';
+
+    // 上传到 Supabase Storage（bucket: avatars）
+    await supabase.storage
+        .from('avatars')
+        .upload(fileName, file, fileOptions: const FileOptions(upsert: true));
+
+    final publicUrl = supabase.storage.from('avatars').getPublicUrl(fileName);
+
+    // 写入用户 metadata
+    await supabase.auth.updateUser(
+      UserAttributes(data: {'avatar_url': publicUrl}),
+    );
+    await supabase.auth.refreshSession();
+    if (!mounted) return;
+
+    setState(() {
+      isUploadingAvatar = false;
+    });
+  }
+
   void showUserMenu() {
+    final user = supabase.auth.currentUser;
+
     showModalBottomSheet(
       context: context,
       builder: (_) {
@@ -439,7 +614,53 @@ class _ChatPageState extends State<ChatPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              const SizedBox(height: 10),
+              CircleAvatar(
+                radius: 24,
+                backgroundColor: const Color(0xFF22D3EE),
+                backgroundImage: (user?.userMetadata?['avatar_url'] != null)
+                    ? NetworkImage(user!.userMetadata!['avatar_url'])
+                    : null,
+                child: (user?.userMetadata?['avatar_url'] == null)
+                    ? const Icon(Icons.person, color: Colors.white)
+                    : null,
+              ),
+              const SizedBox(height: 8),
+              Text(user?.email ?? "未登录", style: const TextStyle(fontSize: 14)),
+              const SizedBox(height: 16),
+
               ListTile(
+                leading: const Icon(Icons.refresh),
+                title: const Text("重新加载对话"),
+                onTap: () {
+                  Navigator.pop(context);
+                  loadConversations();
+                },
+              ),
+
+              if (user?.userMetadata?['avatar_url'] == null)
+                ListTile(
+                  leading: const Icon(Icons.image),
+                  title: const Text("更换头像"),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    if (isUploadingAvatar) return;
+
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text("头像上传中...")));
+
+                    await pickAndUploadAvatar();
+                    if (!mounted) return;
+
+                    ScaffoldMessenger.of(
+                      context,
+                    ).showSnackBar(const SnackBar(content: Text("头像已更新")));
+                  },
+                ),
+
+              ListTile(
+                leading: const Icon(Icons.logout),
                 title: const Text("退出登录"),
                 onTap: () async {
                   await supabase.auth.signOut();
@@ -449,6 +670,8 @@ class _ChatPageState extends State<ChatPage> {
                   });
                 },
               ),
+
+              const SizedBox(height: 10),
             ],
           ),
         );
@@ -465,6 +688,98 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
     return Scaffold(
+      drawer: Drawer(
+        child: SafeArea(
+          child: Column(
+            children: [
+              const SizedBox(height: 10),
+              // 新对话按钮
+              ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text("新对话"),
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() {
+                    currentConversationId = null;
+                    messages.clear();
+                  });
+                },
+              ),
+              const Text(
+                "历史对话",
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const Divider(),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: conversations.length,
+                  itemBuilder: (_, i) {
+                    final convo = conversations[i];
+
+                    return ListTile(
+                      trailing: IconButton(
+                        icon: const Icon(Icons.delete, size: 18),
+                        onPressed: () async {
+                          final id = convo["id"];
+
+                          await supabase
+                              .from('messages')
+                              .delete()
+                              .eq('conversation_id', id);
+                          await supabase
+                              .from('conversations')
+                              .delete()
+                              .eq('id', id);
+
+                          loadConversations();
+
+                          if (currentConversationId == id) {
+                            if (!mounted) return;
+                            setState(() {
+                              currentConversationId = null;
+                              messages.clear();
+                            });
+                          }
+                        },
+                      ),
+                      title: Text(
+                        convo["title"] ?? "新对话",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      onTap: () async {
+                        Navigator.pop(context);
+
+                        currentConversationId = convo["id"];
+
+                        final msgs = await supabase
+                            .from('messages')
+                            .select()
+                            .eq('conversation_id', currentConversationId!)
+                            .order('created_at');
+
+                        if (!mounted) return;
+                        setState(() {
+                          messages = (msgs as List)
+                              .map(
+                                (e) => {
+                                  "text": e['content'],
+                                  "isUser": e['is_user'],
+                                },
+                              )
+                              .toList();
+                        });
+
+                        scrollToBottom();
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
       extendBodyBehindAppBar: true,
       backgroundColor: Colors.transparent,
       appBar: AppBar(
@@ -475,6 +790,16 @@ class _ChatPageState extends State<ChatPage> {
           statusBarColor: Colors.transparent,
           statusBarIconBrightness: Brightness.dark,
           statusBarBrightness: Brightness.light,
+        ),
+        leading: Builder(
+          builder: (context) {
+            return IconButton(
+              icon: const Icon(Icons.menu),
+              onPressed: () {
+                Scaffold.of(context).openDrawer();
+              },
+            );
+          },
         ),
         title: Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -489,15 +814,34 @@ class _ChatPageState extends State<ChatPage> {
                     child: const Text("登录", style: TextStyle(fontSize: 14)),
                   );
                 }
-                return Row(
-                  children: [
-                    const Icon(Icons.account_circle, size: 20),
-                    const SizedBox(width: 6),
-                    GestureDetector(
-                      onTap: showUserMenu,
-                      child: const Text("已登录", style: TextStyle(fontSize: 14)),
-                    ),
-                  ],
+                // Avatar and email clickable row
+                return GestureDetector(
+                  onTap: showUserMenu,
+                  child: Row(
+                    children: [
+                      CircleAvatar(
+                        radius: 10,
+                        backgroundColor: const Color(0xFF22D3EE),
+                        backgroundImage:
+                            (user.userMetadata?['avatar_url'] != null)
+                            ? NetworkImage(user.userMetadata!['avatar_url'])
+                            : null,
+                        child: (user.userMetadata?['avatar_url'] == null)
+                            ? const Icon(
+                                Icons.person,
+                                size: 14,
+                                color: Colors.white,
+                              )
+                            : null,
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        user.email ?? "用户",
+                        style: const TextStyle(fontSize: 13),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
                 );
               },
             ),
