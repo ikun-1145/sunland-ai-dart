@@ -70,8 +70,8 @@ class _SplashPageState extends State<SplashPage>
         context,
         PageRouteBuilder(
           transitionDuration: const Duration(milliseconds: 400),
-          pageBuilder: (_, __, ___) => const ChatPage(),
-          transitionsBuilder: (_, animation, __, child) {
+          pageBuilder: (_, _, _) => const ChatPage(),
+          transitionsBuilder: (_, animation, _, child) {
             return FadeTransition(opacity: animation, child: child);
           },
         ),
@@ -274,7 +274,8 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> sendMessage() async {
     final user = supabase.auth.currentUser;
     if (user == null) {
-      showLoginSheet(); // 仅提示，不拦截
+      showLoginSheet();
+      return; // ⭐ 未登录直接禁止发送
     }
     final text = controller.text.trim();
     if (text.isEmpty) return;
@@ -301,9 +302,19 @@ class _ChatPageState extends State<ChatPage> {
     scrollToBottom();
 
     try {
+      final session = supabase.auth.currentSession;
+      if (session == null) {
+        showLoginSheet();
+        return;
+      }
+      final token = session!.accessToken; // ⭐ 必须登录才有 token
+
       final response = await http.post(
-        Uri.parse("https://sunlandai.liuxizekali.workers.dev"),
-        headers: {"Content-Type": "application/json"},
+        Uri.parse("https://ai.liuxizekali.workers.dev"),
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer $token",
+        },
         // 构建上下文（最近20条）
         body: () {
           List<Map<String, String>> history = [];
