@@ -93,7 +93,7 @@ class _SplashPageState extends State<SplashPage>
         child: ScaleTransition(
           scale: _scale,
           child: Image.asset(
-            'assets/logo.jpg', // ⚠️ 这里放你的 logo
+            'assets/ailogo.png', // ⚠️ 这里放你的 logo
             width: 120,
           ),
         ),
