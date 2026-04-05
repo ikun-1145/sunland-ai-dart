@@ -290,13 +290,11 @@ class _ChatPageState extends State<ChatPage> {
       });
     });
 
-    if (user != null) {
-      await supabase.from('messages').insert({
-        'user_id': user.id,
-        'content': text,
-        'is_user': true,
-      });
-    }
+    await supabase.from('messages').insert({
+      'user_id': user.id,
+      'content': text,
+      'is_user': true,
+    });
 
     controller.clear();
     scrollToBottom();
@@ -307,7 +305,7 @@ class _ChatPageState extends State<ChatPage> {
         showLoginSheet();
         return;
       }
-      final token = session!.accessToken; // ⭐ 必须登录才有 token
+      final token = session.accessToken; // ⭐ 必须登录才有 token
 
       final response = await http.post(
         Uri.parse("https://ai.liuxizekali.workers.dev"),
@@ -350,13 +348,11 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
-      if (user != null) {
-        await supabase.from('messages').insert({
-          'user_id': user.id,
-          'content': messages.last["text"],
-          'is_user': false,
-        });
-      }
+      await supabase.from('messages').insert({
+        'user_id': user.id,
+        'content': messages.last["text"],
+        'is_user': false,
+      });
 
       isGenerating = false;
 
@@ -394,7 +390,7 @@ class _ChatPageState extends State<ChatPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.05),
+          color: Colors.black.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(20),
         ),
         child: Text(text, style: const TextStyle(fontSize: 14)),
@@ -592,7 +588,7 @@ class _ChatPageState extends State<ChatPage> {
                         decoration: BoxDecoration(
                           color: isUser
                               ? const Color(0xFF22D3EE)
-                              : Colors.white.withOpacity(0.95),
+                              : Colors.white.withValues(alpha: 0.95),
                           borderRadius: BorderRadius.circular(18),
                         ),
                         child: isUser
@@ -620,11 +616,11 @@ class _ChatPageState extends State<ChatPage> {
                   margin: const EdgeInsets.all(12),
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.9),
+                    color: Colors.white.withValues(alpha: 0.9),
                     borderRadius: BorderRadius.circular(30),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.08),
+                        color: Colors.black.withValues(alpha: 0.08),
                         blurRadius: 20,
                       ),
                     ],
@@ -711,8 +707,8 @@ class _ChatPageState extends State<ChatPage> {
                           ),
                           decoration: BoxDecoration(
                             color: useReasoner
-                                ? const Color(0xFF22D3EE).withOpacity(0.2)
-                                : Colors.black.withOpacity(0.05),
+                                ? const Color(0xFF22D3EE).withValues(alpha: 0.2)
+                                : Colors.black.withValues(alpha: 0.05),
                             borderRadius: BorderRadius.circular(16),
                             border: Border.all(
                               color: useReasoner
@@ -791,7 +787,7 @@ class CodeElementBuilder extends MarkdownElementBuilder {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.05),
+                color: Colors.black.withValues(alpha: 0.05),
                 borderRadius: BorderRadius.circular(6),
               ),
               child: const Text(
