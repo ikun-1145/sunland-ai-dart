@@ -1,14 +1,26 @@
-# Flutter / Dart
+# ===== Flutter / Dart =====
 .dart_tool/
 .packages
+.pub/
 .pub-cache/
 build/
+
+# Flutter generated
+.flutter-plugins
 .flutter-plugins-dependencies
 
-# IDE
+# ===== IDE =====
 .vscode/
 .idea/
 *.iml
 
-# macOS
+# ===== macOS =====
 .DS_Store
+
+# ===== Android =====
+android/.gradle/
+android/app/build/
+
+# ===== iOS =====
+ios/Pods/
+ios/.symlinks/
