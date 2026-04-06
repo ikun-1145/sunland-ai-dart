@@ -4,7 +4,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
     <application
-        android:label="sunland_ai_app"
+        android:label="霜蓝AI"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -34,8 +34,9 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <category android:name="android.intent.category.BROWSABLE"/>
 
+                <!-- ⭐ 自定义 scheme，更稳定 -->
                 <data
-                    android:scheme="io.supabase.flutter"
+                    android:scheme="sunland"
                     android:host="login-callback" />
             </intent-filter>
         </activity>

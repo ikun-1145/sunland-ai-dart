@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'dart:async';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
@@ -66,6 +67,7 @@ class _SplashPageState extends State<SplashPage>
     _controller.forward();
 
     Future.delayed(const Duration(milliseconds: 1200), () {
+      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         PageRouteBuilder(
@@ -123,6 +125,8 @@ class _ChatPageState extends State<ChatPage> {
   List<String> pickedImages = [];
   DateTime? lastEmailSendTime;
   bool isUploadingAvatar = false;
+  bool isSendingEmail = false;
+  late final StreamSubscription<AuthState> _authSub;
 
   Future<void> loadMessages() async {
     final user = supabase.auth.currentUser;
@@ -161,21 +165,21 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> signInWithGitHub() async {
     await supabase.auth.signInWithOAuth(
       OAuthProvider.github,
-      redirectTo: 'io.supabase.flutter://login-callback/',
+      redirectTo: 'sunland://login-callback/',
     );
   }
 
   Future<void> signInWithGoogle() async {
     await supabase.auth.signInWithOAuth(
       OAuthProvider.google,
-      redirectTo: 'io.supabase.flutter://login-callback/',
+      redirectTo: 'sunland://login-callback/',
     );
   }
 
   Future<void> sendMagicLink(String email) async {
     await supabase.auth.signInWithOtp(
       email: email,
-      emailRedirectTo: 'io.supabase.flutter://login-callback/',
+      emailRedirectTo: 'sunland://login-callback/',
     );
   }
 
@@ -184,14 +188,129 @@ class _ChatPageState extends State<ChatPage> {
     super.initState();
     _initData();
 
-    supabase.auth.onAuthStateChange.listen((data) {
+    _authSub = supabase.auth.onAuthStateChange.listen((data) {
       final session = data.session;
       if (session != null) {
         if (!mounted) return;
         setState(() {});
         loadConversations();
+
+        final user = supabase.auth.currentUser;
+        final name = user?.userMetadata?['name'];
+        if (user != null && (name == null || name.toString().trim().isEmpty)) {
+          Future.delayed(const Duration(milliseconds: 300), () {
+            if (mounted) showProfileSetupDialog();
+          });
+        }
       }
     });
+  }
+
+  void showProfileSetupDialog() {
+    final nameController = TextEditingController();
+    String? avatarPath;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return AlertDialog(
+              title: const Text("完善资料"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  GestureDetector(
+                    onTap: () async {
+                      final picker = ImagePicker();
+                      final picked = await picker.pickImage(
+                        source: ImageSource.gallery,
+                      );
+                      if (picked != null) {
+                        setStateDialog(() {
+                          avatarPath = picked.path;
+                        });
+                      }
+                    },
+                    child: CircleAvatar(
+                      radius: 30,
+                      backgroundColor: const Color(0xFF22D3EE),
+                      backgroundImage: avatarPath != null
+                          ? FileImage(File(avatarPath!))
+                          : null,
+                      child: avatarPath == null
+                          ? const Icon(Icons.camera_alt, color: Colors.white)
+                          : null,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      hintText: "输入昵称",
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    final user = supabase.auth.currentUser;
+                    if (user == null) return;
+
+                    String? avatarUrl;
+
+                    if (avatarPath != null) {
+                      final file = File(avatarPath!);
+                      final fileName = '${user.id}.png';
+
+                      await supabase.storage
+                          .from('avatars')
+                          .upload(
+                            fileName,
+                            file,
+                            fileOptions: const FileOptions(upsert: true),
+                          );
+
+                      avatarUrl = supabase.storage
+                          .from('avatars')
+                          .getPublicUrl(fileName);
+                    }
+
+                    final name = nameController.text.trim();
+
+                    if (name.isEmpty) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text("请输入昵称")));
+                      return;
+                    }
+
+                    await supabase.auth.updateUser(
+                      UserAttributes(
+                        data: {
+                          'name': name,
+                          if (avatarUrl != null) 'avatar_url': avatarUrl,
+                        },
+                      ),
+                    );
+
+                    await supabase.auth.refreshSession();
+
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    setState(() {});
+                  },
+                  child: const Text("保存"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _initData() async {
@@ -223,160 +342,193 @@ class _ChatPageState extends State<ChatPage> {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (_) {
-        return Container(
-          padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                margin: const EdgeInsets.only(bottom: 12),
-                decoration: BoxDecoration(
-                  color: Colors.black12,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const Text(
-                "登录霜蓝AI",
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              const Text(
-                "同步你的聊天记录",
-                style: TextStyle(color: Colors.black45, fontSize: 13),
-              ),
-              const SizedBox(height: 20),
-              GestureDetector(
-                onTap: () {
-                  Navigator.pop(context);
-                  signInWithGitHub();
-                },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 30),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 12),
                   decoration: BoxDecoration(
-                    color: Colors.black,
-                    borderRadius: BorderRadius.circular(14),
+                    color: Colors.black12,
+                    borderRadius: BorderRadius.circular(2),
                   ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SvgPicture.asset(
-                        "assets/icons/github.svg",
-                        width: 18,
-                        color: Colors.white,
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        "使用 GitHub 登录",
-                        style: TextStyle(
+                ),
+                const Text(
+                  "登录霜蓝AI",
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  "同步你的聊天记录",
+                  style: TextStyle(color: Colors.black45, fontSize: 13),
+                ),
+                const SizedBox(height: 20),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.pop(context);
+                    signInWithGitHub();
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SvgPicture.asset(
+                          "assets/icons/github.svg",
+                          width: 18,
                           color: Colors.white,
-                          fontWeight: FontWeight.w600,
                         ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              GestureDetector(
-                onTap: () {
-                  Navigator.pop(context);
-                  signInWithGoogle();
-                },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: Colors.black12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Image.asset("assets/icons/google.png", width: 18),
-                      const SizedBox(width: 8),
-                      const Text(
-                        "使用 Google 登录",
-                        style: TextStyle(fontWeight: FontWeight.w500),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: emailController,
-                keyboardType: TextInputType.emailAddress,
-                decoration: InputDecoration(
-                  hintText: "输入邮箱",
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 10,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              GestureDetector(
-                onTap: () async {
-                  final email = emailController.text.trim();
-                  if (email.isEmpty) return;
-
-                  final now = DateTime.now();
-                  if (lastEmailSendTime != null &&
-                      now.difference(lastEmailSendTime!).inSeconds < 60) {
-                    ScaffoldMessenger.of(
-                      context,
-                    ).showSnackBar(const SnackBar(content: Text("请60秒后再试")));
-                    return;
-                  }
-
-                  lastEmailSendTime = now;
-
-                  await sendMagicLink(email);
-                  if (!mounted) return;
-
-                  Navigator.pop(context);
-
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("邮件已发送，请检查收件箱或垃圾邮件")),
-                  );
-                },
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  decoration: BoxDecoration(
-                    color: Color(0xFF22D3EE),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Center(
-                    child: Text(
-                      "发送登录链接",
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w600,
-                      ),
+                        const SizedBox(width: 8),
+                        const Text(
+                          "使用 GitHub 登录",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              GestureDetector(
-                onTap: () => Navigator.pop(context),
-                child: const Text(
-                  "暂不登录",
-                  style: TextStyle(color: Colors.black38),
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: () {
+                    Navigator.pop(context);
+                    signInWithGoogle();
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: Colors.black12),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Image.asset("assets/icons/google.png", width: 18),
+                        const SizedBox(width: 8),
+                        const Text(
+                          "使用 Google 登录",
+                          style: TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 10),
+                TextField(
+                  controller: emailController,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: InputDecoration(
+                    hintText: "输入邮箱",
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () async {
+                    if (isSendingEmail) return;
+
+                    final email = emailController.text.trim();
+                    if (email.isEmpty) return;
+
+                    final now = DateTime.now();
+                    if (lastEmailSendTime != null &&
+                        now.difference(lastEmailSendTime!).inSeconds < 60) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text("请60秒后再试")));
+                      return;
+                    }
+
+                    setState(() {
+                      isSendingEmail = true;
+                    });
+
+                    try {
+                      lastEmailSendTime = now;
+
+                      await sendMagicLink(email);
+                      if (!mounted) return;
+
+                      Navigator.pop(context);
+
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text("邮件已发送，请检查收件箱或垃圾邮件")),
+                      );
+                    } catch (e) {
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(SnackBar(content: Text("发送失败：$e")));
+                    }
+
+                    if (!mounted) return;
+
+                    setState(() {
+                      isSendingEmail = false;
+                    });
+                  },
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF22D3EE),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Center(
+                      child: isSendingEmail
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Text(
+                              "发送登录链接",
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: const Text(
+                    "暂不登录",
+                    style: TextStyle(color: Colors.black38),
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -384,6 +536,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> sendMessage() async {
+    if (isGenerating) return; // 防止重复发送
     final user = supabase.auth.currentUser;
     if (user == null) {
       showLoginSheet();
@@ -392,7 +545,9 @@ class _ChatPageState extends State<ChatPage> {
     final text = controller.text.trim();
     if (text.isEmpty) return;
 
-    isGenerating = true;
+    setState(() {
+      isGenerating = true;
+    });
 
     setState(() {
       messages.add({"text": text, "isUser": true});
@@ -435,42 +590,67 @@ class _ChatPageState extends State<ChatPage> {
       }
       final token = session.accessToken; // ⭐ 必须登录才有 token
 
+      // ===== 构建上下文 =====
+      List<Map<String, String>> history = [];
+
+      for (var msg
+          in messages
+              .where((m) => m["text"] != "思考中..." && m["text"] != "深度思考中...")
+              .take(20)) {
+        history.add({
+          "role": msg["isUser"] ? "user" : "assistant",
+          "content": msg["text"],
+        });
+      }
+
+      // ===== 图片转 base64 加入 =====
+      for (var path in pickedImages) {
+        final bytes = await File(path).readAsBytes();
+        final base64Img = base64Encode(bytes);
+
+        history.add({
+          "role": "user",
+          "content": "![image](data:image/png;base64,$base64Img)",
+        });
+      }
+
+      // 清空已选图片
+      if (pickedImages.isNotEmpty) {
+        setState(() {
+          pickedImages.clear();
+        });
+      }
+
       final response = await http.post(
         Uri.parse("https://ai.liuxizekali.workers.dev"),
         headers: {
           "Content-Type": "application/json",
           "Authorization": "Bearer $token",
         },
-        // 构建上下文（最近20条）
-        body: () {
-          List<Map<String, String>> history = [];
-
-          for (var msg
-              in messages
-                  .where(
-                    (m) => m["text"] != "思考中..." && m["text"] != "深度思考中...",
-                  )
-                  .take(20)) {
-            history.add({
-              "role": msg["isUser"] ? "user" : "assistant",
-              "content": msg["text"],
-            });
-          }
-
-          history.add({"role": "user", "content": text});
-
-          return jsonEncode({
-            "model": useReasoner ? "deepseek-reasoner" : "deepseek-chat",
-            "messages": history,
-          });
-        }(),
+        body: jsonEncode({
+          "model": useReasoner ? "deepseek-reasoner" : "deepseek-chat",
+          "messages": history,
+        }),
       );
 
       final data = jsonDecode(response.body);
-      final reply = data["choices"][0]["message"]["content"];
+      final messageData = data["choices"][0]["message"];
+      final reply = messageData["content"];
+      final reasoning =
+          messageData["reasoning_content"] ?? messageData["reasoning"];
 
       setState(() {
         messages.removeLast();
+
+        if (reasoning != null && reasoning.toString().isNotEmpty) {
+          messages.add({
+            "text": reasoning,
+            "isUser": false,
+            "isReasoning": true,
+            "expanded": false,
+          });
+        }
+
         messages.add({"text": "", "isUser": false});
       });
 
@@ -479,6 +659,7 @@ class _ChatPageState extends State<ChatPage> {
         setState(() {
           messages.last["text"] += reply[i];
         });
+        if (i % 10 == 0) scrollToBottom();
       }
 
       // Save assistant message
@@ -489,15 +670,26 @@ class _ChatPageState extends State<ChatPage> {
         'is_user': false,
       });
 
-      isGenerating = false;
+      setState(() {
+        isGenerating = false;
+      });
       scrollToBottom();
     } catch (e) {
       setState(() {
         messages.removeLast();
         messages.add({"text": "请求失败：$e", "isUser": false});
+        isGenerating = false;
       });
-      isGenerating = false;
     }
+  }
+
+  @override
+  void dispose() {
+    _authSub.cancel();
+    controller.dispose();
+    emailController.dispose();
+    scrollController.dispose();
+    super.dispose();
   }
 
   void scrollToBottom() {
@@ -836,7 +1028,9 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                       const SizedBox(width: 6),
                       Text(
-                        user.email ?? "用户",
+                        user.userMetadata?['name'] ??
+                            user.email?.split('@')[0] ??
+                            "用户",
                         style: const TextStyle(fontSize: 13),
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -867,40 +1061,62 @@ class _ChatPageState extends State<ChatPage> {
 
               // 欢迎区（仿 Gemini）
               if (messages.where((m) => m["isUser"] == true).isEmpty)
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 20),
-                      child: Text(
-                        "霜蓝，你好",
-                        style: TextStyle(fontSize: 20, color: Colors.black54),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 20),
-                      child: Text(
-                        "需要我为你做些什么？",
-                        style: TextStyle(
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 20),
+                Builder(
+                  builder: (_) {
+                    final user = supabase.auth.currentUser;
+                    final displayName =
+                        user?.userMetadata?['name'] ??
+                        user?.email?.split('@')[0];
 
-                    // 快捷按钮
-                    Wrap(
-                      spacing: 10,
-                      runSpacing: 10,
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        buildQuickBtn("🧠 激发我的活力"),
-                        buildQuickBtn("✨ 给我一点灵感"),
-                        buildQuickBtn("📄 随便聊聊"),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+                          child: Text(
+                            displayName != null ? "$displayName 👋" : "你好 👋",
+                            style: const TextStyle(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.black87,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: ShaderMask(
+                            shaderCallback: (bounds) {
+                              return const LinearGradient(
+                                colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
+                              ).createShader(bounds);
+                            },
+                            child: const Text(
+                              "今天想做点什么？",
+                              style: TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(20, 4, 20, 0),
+                          child: Wrap(
+                            spacing: 10,
+                            runSpacing: 10,
+                            children: [
+                              buildQuickBtn("🧠 激发我的活力"),
+                              buildQuickBtn("✨ 给我一点灵感"),
+                              buildQuickBtn("📄 随便聊聊"),
+                            ],
+                          ),
+                        ),
                       ],
-                    ),
-                  ],
+                    );
+                  },
                 ),
 
               // 聊天区
@@ -943,11 +1159,64 @@ class _ChatPageState extends State<ChatPage> {
                                   color: Colors.white,
                                 ),
                               )
-                            : MarkdownBody(
-                                data: msg["text"],
-                                selectable: true,
-                                builders: {'code': CodeElementBuilder()},
-                              ),
+                            : (msg["isReasoning"] == true
+                                  ? GestureDetector(
+                                      onTap: () {
+                                        setState(() {
+                                          msg["expanded"] =
+                                              !(msg["expanded"] ?? false);
+                                        });
+                                      },
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.withValues(
+                                            alpha: 0.1,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            12,
+                                          ),
+                                        ),
+                                        padding: const EdgeInsets.all(10),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                const Icon(
+                                                  Icons.psychology,
+                                                  size: 16,
+                                                  color: Colors.grey,
+                                                ),
+                                                const SizedBox(width: 6),
+                                                const Text(
+                                                  "思考过程",
+                                                  style: TextStyle(
+                                                    fontSize: 13,
+                                                    color: Colors.grey,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            if (msg["expanded"] == true) ...[
+                                              const SizedBox(height: 6),
+                                              MarkdownBody(
+                                                data: msg["text"],
+                                                selectable: true,
+                                                builders: {
+                                                  'code': CodeElementBuilder(),
+                                                },
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                    )
+                                  : MarkdownBody(
+                                      data: msg["text"],
+                                      selectable: true,
+                                      builders: {'code': CodeElementBuilder()},
+                                    )),
                       ),
                     );
                   },
@@ -956,138 +1225,173 @@ class _ChatPageState extends State<ChatPage> {
 
               // 输入框（更像 Gemini）
               SafeArea(
-                child: Container(
-                  margin: const EdgeInsets.all(12),
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.9),
-                    borderRadius: BorderRadius.circular(30),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 20,
-                      ),
-                    ],
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).viewInsets.bottom,
                   ),
-                  child: Row(
-                    children: [
-                      GestureDetector(
-                        onTap: pickImage,
-                        child: const Icon(Icons.add, color: Colors.grey),
+                  child: Container(
+                    margin: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.75),
+                      borderRadius: BorderRadius.circular(28),
+                      border: Border.all(
+                        color: const Color(0xFF22D3EE).withValues(alpha: 0.15),
                       ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.06),
+                          blurRadius: 30,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      children: [
+                        GestureDetector(
+                          onTap: pickImage,
+                          child: AnimatedScale(
+                            scale: isGenerating ? 0.9 : 1,
+                            duration: const Duration(milliseconds: 120),
+                            child: const Icon(Icons.add, color: Colors.grey),
+                          ),
+                        ),
 
-                      const SizedBox(width: 6),
+                        const SizedBox(width: 6),
 
-                      if (pickedImages.isNotEmpty)
-                        SizedBox(
-                          height: 40,
-                          child: ListView.builder(
-                            scrollDirection: Axis.horizontal,
-                            itemCount: pickedImages.length,
-                            itemBuilder: (_, i) {
-                              return Container(
-                                margin: const EdgeInsets.only(right: 6),
-                                width: 40,
-                                height: 40,
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade300,
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Stack(
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(10),
-                                      child: Image.file(
-                                        File(pickedImages[i]),
-                                        fit: BoxFit.cover,
-                                        width: 40,
-                                        height: 40,
+                        if (pickedImages.isNotEmpty)
+                          SizedBox(
+                            height: 40,
+                            child: ListView.builder(
+                              scrollDirection: Axis.horizontal,
+                              itemCount: pickedImages.length,
+                              itemBuilder: (_, i) {
+                                return Container(
+                                  margin: const EdgeInsets.only(right: 6),
+                                  width: 40,
+                                  height: 40,
+                                  decoration: BoxDecoration(
+                                    color: Colors.grey.shade300,
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Stack(
+                                    children: [
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(10),
+                                        child: Image.file(
+                                          File(pickedImages[i]),
+                                          fit: BoxFit.cover,
+                                          width: 40,
+                                          height: 40,
+                                        ),
                                       ),
-                                    ),
 
-                                    Positioned(
-                                      top: -4,
-                                      right: -4,
-                                      child: GestureDetector(
-                                        onTap: () {
-                                          setState(() {
-                                            pickedImages.removeAt(i);
-                                          });
-                                        },
-                                        child: Container(
-                                          width: 18,
-                                          height: 18,
-                                          decoration: const BoxDecoration(
-                                            color: Colors.red,
-                                            shape: BoxShape.circle,
-                                          ),
-                                          child: const Icon(
-                                            Icons.close,
-                                            size: 12,
-                                            color: Colors.white,
+                                      Positioned(
+                                        top: -4,
+                                        right: -4,
+                                        child: GestureDetector(
+                                          onTap: () {
+                                            setState(() {
+                                              pickedImages.removeAt(i);
+                                            });
+                                          },
+                                          child: Container(
+                                            width: 18,
+                                            height: 18,
+                                            decoration: const BoxDecoration(
+                                              color: Colors.red,
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: const Icon(
+                                              Icons.close,
+                                              size: 12,
+                                              color: Colors.white,
+                                            ),
                                           ),
                                         ),
                                       ),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-
-                      const SizedBox(width: 6),
-
-                      GestureDetector(
-                        onTap: () {
-                          setState(() {
-                            useReasoner = !useReasoner;
-                          });
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
-                          decoration: BoxDecoration(
-                            color: useReasoner
-                                ? const Color(0xFF22D3EE).withValues(alpha: 0.2)
-                                : Colors.black.withValues(alpha: 0.05),
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                              color: useReasoner
-                                  ? const Color(0xFF22D3EE)
-                                  : Colors.transparent,
+                                    ],
+                                  ),
+                                );
+                              },
                             ),
                           ),
-                          child: Icon(
-                            Icons.auto_awesome,
-                            size: 16,
-                            color: useReasoner
-                                ? const Color(0xFF22D3EE)
-                                : Colors.black54,
+
+                        const SizedBox(width: 6),
+
+                        GestureDetector(
+                          onTap: () {
+                            setState(() {
+                              useReasoner = !useReasoner;
+                            });
+                          },
+                          child: AnimatedScale(
+                            scale: useReasoner ? 1.05 : 1,
+                            duration: const Duration(milliseconds: 120),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
+                              decoration: BoxDecoration(
+                                color: useReasoner
+                                    ? const Color(
+                                        0xFF22D3EE,
+                                      ).withValues(alpha: 0.2)
+                                    : Colors.black.withValues(alpha: 0.05),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: useReasoner
+                                      ? const Color(0xFF22D3EE)
+                                      : Colors.transparent,
+                                ),
+                              ),
+                              child: Icon(
+                                Icons.auto_awesome,
+                                size: 16,
+                                color: useReasoner
+                                    ? const Color(0xFF22D3EE)
+                                    : Colors.black54,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
 
-                      const SizedBox(width: 6),
+                        const SizedBox(width: 6),
 
-                      Expanded(
-                        child: TextField(
-                          controller: controller,
-                          decoration: const InputDecoration(
-                            hintText: "问点什么...",
-                            border: InputBorder.none,
+                        Expanded(
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 200),
+                            curve: Curves.easeOut,
+                            child: TextField(
+                              controller: controller,
+                              enabled: !isGenerating,
+                              decoration: const InputDecoration(
+                                hintText: "问点什么...",
+                                border: InputBorder.none,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
 
-                      IconButton(
-                        icon: const Icon(Icons.send),
-                        color: const Color(0xFF22D3EE),
-                        onPressed: sendMessage,
-                      ),
-                    ],
+                        IconButton(
+                          icon: isGenerating
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF22D3EE),
+                                  ),
+                                )
+                              : const Icon(Icons.send),
+                          color: isGenerating
+                              ? Colors.grey
+                              : const Color(0xFF22D3EE),
+                          onPressed: isGenerating ? null : sendMessage,
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1115,7 +1419,7 @@ class CodeElementBuilder extends MarkdownElementBuilder {
           ),
           child: HighlightView(
             text,
-            language: 'dart',
+            language: 'plaintext',
             theme: githubTheme,
             padding: EdgeInsets.zero,
             textStyle: const TextStyle(fontFamily: 'monospace', fontSize: 13),
