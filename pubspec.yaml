@@ -16,6 +16,8 @@ dependencies:
   flutter_highlight: ^0.7.0
   image_picker: ^1.2.1
   file_picker: ^10.3.10
+  shared_preferences: ^2.5.3
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
@@ -28,6 +30,8 @@ flutter:
     - assets/icons/google.png
     - assets/icons/github.svg
     - assets/ailogo.png
+    - assets/ten_wx.webp
+    - assets/ten_zfb.webp
 
 flutter_launcher_icons:
   android: true
