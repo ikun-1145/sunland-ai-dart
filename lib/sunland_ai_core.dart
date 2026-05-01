@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -84,7 +85,8 @@ class SunlandUser {
       'id': id,
       'email': email,
       if (avatarUrl != null && avatarUrl!.isNotEmpty) 'avatar_url': avatarUrl,
-      if (avatarPath != null && avatarPath!.isNotEmpty) 'avatar_path': avatarPath,
+      if (avatarPath != null && avatarPath!.isNotEmpty)
+        'avatar_path': avatarPath,
     };
   }
 
@@ -92,14 +94,15 @@ class SunlandUser {
     return SunlandUser(
       id: (json['id'] ?? json['sub'] ?? json['user_id'] ?? json['email'] ?? '')
           .toString(),
-      email: (json['email'] ??
-              json['user_email'] ??
-              json['mail'] ??
-              json['name'] ??
-              '未知用户')
-          .toString(),
-      avatarUrl:
-          (json['avatar_url'] ?? json['picture'] ?? json['avatarUrl'])?.toString(),
+      email:
+          (json['email'] ??
+                  json['user_email'] ??
+                  json['mail'] ??
+                  json['name'] ??
+                  '未知用户')
+              .toString(),
+      avatarUrl: (json['avatar_url'] ?? json['picture'] ?? json['avatarUrl'])
+          ?.toString(),
       avatarPath: (json['avatar_path'] ?? json['avatarPath'])?.toString(),
     );
   }
@@ -158,9 +161,10 @@ class ChatMessage {
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
     return ChatMessage(
       role: (json['role'] ?? 'assistant').toString(),
-      content: (json['content'] ?? '').toString(),
-      reasoning:
-          (json['reasoning'] ?? json['reasoning_content'])?.toString().trim(),
+      content: (json['content'] ?? '').toString().trim(),
+      reasoning: (json['reasoning'] ?? json['reasoning_content'])
+          ?.toString()
+          .trim(),
     );
   }
 }
@@ -209,11 +213,18 @@ class Conversation {
       title: (json['title'] ?? '新对话').toString(),
       history: rawHistory is List
           ? rawHistory
-              .whereType<Map>()
-              .map((item) => ChatMessage.fromJson(Map<String, dynamic>.from(item)))
-              .toList()
+                .whereType<Map>()
+                .map(
+                  (item) => ChatMessage.fromJson(
+                    Map<String, dynamic>.from(
+                      item.map((k, v) => MapEntry(k.toString(), v)),
+                    ),
+                  ),
+                )
+                .toList()
           : [const ChatMessage(role: 'system', content: sunlandSystemPrompt)],
-      updatedAt: int.tryParse((json['updatedAt'] ?? json['id'] ?? '0').toString()) ??
+      updatedAt:
+          int.tryParse((json['updatedAt'] ?? json['id'] ?? '0').toString()) ??
           DateTime.now().millisecondsSinceEpoch,
       autoTitle: json['_autoTitle'] == true,
     );
@@ -264,8 +275,13 @@ class SunlandSessionStore {
     final userText = prefs.getString(_userKey);
     if (userText == null || userText.isEmpty) return null;
     try {
+      final decoded = jsonDecode(userText);
+      if (decoded is! Map) return null;
+
       return SunlandUser.fromJson(
-        Map<String, dynamic>.from(jsonDecode(userText) as Map),
+        Map<String, dynamic>.from(
+          decoded.map((k, v) => MapEntry(k.toString(), v)),
+        ),
       );
     } catch (_) {
       return null;
@@ -301,7 +317,13 @@ class SunlandSessionStore {
       if (decoded is! List) return [];
       return decoded
           .whereType<Map>()
-          .map((item) => Conversation.fromJson(Map<String, dynamic>.from(item)))
+          .map(
+            (item) => Conversation.fromJson(
+              Map<String, dynamic>.from(
+                item.map((k, v) => MapEntry(k.toString(), v)),
+              ),
+            ),
+          )
           .toList();
     } catch (_) {
       return [];
@@ -324,8 +346,13 @@ class SunlandSessionStore {
     final text = prefs.getString('$profileCachePrefix$userId');
     if (text == null || text.isEmpty) return null;
     try {
+      final decoded = jsonDecode(text);
+      if (decoded is! Map) return null;
+
       return UserProfile.fromJson(
-        Map<String, dynamic>.from(jsonDecode(text) as Map),
+        Map<String, dynamic>.from(
+          decoded.map((k, v) => MapEntry(k.toString(), v)),
+        ),
       );
     } catch (_) {
       return null;
@@ -334,7 +361,10 @@ class SunlandSessionStore {
 
   Future<void> saveProfile(String userId, UserProfile profile) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('$profileCachePrefix$userId', jsonEncode(profile.toJson()));
+    await prefs.setString(
+      '$profileCachePrefix$userId',
+      jsonEncode(profile.toJson()),
+    );
   }
 }
 
@@ -345,55 +375,62 @@ class SunlandAuthApi {
 
   http.Client get client => _client ?? http.Client();
 
-  Future<void> requestCode(String email) async {
+  Future<void> requestCode(String email, {required String captchaToken}) async {
     final response = await client.post(
       Uri.parse('$sunlandApiBase/send-code'),
       headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'platform': 'mobile'}),
+      body: jsonEncode({'email': email, 'cfToken': captchaToken}),
     );
 
     final body = _decodeJson(response.body);
-    if (response.statusCode < 200 || response.statusCode >= 300 || body['error'] != null) {
-      throw ApiException(
-        (body['error'] ?? '发送失败，请稍后再试').toString(),
-      );
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300 ||
+        body['error'] != null) {
+      throw ApiException((body['error'] ?? '发送失败').toString());
     }
   }
 
   Future<({String token, SunlandUser user})> verifyCode({
     required String email,
     required String code,
+    required String captchaToken,
   }) async {
     final response = await client.post(
       Uri.parse('$sunlandApiBase/verify-code'),
       headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'email': email,
-        'code': code,
-        'platform': 'mobile',
-      }),
+      body: jsonEncode({'email': email, 'code': code, 'cfToken': captchaToken}),
     );
 
     final body = _decodeJson(response.body);
     final token = body['token']?.toString();
+
     if (response.statusCode < 200 ||
         response.statusCode >= 300 ||
         token == null ||
         token.isEmpty) {
-      throw ApiException((body['error'] ?? '验证码错误或已过期').toString());
+      throw ApiException((body['error'] ?? '验证码错误或验证失败').toString());
     }
 
     final rawUser = body['user'];
-    final user = rawUser is Map
-        ? SunlandUser.fromJson(Map<String, dynamic>.from(rawUser))
-        : userFromJwt(token) ?? SunlandUser(id: email, email: email);
+
+    SunlandUser user;
+
+    if (rawUser is Map) {
+      user = SunlandUser.fromJson(
+        Map<String, dynamic>.from(
+          rawUser.map((k, v) => MapEntry(k.toString(), v)),
+        ),
+      );
+    } else {
+      user = userFromJwt(token) ?? SunlandUser(id: email, email: email);
+    }
     return (token: token, user: user);
   }
 }
 
 class SunlandApiClient {
   const SunlandApiClient({required this.tokenProvider, http.Client? client})
-      : _client = client;
+    : _client = client;
 
   final Future<String?> Function() tokenProvider;
   final http.Client? _client;
@@ -412,10 +449,108 @@ class SunlandApiClient {
     return _parseAiResponse(data);
   }
 
+  /// 新增：流式聊天 API
+  Stream<AiResponse> sendChatStream({
+    required List<ChatMessage> messages,
+    required bool deep,
+  }) async* {
+    final token = await tokenProvider();
+    if (token == null || token.isEmpty) throw const AuthExpiredException();
+
+    final req = http.Request('POST', Uri.parse('$sunlandApiBase/'));
+
+    req.headers.addAll({
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token',
+    });
+
+    req.body = jsonEncode({
+      'messages': messages.map((m) => m.toApiJson()).toList(),
+      'deep': deep,
+      'stream': true, // 关键：告诉后端走流式
+    });
+
+    final streamed = await client
+        .send(req)
+        .timeout(const Duration(seconds: 60));
+
+    if (streamed.statusCode == 401) throw const AuthExpiredException();
+    if (streamed.statusCode == 429) throw const UsageLimitException();
+    if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
+      throw ApiException('流式请求失败：${streamed.statusCode}');
+    }
+
+    final decoder = utf8.decoder;
+    String buffer = '';
+    String fullText = '';
+    String? reasoning;
+
+    await for (final chunk in streamed.stream.transform(decoder)) {
+      buffer += chunk;
+
+      // 按行切分（兼容 SSE / JSONL）
+      final lines = buffer.split('\n');
+      buffer = lines.removeLast();
+
+      for (var line in lines) {
+        line = line.trim();
+        if (line.isEmpty) continue;
+
+        // 兼容 SSE: data: {...}
+        if (line.startsWith('data:')) {
+          line = line.substring(5).trim();
+        }
+
+        if (line == '[DONE]') {
+          if (fullText.isNotEmpty) {
+            yield AiResponse(content: fullText, reasoning: reasoning);
+          }
+          return;
+        }
+
+        Map<String, dynamic>? json;
+        try {
+          json = _tryDecode(line);
+        } catch (_) {
+          continue;
+        }
+        if (json == null) continue;
+
+        // 兼容 OpenAI 风格 delta
+        final choices = json['choices'];
+        if (choices is List && choices.isNotEmpty) {
+          final first = choices.first;
+          if (first is Map) {
+            final delta = first['delta'] ?? first['message'];
+            if (delta is Map) {
+              final piece = (delta['content'] ?? '').toString();
+              final r = (delta['reasoning_content'] ?? delta['reasoning'])
+                  ?.toString();
+
+              if (piece.isNotEmpty) {
+                fullText += piece;
+                yield AiResponse(content: fullText, reasoning: reasoning);
+              }
+              if (r != null && r.isNotEmpty) {
+                reasoning = (reasoning ?? '') + r;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 兜底
+    if (fullText.isNotEmpty) {
+      yield AiResponse(content: fullText, reasoning: reasoning);
+    }
+  }
+
   Future<String?> generateTitle({
     required String userMessage,
     required String aiMessage,
   }) async {
+    if (userMessage.trim().length < 3) return null;
     final prompt =
         '请根据下面的对话生成一个简短标题（不超过12个字，不要标点结尾）：\n用户：$userMessage\n助手：$aiMessage';
     final data = await _post({
@@ -433,29 +568,58 @@ class SunlandApiClient {
     final token = await tokenProvider();
     if (token == null || token.isEmpty) throw const AuthExpiredException();
 
-    final response = await client
-        .post(
-          Uri.parse(sunlandApiBase),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $token',
-          },
-          body: jsonEncode(body),
-        )
-        .timeout(const Duration(seconds: 45));
+    int retry = 0;
 
-    if (response.statusCode == 401) throw const AuthExpiredException();
-    if (response.statusCode == 429) throw const UsageLimitException();
+    while (true) {
+      try {
+        final response = await client
+            .post(
+              Uri.parse('$sunlandApiBase/'),
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $token',
+              },
+              body: jsonEncode(body),
+            )
+            .timeout(const Duration(seconds: 45));
 
-    final decoded = _decodeJson(response.body);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw ApiException(
-        decoded['error']?.toString() ??
-            decoded['message']?.toString() ??
-            '请求失败：${response.statusCode}',
-      );
+        if (response.statusCode == 401) {
+          debugPrint('❌ 401 body: ${response.body}');
+          throw const AuthExpiredException();
+        }
+        debugPrint('✅ 状态码: ${response.statusCode}');
+        debugPrint(
+          '✅ 响应: ${response.body.substring(0, min(200, response.body.length))}',
+        );
+        if (response.statusCode == 429) throw const UsageLimitException();
+
+        final decoded = _decodeJson(response.body);
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw ApiException(
+            decoded['error']?.toString() ??
+                decoded['message']?.toString() ??
+                '请求失败：${response.statusCode}',
+          );
+        }
+
+        return decoded;
+      } on TimeoutException {
+        if (retry < 2) {
+          retry++;
+          await Future.delayed(const Duration(milliseconds: 800));
+          continue;
+        }
+        throw const ApiException('请求超时，请检查网络');
+      } on SocketException {
+        if (retry < 2) {
+          retry++;
+          await Future.delayed(const Duration(milliseconds: 800));
+          continue;
+        }
+        throw const ApiException('网络连接失败');
+      }
     }
-    return decoded;
   }
 
   AiResponse _parseAiResponse(Map<String, dynamic> data) {
@@ -467,10 +631,28 @@ class SunlandApiClient {
     if (first is! Map) throw const ApiException('返回数据异常');
     final message = first['message'];
     if (message is! Map) throw const ApiException('返回数据异常');
-    final content = (message['content'] ?? '').toString();
-    final reasoning =
-        (message['reasoning_content'] ?? message['reasoning'])?.toString();
+    final content = (message['content'] ?? '').toString().trim();
+    if (content.isEmpty) {
+      throw const ApiException('AI返回空内容');
+    }
+    final reasoning = (message['reasoning_content'] ?? message['reasoning'])
+        ?.toString();
     return AiResponse(content: content, reasoning: reasoning);
+  }
+
+  /// 新增：尝试解析 JSON 行
+  Map<String, dynamic>? _tryDecode(String text) {
+    try {
+      final decoded = jsonDecode(text);
+      if (decoded is Map) {
+        return Map<String, dynamic>.from(
+          decoded.map((k, v) => MapEntry(k.toString(), v)),
+        );
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
   }
 }
 
@@ -500,23 +682,6 @@ class SupabaseAiRepository {
     await _client.rpc('increment_usage', params: {'uid': userId});
   }
 
-  Future<List<dynamic>> loadCloudRows(String userId) async {
-    final data = await _client
-        .from('conversations')
-        .select('data')
-        .eq('user_id', userId)
-        .maybeSingle();
-    final rows = data?['data'];
-    return rows is List ? rows : [];
-  }
-
-  Future<void> saveCloudRows(String userId, List<dynamic> rows) async {
-    await _client.from('conversations').upsert(
-      {'user_id': userId, 'data': rows},
-      onConflict: 'user_id',
-    );
-  }
-
   Future<UserProfile?> loadProfile(String userId) async {
     final data = await _client
         .from('user_profiles')
@@ -524,19 +689,18 @@ class SupabaseAiRepository {
         .eq('user_id', userId)
         .maybeSingle();
     if (data == null) return null;
-    return UserProfile.fromJson(Map<String, dynamic>.from(data));
+    return UserProfile.fromJson(
+      Map<String, dynamic>.from(data.map((k, v) => MapEntry(k.toString(), v))),
+    );
   }
 
   Future<void> saveProfile(String userId, UserProfile profile) async {
-    await _client.from('user_profiles').upsert(
-      {
-        'user_id': userId,
-        'avatar_url': profile.avatarUrl ?? '',
-        'avatar_path': profile.avatarPath ?? '',
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-      onConflict: 'user_id',
-    );
+    await _client.from('user_profiles').upsert({
+      'user_id': userId,
+      'avatar_url': profile.avatarUrl ?? '',
+      'avatar_path': profile.avatarPath ?? '',
+      'updated_at': DateTime.now().toIso8601String(),
+    }, onConflict: 'user_id');
   }
 
   Future<UserProfile> uploadAvatar({
@@ -545,7 +709,9 @@ class SupabaseAiRepository {
   }) async {
     final safeId = userId.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
     final path = '$safeId/avatar-${DateTime.now().millisecondsSinceEpoch}.jpg';
-    await _client.storage.from(avatarBucket).upload(
+    await _client.storage
+        .from(avatarBucket)
+        .upload(
           path,
           file,
           fileOptions: const FileOptions(
@@ -624,7 +790,13 @@ SunlandUser? userFromJwt(String token) {
     if (parts.length < 2) return null;
     final normalized = base64Url.normalize(parts[1]);
     final payload = utf8.decode(base64Url.decode(normalized));
-    final json = Map<String, dynamic>.from(jsonDecode(payload) as Map);
+    final decoded = jsonDecode(payload);
+
+    if (decoded is! Map) return null;
+
+    final json = Map<String, dynamic>.from(
+      decoded.map((k, v) => MapEntry(k.toString(), v)),
+    );
     return SunlandUser.fromJson(json);
   } catch (error) {
     debugPrint('JWT解析失败: $error');
@@ -633,12 +805,20 @@ SunlandUser? userFromJwt(String token) {
 }
 
 Map<String, dynamic> _decodeJson(String text) {
-  if (text.isEmpty) return {};
+  if (text.isEmpty) return <String, dynamic>{};
+
   try {
     final decoded = jsonDecode(text);
-    return decoded is Map ? Map<String, dynamic>.from(decoded) : {};
-  } catch (_) {
-    return {};
+
+    if (decoded is Map) {
+      return Map<String, dynamic>.from(
+        decoded.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+
+    return <String, dynamic>{};
+  } catch (e) {
+    throw ApiException('JSON解析失败: $e');
   }
 }
 
@@ -646,7 +826,13 @@ List<Conversation> conversationsFromCloudRows(List<dynamic> rows) {
   return rows
       .whereType<Map>()
       .where((item) => item['id'] != profileMetaId)
-      .map((item) => Conversation.fromJson(Map<String, dynamic>.from(item)))
+      .map(
+        (item) => Conversation.fromJson(
+          Map<String, dynamic>.from(
+            item.map((k, v) => MapEntry(k.toString(), v)),
+          ),
+        ),
+      )
       .toList();
 }
 
@@ -655,32 +841,15 @@ UserProfile? profileFromCloudRows(List<dynamic> rows) {
     if (row['id'] == profileMetaId && row['type'] == 'profile') {
       final profile = row['profile'];
       if (profile is Map) {
-        return UserProfile.fromJson(Map<String, dynamic>.from(profile));
+        return UserProfile.fromJson(
+          Map<String, dynamic>.from(
+            profile.map((k, v) => MapEntry(k.toString(), v)),
+          ),
+        );
       }
     }
   }
   return null;
-}
-
-List<dynamic> buildCloudRows({
-  required List<Conversation> conversations,
-  required SunlandUser user,
-}) {
-  final rows = conversations.map((item) => item.toJson()).toList();
-  if (user.avatarUrl != null && user.avatarUrl!.isNotEmpty) {
-    rows.insert(0, {
-      'id': profileMetaId,
-      'type': 'profile',
-      'profile': {
-        'user_id': user.id,
-        'email': user.email,
-        'avatar_url': user.avatarUrl,
-        'avatar_path': user.avatarPath ?? '',
-        'updated_at': DateTime.now().toIso8601String(),
-      },
-    });
-  }
-  return rows;
 }
 
 List<Conversation> mergeConversations(
@@ -693,7 +862,7 @@ List<Conversation> mergeConversations(
   }
   for (final item in local) {
     final existing = map[item.id];
-    if (existing == null || item.updatedAt >= existing.updatedAt) {
+    if (existing == null || item.updatedAt > existing.updatedAt) {
       map[item.id] = item;
     }
   }
@@ -708,15 +877,83 @@ List<Conversation> mergeConversations(
   return merged;
 }
 
+// ====== 新增：构建带系统提示的聊天历史 ======
+List<ChatMessage> buildChatHistory({
+  required List<Map<String, dynamic>> rawMessages,
+  required List<String> pickedImages,
+  required int maxHistory,
+}) {
+  final history = <ChatMessage>[
+    const ChatMessage(role: 'system', content: sunlandSystemPrompt),
+  ];
+
+  final valid = rawMessages
+      .where(
+        (m) =>
+            m["text"] != "思考中..." &&
+            m["text"] != "深度思考中..." &&
+            m["isReasoning"] != true,
+      )
+      .toList();
+
+  final recent = valid.length > maxHistory
+      ? valid.sublist(valid.length - maxHistory)
+      : valid;
+
+  for (var msg in recent) {
+    history.add(
+      ChatMessage(
+        role: msg["isUser"] ? "user" : "assistant",
+        content: (msg["text"] ?? '').toString().trim(),
+        reasoning: msg["reasoning"]?.toString(),
+      ),
+    );
+  }
+
+  if (pickedImages.isNotEmpty) {
+    history.add(
+      ChatMessage(role: 'user', content: '用户发送了${pickedImages.length}张图片'),
+    );
+  }
+
+  return history;
+}
+
+// ====== 新增：高阶聊天包装 API ======
+Future<AiResponse> sendSmartChat({
+  required SunlandApiClient client,
+  required List<Map<String, dynamic>> rawMessages,
+  required List<String> pickedImages,
+  required bool deep,
+}) async {
+  final history = buildChatHistory(
+    rawMessages: rawMessages,
+    pickedImages: pickedImages,
+    maxHistory: 20,
+  );
+
+  return await client.sendChat(messages: history, deep: deep);
+}
+
+// ====== 新增：高阶流式聊天包装 API ======
+Stream<AiResponse> sendSmartChatStream({
+  required SunlandApiClient client,
+  required List<Map<String, dynamic>> rawMessages,
+  required List<String> pickedImages,
+  required bool deep,
+}) {
+  final history = buildChatHistory(
+    rawMessages: rawMessages,
+    pickedImages: pickedImages,
+    maxHistory: 20,
+  );
+  return client.sendChatStream(messages: history, deep: deep);
+}
+
 String buildConversationTitle(String text) {
   final trimmed = text.trim().replaceAll('\n', ' ');
   if (trimmed.isEmpty) return '新对话';
   return trimmed.length > 15 ? '${trimmed.substring(0, 15)}…' : trimmed;
-}
-
-bool shouldUseDarkTheme() {
-  final hour = DateTime.now().hour;
-  return hour >= 18 || hour < 6;
 }
 
 class ModerationResult {
@@ -776,29 +1013,11 @@ class InputModerator {
     ),
     (
       category: '低俗色情',
-      terms: [
-        '裸聊',
-        '约炮',
-        '色情交易',
-        '卖淫',
-        '嫖娼',
-        '援交',
-        '成人视频',
-        '黄色网站',
-      ],
+      terms: ['裸聊', '约炮', '色情交易', '卖淫', '嫖娼', '援交', '成人视频', '黄色网站'],
     ),
     (
       category: '暴力威胁',
-      terms: [
-        '杀人方法',
-        '怎么杀人',
-        '砍人',
-        '恐怖袭击',
-        '炸学校',
-        '炸商场',
-        '自杀方法',
-        '怎么自杀',
-      ],
+      terms: ['杀人方法', '怎么杀人', '砍人', '恐怖袭击', '炸学校', '炸商场', '自杀方法', '怎么自杀'],
     ),
   ];
 
@@ -809,6 +1028,7 @@ class InputModerator {
       for (final term in rule.terms) {
         final compactTerm = normalize(term);
         if (compactTerm.isNotEmpty && compact.contains(compactTerm)) {
+          debugPrint('命中敏感词: $term (${rule.category})');
           return ModerationResult(category: rule.category, term: term);
         }
       }
@@ -817,8 +1037,11 @@ class InputModerator {
   }
 
   static String normalize(String text) {
-    return text
-        .toLowerCase()
-        .replaceAll(RegExp(r'''[\s.,!?;:'"`~@#$%^&*()[\]{}<>\\/|+=_，。！？；：、"'“”‘’（）【】《》·…￥-]+'''), '');
+    return text.toLowerCase().replaceAll(
+      RegExp(
+        r'''[\s.,!?;:'"`~@#$%^&*()[\]{}<>\\/|+=_，。！？；：、"'“”‘’（）【】《》·…￥-]+''',
+      ),
+      '',
+    );
   }
 }
