@@ -12,7 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'captcha_page.dart';
 
-const bool debugMode = false;
+const bool debugMode = true;
 
 // ⭐ 全局 token 存储
 String? _authToken;
@@ -79,13 +79,29 @@ class MyApp extends StatelessWidget {
             debugShowCheckedModeBanner: false,
             title: '霜蓝AI',
             themeMode: mode,
-            theme: ThemeData.light(),
-            darkTheme: ThemeData.dark().copyWith(
-              scaffoldBackgroundColor: const Color(0xFF0B0F1A),
+            theme: ThemeData(
+              brightness: Brightness.light,
+              scaffoldBackgroundColor: const Color(0xFFF6F8FC),
+              cardColor: Colors.white,
+              dividerColor: Colors.black12,
               appBarTheme: const AppBarTheme(
                 backgroundColor: Colors.transparent,
+                elevation: 0,
+                foregroundColor: Colors.black87,
+              ),
+              textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 15)),
+            ),
+            darkTheme: ThemeData(
+              brightness: Brightness.dark,
+              scaffoldBackgroundColor: const Color(0xFF0B0F1A),
+              cardColor: const Color(0xFF111827),
+              dividerColor: Colors.white12,
+              appBarTheme: const AppBarTheme(
+                backgroundColor: Colors.transparent,
+                elevation: 0,
                 foregroundColor: Colors.white,
               ),
+              textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 15)),
             ),
             home: const RootPage(),
           ),
@@ -210,6 +226,7 @@ class _SplashPageState extends State<SplashPage>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scale;
+  late Animation<double> _opacity;
   Timer? _splashTimer;
 
   @override
@@ -225,6 +242,11 @@ class _SplashPageState extends State<SplashPage>
       begin: 0.6,
       end: 1.2,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    _opacity = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
 
     _controller.forward();
 
@@ -256,9 +278,20 @@ class _SplashPageState extends State<SplashPage>
     return Scaffold(
       backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.white,
       body: Center(
-        child: ScaleTransition(
-          scale: _scale,
-          child: Image.asset('assets/ailogo.png', width: 120),
+        child: FadeTransition(
+          opacity: _opacity,
+          child: ScaleTransition(
+            scale: _scale,
+            child: TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.95, end: 1.0),
+              duration: const Duration(milliseconds: 900),
+              curve: Curves.easeOutBack,
+              builder: (context, value, child) {
+                return Transform.scale(scale: value, child: child);
+              },
+              child: Image.asset('assets/ailogo.png', width: 120),
+            ),
+          ),
         ),
       ),
     );
@@ -506,8 +539,8 @@ class _LoginPageState extends State<LoginPage>
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: isDark
-                ? const [Color(0xFF0B0F1A), Color(0xFF111827)]
-                : const [Color(0xFFEAF4FF), Color(0xFFF7FBFF)],
+                ? const [Color(0xFF0B0F1A), Color(0xFF0F172A)]
+                : const [Color(0xFFF8FAFF), Color(0xFFEAF2FF)],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
           ),
@@ -569,12 +602,16 @@ class _LoginPageState extends State<LoginPage>
                         color: isDark
                             ? Colors.white.withAlpha(13)
                             : Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(
-                          color: isDark
-                              ? Colors.white.withAlpha(20)
-                              : Colors.black12,
-                        ),
+                        borderRadius: BorderRadius.circular(20),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(
+                              isDark ? 0.3 : 0.08,
+                            ),
+                            blurRadius: 20,
+                            offset: const Offset(0, 10),
+                          ),
+                        ],
                       ),
                       child: Column(
                         children: [
@@ -652,7 +689,9 @@ class _LoginPageState extends State<LoginPage>
                       height: 44,
                       decoration: BoxDecoration(
                         gradient: const LinearGradient(
-                          colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
+                          colors: [Color(0xFF22D3EE), Color(0xFF6366F1)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
                         ),
                         borderRadius: BorderRadius.circular(12),
                       ),
@@ -890,9 +929,25 @@ class _ChatPageState extends State<ChatPage> {
     bool isDark,
   ) {
     if (isUser) {
-      return Text(
-        msg["text"],
-        style: const TextStyle(fontSize: 15, color: Colors.white),
+      return Align(
+        alignment: Alignment.centerRight,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.7,
+          ),
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF22D3EE),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Text(
+              msg["text"],
+              style: const TextStyle(fontSize: 14, color: Colors.white),
+            ),
+          ),
+        ),
       );
     }
 
@@ -933,21 +988,46 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     if (msg["text"] == "思考中..." || msg["text"] == "深度思考中...") {
-      return Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
+      return Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 8),
+              Flexible(child: Text(msg["text"])),
+            ],
           ),
-          const SizedBox(width: 8),
-          Text(msg["text"]),
-        ],
+        ),
       );
     }
 
-    return MarkdownBody(data: msg["text"] ?? "");
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.of(context).size.width * 0.7,
+        ),
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF111827) : Colors.white,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: DefaultTextStyle(
+            style: const TextStyle(fontSize: 14),
+            child: MarkdownBody(data: msg["text"] ?? ""),
+          ),
+        ),
+      ),
+    );
   }
 
   late final SunlandApiClient apiClient;
@@ -973,8 +1053,7 @@ class _ChatPageState extends State<ChatPage> {
 
   void rememberLocalMessages() {
     final id = currentConversationId;
-    if (id == null || !isLocalConversation(id)) return;
-
+    if (id == null) return;
     localConversationMessages[id] = messages
         .map((message) => Map<String, dynamic>.from(message))
         .toList();
@@ -1000,15 +1079,86 @@ class _ChatPageState extends State<ChatPage> {
     final user = currentUserNotifier.value;
     if (user == null) return;
 
-    final data = await supabase
-        .from('conversations')
-        .select()
-        .eq('user_id', user.id)
-        .order('created_at', ascending: false);
+    try {
+      final data = await supabase
+          .from('conversations')
+          .select('data')
+          .eq('user_id', user.id)
+          .maybeSingle();
 
-    setState(() {
-      conversations = List<Map<String, dynamic>>.from(data);
-    });
+      if (data == null || data['data'] == null) {
+        setState(() => conversations = []);
+        return;
+      }
+
+      final rawList = data['data'] as List;
+      final List<Map<String, dynamic>> convos = [];
+
+      for (final item in rawList) {
+        if (item is! Map) continue;
+        final id = item['id']?.toString();
+        if (id == null || id == '__xixi_user_profile__') continue;
+
+        convos.add({'id': id, 'title': item['title'] ?? '新对话'});
+
+        final history = item['history'];
+        if (history is List) {
+          localConversationMessages[id] = history
+              .whereType<Map>()
+              .where((m) => m['role'] != 'system')
+              .map(
+                (m) => {
+                  'text': (m['content'] ?? '').toString(),
+                  'isUser': m['role'] == 'user',
+                },
+              )
+              .toList();
+        }
+      }
+
+      setState(() => conversations = convos);
+    } catch (e) {
+      debugPrint('loadConversations error: $e');
+    }
+  }
+
+  Future<void> _saveToCloud() async {
+    final user = currentUserNotifier.value;
+    if (user == null) return;
+
+    try {
+      final List<Map<String, dynamic>> dataList = [];
+
+      for (final convo in conversations) {
+        final id = convo['id']?.toString();
+        if (id == null || isLocalConversation(id)) continue;
+
+        final msgs = localConversationMessages[id] ?? [];
+        final history = <Map<String, dynamic>>[
+          {'role': 'system', 'content': sunlandSystemPrompt},
+          ...msgs.map(
+            (m) => {
+              'role': m['isUser'] == true ? 'user' : 'assistant',
+              'content': (m['text'] ?? '').toString(),
+            },
+          ),
+        ];
+
+        dataList.add({
+          'id': id,
+          'title': convo['title'] ?? '新对话',
+          'history': history,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+
+      await supabase.from('conversations').upsert({
+        'user_id': user.id,
+        'data': dataList,
+      }, onConflict: 'user_id');
+    } catch (e) {
+      debugPrint('_saveToCloud error: $e');
+    }
   }
 
   @override
@@ -1142,19 +1292,10 @@ class _ChatPageState extends State<ChatPage> {
     if (conversations.isNotEmpty) {
       final convo = conversations.first;
       currentConversationId = convo["id"];
-
-      final msgs = await supabase
-          .from('messages')
-          .select()
-          .eq('conversation_id', currentConversationId!)
-          .order('created_at');
-
-      if (!mounted) return;
-
       setState(() {
-        messages = (msgs as List)
-            .map((e) => {"text": e['content'], "isUser": e['is_user']})
-            .toList();
+        messages = List<Map<String, dynamic>>.from(
+          localConversationMessages[currentConversationId] ?? [],
+        );
       });
     }
     await checkUpdate();
@@ -1164,13 +1305,19 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final client = HttpClient();
       final request = await client.getUrl(
-        Uri.parse("https://sunland.dev/version.json"),
+        Uri.parse("https://sunland.dev/update.json"),
       );
       final response = await request.close();
 
       if (response.statusCode != 200) return;
 
       final body = await response.transform(utf8.decoder).join();
+
+      if (!body.trim().startsWith("{")) {
+        print("❌ 更新接口返回的不是JSON: $body");
+        return;
+      }
+
       final data = jsonDecode(body);
 
       final latestVersion = data["version"];
@@ -1244,7 +1391,24 @@ class _ChatPageState extends State<ChatPage> {
     // ===== 使用次数检查 =====
     final user = currentUserNotifier.value;
     if (user != null && !isActivated) {
-      final count = await repo.usageCount(user.id);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('检查使用次数...'), duration: Duration(seconds: 5)),
+      );
+      int count;
+      try {
+        count = await repo
+            .usageCount(user.id)
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('次数检查失败: $e'),
+            duration: Duration(seconds: 10),
+          ),
+        );
+        setState(() => isGenerating = false);
+        return;
+      }
       if (count >= freeDailyLimit) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -1290,32 +1454,16 @@ class _ChatPageState extends State<ChatPage> {
     rememberLocalMessages(); // ⭐ 防止新建对话前丢失当前内容
 
     if (currentConversationId == null) {
-      if (user != null) {
-        final convo = await supabase
-            .from('conversations')
-            .insert({'user_id': user.id, 'title': buildConversationTitle(text)})
-            .select()
-            .single();
-
-        currentConversationId = convo['id'];
-        loadConversations();
-      } else {
-        setState(() {
-          createLocalConversation(text);
-        });
-      }
-    }
-
-    if (user != null) {
-      await supabase.from('messages').insert({
-        'user_id': user.id,
-        'conversation_id': currentConversationId,
-        'content': text,
-        'is_user': true,
+      final newId = DateTime.now().millisecondsSinceEpoch.toString();
+      currentConversationId = newId;
+      conversations.insert(0, {
+        'id': newId,
+        'title': buildConversationTitle(text),
       });
-    } else {
-      rememberLocalMessages();
+      localConversationMessages[newId] = [];
     }
+
+    rememberLocalMessages();
 
     controller.clear();
     setState(() {
@@ -1343,21 +1491,44 @@ class _ChatPageState extends State<ChatPage> {
       });
 
       String? reasoning;
-      await for (final chunk in sendSmartChatStream(
-        client: apiClient,
-        rawMessages: messages,
-        pickedImages: [],
-        deep: useReasoner,
-      )) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('开始流式请求...'), duration: Duration(seconds: 5)),
+      );
+      await for (final chunk
+          in sendSmartChatStream(
+            client: apiClient,
+            rawMessages: messages,
+            pickedImages: [],
+            deep: useReasoner,
+          ).timeout(
+            const Duration(seconds: 30),
+            onTimeout: (sink) {
+              sink.close();
+            },
+          )) {
         if (_cancelRequested) break;
 
         if (chunk.reasoning != null && chunk.reasoning!.isNotEmpty) {
           reasoning = chunk.reasoning;
         }
 
-        setState(() {
-          messages.last["text"] = chunk.content;
-        });
+        // --- Custom animated streaming update ---
+        final fullText = chunk.content;
+        final currentText = messages.last["text"] ?? "";
+
+        if (fullText.length > currentText.length) {
+          final newPart = fullText.substring(currentText.length);
+
+          for (int i = 0; i < newPart.length; i++) {
+            await Future.delayed(const Duration(milliseconds: 8));
+            if (_cancelRequested) break;
+
+            setState(() {
+              messages.last["text"] =
+                  (messages.last["text"] ?? "") + newPart[i];
+            });
+          }
+        }
         scrollToBottom();
       }
 
@@ -1375,17 +1546,8 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
-      if (user != null) {
-        // Save assistant message
-        await supabase.from('messages').insert({
-          'user_id': user.id,
-          'conversation_id': currentConversationId,
-          'content': messages.last["text"],
-          'is_user': false,
-        });
-      } else {
-        rememberLocalMessages();
-      }
+      rememberLocalMessages();
+      if (user != null) await _saveToCloud();
 
       // ===== 成功后计数 =====
       if (user != null && !isActivated) {
@@ -1437,12 +1599,7 @@ class _ChatPageState extends State<ChatPage> {
                 }
 
                 // 云端同步
-                if (user != null) {
-                  await supabase
-                      .from('conversations')
-                      .update({'title': newTitle})
-                      .eq('id', convoId);
-                }
+                if (user != null) await _saveToCloud();
               });
             }
           }
@@ -1453,11 +1610,21 @@ class _ChatPageState extends State<ChatPage> {
       scrollToBottom();
     } catch (e) {
       print("❌ AI 请求异常: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("错误: $e"), duration: Duration(seconds: 10)),
+        );
+      }
+
       if (e is AuthExpiredException) {
-        final store = SunlandSessionStore();
-        await store.clearSession();
-        _authToken = null;
-        currentUserNotifier.value = null;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text("Auth过期: $e"),
+            duration: Duration(seconds: 10),
+          ),
+        );
+        // 暂时不自动登出，先看报错
+        setState(() => isGenerating = false);
         return;
       }
 
@@ -1783,9 +1950,7 @@ class _ChatPageState extends State<ChatPage> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Material(
-        color: isDark
-            ? Colors.white.withOpacity(0.04)
-            : Colors.grey.withOpacity(0.08),
+        color: isDark ? const Color(0xFF111827) : Colors.white,
         borderRadius: BorderRadius.circular(14),
         child: InkWell(
           borderRadius: BorderRadius.circular(14),
@@ -1827,10 +1992,9 @@ class _ChatPageState extends State<ChatPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Logo + 标题
                 Row(
                   children: [
-                    const Icon(Icons.auto_awesome, color: Color(0xFFFF8A3D)),
+                    Image.asset('assets/ailogo.png', width: 20, height: 20),
                     const SizedBox(width: 8),
                     Text(
                       "霜蓝 AI",
@@ -1843,323 +2007,59 @@ class _ChatPageState extends State<ChatPage> {
                   ],
                 ),
 
-                const SizedBox(height: 24),
+                const SizedBox(height: 20),
 
-                // 新建对话按钮（Claude 风格）
                 GestureDetector(
                   onTap: () {
-                    final currentMsgs = currentConversationId != null
-                        ? (localConversationMessages[currentConversationId] ??
-                              messages)
-                        : messages;
-                    final hasUserMsg = currentMsgs.any(
-                      (m) => m["isUser"] == true,
-                    );
-
-                    if (!hasUserMsg && currentConversationId != null) {
-                      Navigator.pop(context);
-                      return;
-                    }
-
-                    rememberLocalMessages();
                     Navigator.pop(context);
-
                     setState(() {
-                      final id =
-                          'local_${DateTime.now().microsecondsSinceEpoch}';
-
-                      currentConversationId = id;
+                      currentConversationId = null;
                       messages.clear();
-
-                      conversations.insert(0, {
-                        'id': id,
-                        'title': buildConversationTitle(""),
-                        'is_local': true,
-                      });
-
-                      localConversationMessages[id] = [];
-
-                      controller.clear();
-                      pickedImages.clear();
-                      isGenerating = false;
                     });
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
                     decoration: BoxDecoration(
-                      color: isDark
-                          ? const Color(0xFF1A1A1A)
-                          : Colors.grey.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(16),
+                      color: isDark ? const Color(0xFF111827) : Colors.white,
+                      borderRadius: BorderRadius.circular(12),
                     ),
                     child: Center(
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.add,
-                            color: Colors.white70,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 6),
-                          Text(
-                            "新建对话",
-                            style: TextStyle(
-                              color: isDark ? Colors.white70 : Colors.black87,
-                            ),
-                          ),
-                        ],
+                      child: Text(
+                        "新建对话",
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
+                        ),
                       ),
                     ),
                   ),
                 ),
 
-                // === Conversation List UI (insertion) ===
-                const SizedBox(height: 16),
+                const SizedBox(height: 20),
 
                 Expanded(
                   child: ListView.builder(
                     itemCount: conversations.length,
                     itemBuilder: (context, index) {
                       final convo = conversations[index];
-                      final isActive = convo['id'] == currentConversationId;
-
-                      return GestureDetector(
-                        onTap: () async {
-                          rememberLocalMessages();
-                          final id = convo['id'];
-
-                          // 本地缓存优先
-                          if (localConversationMessages.containsKey(id)) {
-                            setState(() {
-                              currentConversationId = id;
-                              messages = List<Map<String, dynamic>>.from(
-                                localConversationMessages[id]!,
-                              );
-                            });
-                            return;
-                          }
-
-                          // 本地没有 → 从 Supabase 拉取
-                          setState(() {
-                            currentConversationId = id;
-                            messages = [];
-                          });
-                          Navigator.pop(context);
-
-                          if (!isLocalConversation(id)) {
-                            final msgs = await supabase
-                                .from('messages')
-                                .select()
-                                .eq('conversation_id', id)
-                                .order('created_at');
-
-                            if (!mounted) return;
-                            setState(() {
-                              messages = (msgs as List)
-                                  .map(
-                                    (e) => {
-                                      "text": e['content'],
-                                      "isUser": e['is_user'],
-                                    },
-                                  )
-                                  .toList();
-                              localConversationMessages[id] = List.from(
-                                messages,
-                              );
-                            });
-                            scrollToBottom();
-                          }
-                        },
-                        onLongPress: () {
-                          showModalBottomSheet(
-                            context: context,
-                            builder: (_) {
-                              return SafeArea(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    ListTile(
-                                      leading: const Icon(Icons.edit),
-                                      title: const Text("重命名"),
-                                      onTap: () {
-                                        Navigator.pop(context);
-
-                                        final renameController =
-                                            TextEditingController(
-                                              text: convo['title'],
-                                            );
-
-                                        showDialog(
-                                          context: context,
-                                          builder: (_) => AlertDialog(
-                                            title: const Text("重命名对话"),
-                                            content: TextField(
-                                              controller: renameController,
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(context),
-                                                child: const Text("取消"),
-                                              ),
-                                              TextButton(
-                                                onPressed: () {
-                                                  setState(() {
-                                                    convo['title'] =
-                                                        renameController.text
-                                                            .trim();
-                                                  });
-                                                  Navigator.pop(context);
-                                                },
-                                                child: const Text("确定"),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                    ListTile(
-                                      leading: const Icon(
-                                        Icons.delete,
-                                        color: Colors.red,
-                                      ),
-                                      title: const Text(
-                                        "删除对话",
-                                        style: TextStyle(color: Colors.red),
-                                      ),
-                                      onTap: () {
-                                        Navigator.pop(context);
-
-                                        showDialog(
-                                          context: context,
-                                          builder: (_) => AlertDialog(
-                                            title: const Text("确认删除？"),
-                                            content: const Text("这个对话将无法恢复"),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(context),
-                                                child: const Text("取消"),
-                                              ),
-                                              TextButton(
-                                                onPressed: () async {
-                                                  final deletedId = convo['id'];
-                                                  Navigator.pop(context);
-
-                                                  setState(() {
-                                                    conversations.removeAt(
-                                                      index,
-                                                    );
-                                                    localConversationMessages
-                                                        .remove(deletedId);
-
-                                                    if (currentConversationId ==
-                                                        deletedId) {
-                                                      currentConversationId =
-                                                          null;
-                                                      messages.clear();
-                                                    }
-                                                  });
-
-                                                  if (!isLocalConversation(
-                                                    deletedId,
-                                                  )) {
-                                                    await supabase
-                                                        .from('conversations')
-                                                        .delete()
-                                                        .eq('id', deletedId);
-
-                                                    supabase
-                                                        .from('messages')
-                                                        .delete()
-                                                        .eq(
-                                                          'conversation_id',
-                                                          deletedId,
-                                                        )
-                                                        .catchError((_) {});
-                                                  }
-                                                },
-                                                child: const Text(
-                                                  "删除",
-                                                  style: TextStyle(
-                                                    color: Colors.red,
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
-                          );
-                        },
-                        child: Container(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 12,
-                            vertical: 10,
-                          ),
-                          decoration: BoxDecoration(
-                            color: isActive
-                                ? const Color(0xFF1A1A1A)
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Text(
-                            convo['title'] ?? '新对话',
-                            style: TextStyle(
-                              color: isDark ? Colors.white70 : Colors.black87,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
+                      return ListTile(
+                        title: Text(
+                          convo['title'] ?? '新对话',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          setState(() {
+                            currentConversationId = convo['id'];
+                            messages = List<Map<String, dynamic>>.from(
+                              localConversationMessages[currentConversationId] ??
+                                  [],
+                            );
+                          });
+                        },
                       );
                     },
                   ),
-                ),
-
-                // === End Conversation List UI ===
-                const Spacer(),
-
-                // 底部用户（弱化版）
-                Builder(
-                  builder: (_) {
-                    final user = currentUserNotifier.value;
-                    final name =
-                        user?.userMetadata?['name'] ??
-                        user?.email?.split('@')[0] ??
-                        '用户';
-
-                    final initial = name.isNotEmpty
-                        ? name.substring(0, 1)
-                        : '?';
-
-                    return Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 16,
-                          backgroundColor: Colors.black,
-                          child: Text(
-                            initial,
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Text(
-                          name,
-                          style: TextStyle(
-                            color: isDark ? Colors.white70 : Colors.black87,
-                          ),
-                        ),
-                      ],
-                    );
-                  },
                 ),
               ],
             ),
@@ -2168,7 +2068,7 @@ class _ChatPageState extends State<ChatPage> {
       ),
       extendBodyBehindAppBar: true,
       backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.transparent,
-      resizeToAvoidBottomInset: false,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.transparent,
         foregroundColor: isDark ? Colors.white : Colors.black87,
@@ -2183,6 +2083,7 @@ class _ChatPageState extends State<ChatPage> {
             return IconButton(
               icon: const Icon(Icons.menu),
               onPressed: () {
+                FocusScope.of(context).unfocus(); // ⭐ 关闭键盘
                 Scaffold.of(context).openDrawer();
               },
             );
@@ -2237,7 +2138,9 @@ class _ChatPageState extends State<ChatPage> {
                       decoration: BoxDecoration(
                         color: useReasoner
                             ? const Color(0xFF22D3EE)
-                            : Colors.grey.withOpacity(0.2),
+                            : (isDark
+                                  ? Colors.white.withOpacity(0.1)
+                                  : Colors.black.withOpacity(0.05)),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
@@ -2305,8 +2208,8 @@ class _ChatPageState extends State<ChatPage> {
               decoration: BoxDecoration(
                 gradient: LinearGradient(
                   colors: isDark
-                      ? const [Color(0xFF0B0F1A), Color(0xFF111827)]
-                      : const [Color(0xFFF3F8FF), Color(0xFFE6F2FF)],
+                      ? const [Color(0xFF0B0F1A), Color(0xFF0F172A)]
+                      : const [Color(0xFFF8FAFF), Color(0xFFEAF2FF)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
@@ -2392,8 +2295,8 @@ class _ChatPageState extends State<ChatPage> {
                       physics: const BouncingScrollPhysics(
                         parent: AlwaysScrollableScrollPhysics(),
                       ),
-                      // Changed padding to prevent extra top spacing
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                      // Increased bottom padding to prevent input overlap
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final msg = messages[i];
@@ -2424,30 +2327,7 @@ class _ChatPageState extends State<ChatPage> {
                                 alignment: isUser
                                     ? Alignment.centerRight
                                     : Alignment.centerLeft,
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 12,
-                                  ),
-                                  constraints: BoxConstraints(
-                                    maxWidth:
-                                        MediaQuery.of(context).size.width *
-                                        0.65,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: isUser
-                                        ? const Color(0xFF22D3EE)
-                                        : (isDark
-                                              ? const Color(0xFF1F2937)
-                                              : Colors.white),
-                                    borderRadius: BorderRadius.circular(18),
-                                  ),
-                                  child: buildMessageContent(
-                                    msg,
-                                    isUser,
-                                    isDark,
-                                  ),
-                                ),
+                                child: buildMessageContent(msg, isUser, isDark),
                               ),
                             ),
                           ),
@@ -2458,82 +2338,75 @@ class _ChatPageState extends State<ChatPage> {
                 // 输入区
                 SafeArea(
                   top: false,
-                  child: AnimatedPadding(
-                    duration: const Duration(milliseconds: 200),
-                    curve: Curves.easeOut,
-                    padding: EdgeInsets.only(
-                      bottom: MediaQuery.of(context).viewInsets.bottom,
-                    ),
-                    child: Container(
-                      color: Colors.transparent,
-                      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: TextField(
-                              controller: controller,
-                              minLines: 1,
-                              maxLines: 5,
-                              decoration: InputDecoration(
-                                hintText: "输入内容...",
-                                filled: true,
-                                fillColor: isDark
-                                    ? const Color(0xFF1F2937)
-                                    : Colors.white,
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 12,
-                                ),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(18),
-                                  borderSide: BorderSide.none,
-                                ),
+                  child: Container(
+                    color: Colors.transparent,
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: controller,
+                            minLines: 1,
+                            maxLines: 5,
+                            decoration: InputDecoration(
+                              hintText: "输入内容...",
+                              filled: true,
+                              fillColor: isDark
+                                  ? const Color(0xFF1F2937)
+                                  : Colors.white,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
                               ),
-                              style: TextStyle(
-                                color: isDark ? Colors.white : Colors.black87,
-                                fontSize: 16,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(18),
+                                borderSide: BorderSide.none,
                               ),
-                              onSubmitted: (_) {
-                                FocusScope.of(context).unfocus();
-                                sendMessage();
-                              },
-                              textInputAction: TextInputAction.send,
-                              keyboardType: TextInputType.multiline,
                             ),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            icon: Icon(
-                              Icons.image,
-                              color: isDark ? Colors.white54 : Colors.black45,
+                            style: TextStyle(
+                              color: isDark ? Colors.white : Colors.black87,
+                              fontSize: 16,
                             ),
-                            onPressed: pickImage,
-                            tooltip: "添加图片",
-                          ),
-                          const SizedBox(width: 4),
-                          IconButton(
-                            icon: Icon(
-                              isGenerating ? Icons.stop : Icons.send,
-
-                              color: isGenerating
-                                  ? Colors.red
-                                  : (isDark
-                                        ? Colors.white
-                                        : const Color(0xFF3B82F6)),
-                            ),
-
-                            onPressed: () {
-                              if (isGenerating) {
-                                cancelGeneration();
-                              } else {
-                                sendMessage();
-                              }
+                            onSubmitted: (_) {
+                              FocusScope.of(context).unfocus();
+                              sendMessage();
                             },
-
-                            tooltip: isGenerating ? "停止生成" : "发送",
+                            textInputAction: TextInputAction.send,
+                            keyboardType: TextInputType.multiline,
                           ),
-                        ],
-                      ),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          icon: Icon(
+                            Icons.image,
+                            color: isDark ? Colors.white54 : Colors.black45,
+                          ),
+                          onPressed: pickImage,
+                          tooltip: "添加图片",
+                        ),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: Icon(
+                            isGenerating ? Icons.stop : Icons.send,
+
+                            color: isGenerating
+                                ? Colors.red
+                                : (isDark
+                                      ? Colors.white
+                                      : const Color(0xFF3B82F6)),
+                          ),
+
+                          onPressed: () {
+                            if (isGenerating) {
+                              cancelGeneration();
+                            } else {
+                              sendMessage();
+                            }
+                          },
+
+                          tooltip: isGenerating ? "停止生成" : "发送",
+                        ),
+                      ],
                     ),
                   ),
                 ),

@@ -1,27 +1,41 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:open_file/open_file.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 class UpdateService {
+  static void Function()? _updateProgress;
+
   /// 检查更新
   static Future<void> check(BuildContext context) async {
     try {
       final res = await http.get(Uri.parse("https://sunland.dev/update.json"));
+
+      if (!res.body.trim().startsWith("{")) {
+        print("❌ 更新接口返回异常: ${res.body}");
+        return;
+      }
+
       final data = jsonDecode(res.body);
 
       final latest = data["version"]?.toString();
-      final apkUrl = data["apk_url"]?.toString();
+      final apkUrl = (data["apk_url"] ?? data["url"])?.toString();
       final force = data["force"] ?? false;
       final desc = data["desc"]?.toString() ?? "";
+      final appStoreUrl = data["app_store_url"]?.toString();
 
       if (latest == null || apkUrl == null) return;
 
       final packageInfo = await PackageInfo.fromPlatform();
       final current = packageInfo.version;
+
+      // iOS 直接忽略更新（未上架 App Store）
+      if (Platform.isIOS) return;
 
       if (_isNewVersion(current, latest)) {
         _showDialog(context, apkUrl, force, desc);
@@ -94,6 +108,39 @@ class UpdateService {
     );
   }
 
+  static void _showIOSDialog(
+    BuildContext context,
+    String url,
+    bool force,
+    String desc,
+  ) {
+    showDialog(
+      context: context,
+      barrierDismissible: !force,
+      builder: (_) => AlertDialog(
+        title: const Text("发现新版本 🚀"),
+        content: Text(desc.isEmpty ? "请前往 App Store 更新" : desc),
+        actions: [
+          if (!force)
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text("稍后"),
+            ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              final uri = Uri.parse(url);
+              if (await canLaunchUrl(uri)) {
+                await launchUrl(uri, mode: LaunchMode.externalApplication);
+              }
+            },
+            child: const Text("前往更新"),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// 下载 + 安装
   static Future<void> _downloadAndInstall(
     BuildContext context,
@@ -109,11 +156,21 @@ class UpdateService {
 
     if (!context.mounted) return;
 
-    await showDialog(
+    showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setState) {
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setState) {
+          // 使用闭包更新 UI
+          void update() {
+            if (dialogContext.mounted) {
+              setState(() {});
+            }
+          }
+
+          // 将更新函数挂到外部
+          _updateProgress = update;
+
           return AlertDialog(
             title: Text(done ? "下载完成" : "正在下载更新"),
             content: Column(
@@ -139,10 +196,7 @@ class UpdateService {
           if (total > 0) {
             progress = received / total;
           }
-          // 刷新UI
-          if (context.mounted) {
-            (context as Element).markNeedsBuild();
-          }
+          _updateProgress?.call();
         },
       );
 

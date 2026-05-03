@@ -470,9 +470,15 @@ class SunlandApiClient {
       'stream': true, // 关键：告诉后端走流式
     });
 
-    final streamed = await client
-        .send(req)
-        .timeout(const Duration(seconds: 60));
+    debugPrint('📡 正在发送HTTP请求到: ${req.url}');
+    http.StreamedResponse streamed;
+    try {
+      streamed = await client.send(req).timeout(const Duration(seconds: 60));
+      debugPrint('📡 HTTP响应状态码: ${streamed.statusCode}');
+    } catch (e) {
+      debugPrint('📡 HTTP请求异常: $e');
+      rethrow;
+    }
 
     if (streamed.statusCode == 401) throw const AuthExpiredException();
     if (streamed.statusCode == 429) throw const UsageLimitException();
