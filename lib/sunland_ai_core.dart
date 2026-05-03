@@ -1,9 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
-import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -470,13 +468,10 @@ class SunlandApiClient {
       'stream': true, // 关键：告诉后端走流式
     });
 
-    debugPrint('📡 正在发送HTTP请求到: ${req.url}');
     http.StreamedResponse streamed;
     try {
       streamed = await client.send(req).timeout(const Duration(seconds: 60));
-      debugPrint('📡 HTTP响应状态码: ${streamed.statusCode}');
     } catch (e) {
-      debugPrint('📡 HTTP请求异常: $e');
       rethrow;
     }
 
@@ -590,13 +585,8 @@ class SunlandApiClient {
             .timeout(const Duration(seconds: 45));
 
         if (response.statusCode == 401) {
-          debugPrint('❌ 401 body: ${response.body}');
           throw const AuthExpiredException();
         }
-        debugPrint('✅ 状态码: ${response.statusCode}');
-        debugPrint(
-          '✅ 响应: ${response.body.substring(0, min(200, response.body.length))}',
-        );
         if (response.statusCode == 429) throw const UsageLimitException();
 
         final decoded = _decodeJson(response.body);
@@ -805,7 +795,6 @@ SunlandUser? userFromJwt(String token) {
     );
     return SunlandUser.fromJson(json);
   } catch (error) {
-    debugPrint('JWT解析失败: $error');
     return null;
   }
 }
@@ -1034,7 +1023,6 @@ class InputModerator {
       for (final term in rule.terms) {
         final compactTerm = normalize(term);
         if (compactTerm.isNotEmpty && compact.contains(compactTerm)) {
-          debugPrint('命中敏感词: $term (${rule.category})');
           return ModerationResult(category: rule.category, term: term);
         }
       }

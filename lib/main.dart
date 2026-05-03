@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'dart:ui';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -866,7 +867,6 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void cancelGeneration() {
-    print("🛑 cancelGeneration 被调用");
     if (!isGenerating) return;
 
     _cancelRequested = true;
@@ -1314,7 +1314,6 @@ class _ChatPageState extends State<ChatPage> {
       final body = await response.transform(utf8.decoder).join();
 
       if (!body.trim().startsWith("{")) {
-        print("❌ 更新接口返回的不是JSON: $body");
         return;
       }
 
@@ -1352,7 +1351,7 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
     } catch (e) {
-      print("更新检测失败: $e");
+      // debug log removed
     }
   }
 
@@ -1378,34 +1377,18 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> sendMessage() async {
-    print("⚡ sendMessage 被调用");
     _cancelRequested = false;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_authToken ?? 'NULL'),
-        duration: Duration(seconds: 30),
-      ),
-    );
     FocusScope.of(context).unfocus();
 
     // ===== 使用次数检查 =====
     final user = currentUserNotifier.value;
     if (user != null && !isActivated) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('检查使用次数...'), duration: Duration(seconds: 5)),
-      );
       int count;
       try {
         count = await repo
             .usageCount(user.id)
             .timeout(const Duration(seconds: 5));
       } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('次数检查失败: $e'),
-            duration: Duration(seconds: 10),
-          ),
-        );
         setState(() => isGenerating = false);
         return;
       }
@@ -1479,8 +1462,6 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       // ===== 使用 Core 构建并发送 =====
-      print("🚀 开始请求 AI");
-      print("当前 TOKEN: $_authToken");
       if (pickedImages.isNotEmpty) {
         setState(() => pickedImages.clear());
       }
@@ -1491,9 +1472,6 @@ class _ChatPageState extends State<ChatPage> {
       });
 
       String? reasoning;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('开始流式请求...'), duration: Duration(seconds: 5)),
-      );
       await for (final chunk
           in sendSmartChatStream(
             client: apiClient,
@@ -1609,7 +1587,6 @@ class _ChatPageState extends State<ChatPage> {
       }
       scrollToBottom();
     } catch (e) {
-      print("❌ AI 请求异常: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("错误: $e"), duration: Duration(seconds: 10)),
@@ -1638,11 +1615,9 @@ class _ChatPageState extends State<ChatPage> {
 
       rememberLocalMessages();
     } finally {
-      print("🔚 请求结束（finally）");
       if (mounted) {
         setState(() {
           isGenerating = false;
-          print("🔥 sendMessage 被调用, isGenerating=$isGenerating");
           _cancelRequested = false;
           // 防止“思考中...”卡住
           if (messages.isNotEmpty &&
@@ -1994,7 +1969,7 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 Row(
                   children: [
-                    Image.asset('assets/ailogo.png', width: 20, height: 20),
+                    Image.asset('assets/ailogo.png', width: 60, height: 60),
                     const SizedBox(width: 8),
                     Text(
                       "霜蓝 AI",
@@ -2123,35 +2098,7 @@ class _ChatPageState extends State<ChatPage> {
                         ),
                     ],
                   ),
-                  const SizedBox(width: 8),
-                  GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        useReasoner = !useReasoner;
-                      });
-                    },
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration: BoxDecoration(
-                        color: useReasoner
-                            ? const Color(0xFF22D3EE)
-                            : (isDark
-                                  ? Colors.white.withOpacity(0.1)
-                                  : Colors.black.withOpacity(0.05)),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        "深度思考",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: useReasoner ? Colors.white : Colors.black54,
-                        ),
-                      ),
-                    ),
-                  ),
+                  // Deep Thinking toggle removed
                 ],
               ),
             ),
@@ -2335,78 +2282,120 @@ class _ChatPageState extends State<ChatPage> {
                       },
                     ),
                   ),
-                // 输入区
+                // 输入区（上下两层）
                 SafeArea(
                   top: false,
-                  child: Container(
-                    color: Colors.transparent,
-                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: controller,
-                            minLines: 1,
-                            maxLines: 5,
-                            decoration: InputDecoration(
-                              hintText: "输入内容...",
-                              filled: true,
-                              fillColor: isDark
-                                  ? const Color(0xFF1F2937)
-                                  : Colors.white,
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 12,
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(18),
-                                borderSide: BorderSide.none,
-                              ),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(24),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+                        child: Container(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                          decoration: BoxDecoration(
+                            color: isDark
+                                ? const Color(0xFF0F172A).withOpacity(0.85)
+                                : Colors.white.withOpacity(0.85),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(
+                              color: isDark
+                                  ? Colors.white.withOpacity(0.08)
+                                  : Colors.black.withOpacity(0.06),
                             ),
-                            style: TextStyle(
-                              color: isDark ? Colors.white : Colors.black87,
-                              fontSize: 16,
-                            ),
-                            onSubmitted: (_) {
-                              FocusScope.of(context).unfocus();
-                              sendMessage();
-                            },
-                            textInputAction: TextInputAction.send,
-                            keyboardType: TextInputType.multiline,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.12),
+                                blurRadius: 30,
+                                offset: const Offset(0, 10),
+                              ),
+                            ],
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: TextField(
+                                      controller: controller,
+                                      autofocus: false,
+                                      minLines: 1,
+                                      maxLines: 5,
+                                      decoration: InputDecoration(
+                                        hintText: "有问题，尽管问",
+                                        filled: true,
+                                        fillColor: isDark
+                                            ? const Color(0xFF1F2937)
+                                            : const Color(0xFFF3F4F6),
+                                        contentPadding:
+                                            const EdgeInsets.symmetric(
+                                              horizontal: 16,
+                                              vertical: 14,
+                                            ),
+                                        border: OutlineInputBorder(
+                                          borderRadius: BorderRadius.circular(
+                                            24,
+                                          ),
+                                          borderSide: BorderSide.none,
+                                        ),
+                                      ),
+                                      style: TextStyle(
+                                        color: isDark
+                                            ? Colors.white
+                                            : Colors.black87,
+                                        fontSize: 15,
+                                      ),
+                                      onSubmitted: (_) {
+                                        FocusScope.of(context).unfocus();
+                                        sendMessage();
+                                      },
+                                      textInputAction: TextInputAction.send,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  GestureDetector(
+                                    onTap: isGenerating
+                                        ? cancelGeneration
+                                        : sendMessage,
+                                    child: Container(
+                                      width: 44,
+                                      height: 44,
+                                      decoration: BoxDecoration(
+                                        color: isGenerating
+                                            ? Colors.red
+                                            : const Color(0xFF3B82F6),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: Icon(
+                                        isGenerating
+                                            ? Icons.stop
+                                            : Icons.arrow_upward,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              Row(
+                                children: [
+                                  GestureDetector(
+                                    onTap: pickImage,
+                                    child: Icon(
+                                      Icons.image,
+                                      size: 22,
+                                      color: isDark
+                                          ? Colors.white70
+                                          : Colors.black54,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        IconButton(
-                          icon: Icon(
-                            Icons.image,
-                            color: isDark ? Colors.white54 : Colors.black45,
-                          ),
-                          onPressed: pickImage,
-                          tooltip: "添加图片",
-                        ),
-                        const SizedBox(width: 4),
-                        IconButton(
-                          icon: Icon(
-                            isGenerating ? Icons.stop : Icons.send,
-
-                            color: isGenerating
-                                ? Colors.red
-                                : (isDark
-                                      ? Colors.white
-                                      : const Color(0xFF3B82F6)),
-                          ),
-
-                          onPressed: () {
-                            if (isGenerating) {
-                              cancelGeneration();
-                            } else {
-                              sendMessage();
-                            }
-                          },
-
-                          tooltip: isGenerating ? "停止生成" : "发送",
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),

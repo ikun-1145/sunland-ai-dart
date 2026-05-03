@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
@@ -334,7 +335,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _showSnack(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    
   }
 
   @override
@@ -346,211 +347,259 @@ class _SettingsPageState extends State<SettingsPage> {
         : (freeDailyLimit - _usageCount).clamp(0, freeDailyLimit);
     final usageFraction = _isActivated ? 1.0 : remain / freeDailyLimit;
 
-    return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: isDark
-              ? [Color(0xFF0B0F1A), Color(0xFF111827)]
-              : [Color(0xFFEAF4FF), Color(0xFFF7FBFF)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
-      child: Scaffold(
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      appBar: AppBar(
+        title: const Text('设置'),
         backgroundColor: Colors.transparent,
-        appBar: AppBar(
-          title: const Text('设置'),
-          backgroundColor: isDark
-              ? Colors.black.withValues(alpha: 0.4)
-              : Colors.white.withValues(alpha: 0.72),
-          foregroundColor: isDark ? Colors.white : Colors.black87,
-          surfaceTintColor: Colors.transparent,
-          actions: [
-            IconButton(
-              tooltip: '刷新',
-              onPressed: _loading ? null : _load,
-              icon: const Icon(Icons.refresh),
+        flexibleSpace: ClipRect(
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+            child: Container(
+              color: isDark
+                  ? Colors.black.withOpacity(0.25)
+                  : Colors.white.withOpacity(0.4),
             ),
-          ],
+          ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 520),
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(16, 18, 16, 34),
-                    children: [
-                      _AvatarHeader(
-                        user: user,
-                        uploading: _uploadingAvatar,
-                        status: _avatarStatus,
-                        onTap: _pickAvatar,
-                        activated: _isActivated,
-                      ),
-                      const SizedBox(height: 22),
-                      _SectionTitle('账号'),
-                      _SettingsCard(
-                        children: [
-                          _InfoRow(
-                            icon: Icons.alternate_email,
-                            label: '邮箱',
-                            value: user?.email ?? '未登录',
-                          ),
-                          _InfoRow(
-                            icon: Icons.badge_outlined,
-                            label: '用户 ID',
-                            value: user?.id != null && user!.id.length > 8
-                                ? user.id.substring(0, 8)
-                                : (user?.id ?? '--'),
-                            monospace: true,
-                          ),
-                        ],
-                      ),
-                      // --- Theme Switcher Section ---
-                      _SectionTitle('外观'),
-                      _SettingsCard(
-                        children: [
-                          ListTile(
-                            leading: const Icon(Icons.palette_outlined),
-                            title: const Text('主题模式'),
-                            subtitle: Text(
-                              Theme.of(context).brightness == Brightness.dark
-                                  ? '深色模式'
-                                  : '浅色模式',
-                            ),
-                            trailing: PopupMenuButton<ThemeMode>(
-                              onSelected: (mode) {
-                                themeNotifier.value = mode;
-                                saveThemeMode(mode);
-                              },
-                              itemBuilder: (context) => const [
-                                PopupMenuItem(
-                                  value: ThemeMode.light,
-                                  child: Text('浅色模式'),
-                                ),
-                                PopupMenuItem(
-                                  value: ThemeMode.dark,
-                                  child: Text('深色模式'),
-                                ),
-                                PopupMenuItem(
-                                  value: ThemeMode.system,
-                                  child: Text('跟随系统'),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      // --- End Theme Switcher Section ---
-                      _SectionTitle('今日使用'),
-                      _SettingsCard(
-                        children: [
-                          Padding(
-                            padding: const EdgeInsets.all(16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Row(
-                                      children: [
-                                        Icon(
-                                          Icons.query_stats,
-                                          color: Color(0xFF0891B2),
-                                        ),
-                                        SizedBox(width: 10),
-                                        Text(
-                                          '剩余次数',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    Text(
-                                      _isActivated ? '∞' : '$remain 次',
-                                      style: const TextStyle(
-                                        color: Color(0xFF0891B2),
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 12),
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(99),
-                                  child: LinearProgressIndicator(
-                                    value: usageFraction,
-                                    minHeight: 7,
-                                    backgroundColor: const Color(0xFFE0F2FE),
-                                    color: const Color(0xFF22D3EE),
-                                  ),
-                                ),
-                                const SizedBox(height: 8),
-                                Text(
-                                  _isActivated
-                                      ? 'Pro 会员 · 无限次对话'
-                                      : '每天重置 20 次免费额度',
-                                  style: TextStyle(
-                                    color: isDark
-                                        ? Colors.white38
-                                        : Colors.black45,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      _SectionTitle('会员'),
-                      _ProPanel(
-                        activated: _isActivated,
-                        onActivate: _activate,
-                        onPay: _showPaySheet,
-                      ),
-                      _SectionTitle('其他'),
-                      _SettingsCard(
-                        children: [
-                          _ActionRow(
-                            icon: Icons.description_outlined,
-                            label: '用户协议',
-                            onTap: () => _openExternal(
-                              'https://sunland.dev/xukexieyi.html',
-                            ),
-                          ),
-                          _ActionRow(
-                            icon: Icons.privacy_tip_outlined,
-                            label: '隐私政策',
-                            onTap: () => _openExternal(
-                              'https://sunland.dev/privacy.html',
-                            ),
-                          ),
-                          _ActionRow(
-                            icon: Icons.logout,
-                            label: '退出登录',
-                            danger: true,
-                            onTap: _logout,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                      Center(
-                        child: Text(
-                          '霜蓝 AI · v1.0.0 beta · 数据安全存储于云端',
-                          style: TextStyle(
-                            color: isDark ? Colors.white38 : Colors.black38,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ),
-                    ],
+        foregroundColor: isDark ? Colors.white : Colors.black87,
+        surfaceTintColor: Colors.transparent,
+        actions: [
+          IconButton(
+            tooltip: '刷新',
+            onPressed: _loading ? null : _load,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: isDark
+                ? [Color(0xFF0B0F1A), Color(0xFF111827)]
+                : [Color(0xFFEAF4FF), Color(0xFFF7FBFF)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -80,
+              left: -60,
+              child: Container(
+                width: 220,
+                height: 220,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [Color(0x5522D3EE), Colors.transparent],
                   ),
                 ),
               ),
+            ),
+            Positioned(
+              top: -60,
+              right: -40,
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [Color(0x55A78BFA), Colors.transparent],
+                  ),
+                ),
+              ),
+            ),
+            SafeArea(
+              child: _loading
+                  ? const Center(child: CircularProgressIndicator())
+                  : Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        child: ListView(
+                          padding: const EdgeInsets.fromLTRB(16, 24, 16, 40),
+                          children: [
+                            _AvatarHeader(
+                              user: user,
+                              uploading: _uploadingAvatar,
+                              status: _avatarStatus,
+                              onTap: _pickAvatar,
+                              activated: _isActivated,
+                            ),
+                            const SizedBox(height: 28),
+                            _SectionTitle('账号'),
+                            _SettingsCard(
+                              children: [
+                                _InfoRow(
+                                  icon: Icons.alternate_email,
+                                  label: '邮箱',
+                                  value: user?.email ?? '未登录',
+                                ),
+                                _InfoRow(
+                                  icon: Icons.badge_outlined,
+                                  label: '用户 ID',
+                                  value: user?.id != null && user!.id.length > 8
+                                      ? user.id.substring(0, 8)
+                                      : (user?.id ?? '--'),
+                                  monospace: true,
+                                ),
+                              ],
+                            ),
+                            // --- Theme Switcher Section ---
+                            _SectionTitle('外观'),
+                            _SettingsCard(
+                              children: [
+                                ListTile(
+                                  leading: const Icon(Icons.palette_outlined),
+                                  title: const Text('主题模式'),
+                                  subtitle: Text(
+                                    Theme.of(context).brightness ==
+                                            Brightness.dark
+                                        ? '深色模式'
+                                        : '浅色模式',
+                                  ),
+                                  trailing: PopupMenuButton<ThemeMode>(
+                                    onSelected: (mode) {
+                                      themeNotifier.value = mode;
+                                      saveThemeMode(mode);
+                                    },
+                                    itemBuilder: (context) => const [
+                                      PopupMenuItem(
+                                        value: ThemeMode.light,
+                                        child: Text('浅色模式'),
+                                      ),
+                                      PopupMenuItem(
+                                        value: ThemeMode.dark,
+                                        child: Text('深色模式'),
+                                      ),
+                                      PopupMenuItem(
+                                        value: ThemeMode.system,
+                                        child: Text('跟随系统'),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            // --- End Theme Switcher Section ---
+                            _SectionTitle('今日使用'),
+                            _SettingsCard(
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        mainAxisAlignment:
+                                            MainAxisAlignment.spaceBetween,
+                                        children: [
+                                          const Row(
+                                            children: [
+                                              Icon(
+                                                Icons.query_stats,
+                                                color: Color(0xFF0891B2),
+                                              ),
+                                              SizedBox(width: 10),
+                                              Text(
+                                                '剩余次数',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          Text(
+                                            _isActivated ? '∞' : '$remain 次',
+                                            style: const TextStyle(
+                                              color: Color(0xFF0891B2),
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 12),
+                                      ClipRRect(
+                                        borderRadius: BorderRadius.circular(99),
+                                        child: LinearProgressIndicator(
+                                          value: usageFraction,
+                                          minHeight: 7,
+                                          backgroundColor: const Color(
+                                            0xFFE0F2FE,
+                                          ),
+                                          color: const Color(0xFF22D3EE),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _isActivated
+                                            ? 'Pro 会员 · 无限次对话'
+                                            : '每天重置 20 次免费额度',
+                                        style: TextStyle(
+                                          color: isDark
+                                              ? Colors.white38
+                                              : Colors.black45,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            _SectionTitle('会员'),
+                            _ProPanel(
+                              activated: _isActivated,
+                              onActivate: _activate,
+                              onPay: _showPaySheet,
+                            ),
+                            _SectionTitle('其他'),
+                            _SettingsCard(
+                              children: [
+                                _ActionRow(
+                                  icon: Icons.description_outlined,
+                                  label: '用户协议',
+                                  onTap: () => _openExternal(
+                                    'https://sunland.dev/xukexieyi.html',
+                                  ),
+                                ),
+                                _ActionRow(
+                                  icon: Icons.privacy_tip_outlined,
+                                  label: '隐私政策',
+                                  onTap: () => _openExternal(
+                                    'https://sunland.dev/privacy.html',
+                                  ),
+                                ),
+                                _ActionRow(
+                                  icon: Icons.logout,
+                                  label: '退出登录',
+                                  danger: true,
+                                  onTap: _logout,
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 20),
+                            Center(
+                              child: Text(
+                                '霜蓝 AI · v1.0.0 beta · 数据安全存储于云端',
+                                style: TextStyle(
+                                  color: isDark
+                                      ? Colors.white38
+                                      : Colors.black38,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -590,8 +639,8 @@ class _AvatarHeader extends StatelessWidget {
             alignment: Alignment.center,
             children: [
               Container(
-                width: 82,
-                height: 82,
+                width: 96,
+                height: 96,
                 padding: const EdgeInsets.all(3),
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
@@ -600,8 +649,9 @@ class _AvatarHeader extends StatelessWidget {
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: const Color(0xFF22D3EE).withValues(alpha: 0.25),
-                      blurRadius: 24,
+                      color: const Color(0xFF22D3EE).withOpacity(0.25),
+                      blurRadius: 32,
+                      spreadRadius: 4,
                     ),
                   ],
                 ),
@@ -704,26 +754,25 @@ class _SettingsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Container(
-      decoration: BoxDecoration(
-        color: isDark
-            ? Colors.white.withValues(alpha: 0.04)
-            : Colors.white.withValues(alpha: 0.7),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(
-          color: isDark
-              ? Colors.white.withOpacity(0.08)
-              : Colors.white.withOpacity(0.6),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(18),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+        child: Container(
+          decoration: BoxDecoration(
+            color: isDark
+                ? Colors.white.withOpacity(0.04)
+                : Colors.white.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withOpacity(0.12)
+                  : Colors.white.withOpacity(0.7),
+            ),
           ),
-        ],
+          child: Column(children: children),
+        ),
       ),
-      child: Column(children: children),
     );
   }
 }
@@ -850,10 +899,17 @@ class _ProPanel extends StatelessWidget {
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
-          colors: [Color(0x1F22D3EE), Color(0x22A78BFA)],
+          colors: [Color(0x5522D3EE), Color(0x55A78BFA)],
         ),
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: const Color(0x3322D3EE)),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFF22D3EE).withOpacity(0.25),
+            blurRadius: 30,
+            spreadRadius: 2,
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
