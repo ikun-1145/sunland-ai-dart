@@ -933,14 +933,25 @@ class _ChatPageState extends State<ChatPage> {
         alignment: Alignment.centerRight,
         child: ConstrainedBox(
           constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.7,
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
           ),
           child: Container(
-            margin: const EdgeInsets.symmetric(vertical: 4),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            margin: const EdgeInsets.symmetric(vertical: 5),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: const Color(0xFF22D3EE),
-              borderRadius: BorderRadius.circular(14),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(18),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF22D3EE).withOpacity(0.3),
+                  blurRadius: 8,
+                  offset: const Offset(0, 2),
+                ),
+              ],
             ),
             child: Text(
               msg["text"],
@@ -991,17 +1002,37 @@ class _ChatPageState extends State<ChatPage> {
       return Align(
         alignment: Alignment.centerLeft,
         child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
+          margin: const EdgeInsets.symmetric(vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: isDark
+                ? const Color(0xFF111827).withOpacity(0.6)
+                : Colors.white.withOpacity(0.6),
+            borderRadius: BorderRadius.circular(14),
+          ),
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
               SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    isDark ? Colors.white70 : Colors.black54,
+                  ),
+                ),
               ),
-              const SizedBox(width: 8),
-              Flexible(child: Text(msg["text"])),
+              const SizedBox(width: 10),
+              Flexible(
+                child: Text(
+                  msg["text"],
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: isDark ? Colors.white70 : Colors.black54,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -1012,14 +1043,26 @@ class _ChatPageState extends State<ChatPage> {
       alignment: Alignment.centerLeft,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.7,
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
         ),
         child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          margin: const EdgeInsets.symmetric(vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF111827) : Colors.white,
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: isDark
+                  ? Colors.white.withOpacity(0.08)
+                  : Colors.black.withOpacity(0.06),
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(isDark ? 0.2 : 0.06),
+                blurRadius: 10,
+                offset: const Offset(0, 2),
+              ),
+            ],
           ),
           child: DefaultTextStyle(
             style: const TextStyle(fontSize: 14),
@@ -1034,6 +1077,8 @@ class _ChatPageState extends State<ChatPage> {
   late final SupabaseAiRepository repo;
   final supabase = Supabase.instance.client;
   bool useReasoner = false;
+  String currentModel = 'deepseek-v4-flash';
+  bool useDeep = false;
   bool isActivated = false;
   int _remainingCount = freeDailyLimit;
   String? _lastUserText;
@@ -1298,7 +1343,40 @@ class _ChatPageState extends State<ChatPage> {
         );
       });
     }
+    await _loadModelPrefs();
     await checkUpdate();
+  }
+
+  Future<void> _loadModelPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedModel = prefs.getString('currentModel');
+    final savedDeep = prefs.getBool('useDeep');
+    if (mounted) {
+      setState(() {
+        if (savedModel != null && savedModel.isNotEmpty) {
+          currentModel = savedModel;
+        }
+        if (savedDeep != null) {
+          useDeep = savedDeep;
+        }
+      });
+    }
+  }
+
+  Future<void> _saveModelPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('currentModel', currentModel);
+    await prefs.setBool('useDeep', useDeep);
+  }
+
+  String _resolveModel() {
+    // Pro 权限校验：非 Pro 用户强制 flash
+    if (!isActivated) return 'deepseek-v4-flash';
+
+    // 深度思考模式强制 pro
+    if (useDeep) return 'deepseek-v4-pro';
+
+    return currentModel;
   }
 
   Future<void> checkUpdate() async {
@@ -1427,7 +1505,7 @@ class _ChatPageState extends State<ChatPage> {
         messages.add({"text": text, "isUser": true});
       }
       messages.add({
-        "text": useReasoner ? "深度思考中..." : "思考中...",
+        "text": (useDeep || useReasoner) ? "深度思考中..." : "思考中...",
         "isUser": false,
         "isStreaming": true,
       });
@@ -1472,12 +1550,42 @@ class _ChatPageState extends State<ChatPage> {
       });
 
       String? reasoning;
+      // ===== 自动模型策略 + Pro 权限校验 =====
+      String requestModel = _resolveModel();
+
+      // 自动策略：长文本/关键词触发 pro（仅 Pro 用户生效）
+      if (isActivated && requestModel != 'deepseek-v4-pro') {
+        final lower = text.toLowerCase();
+        final needsPro =
+            text.length > 300 ||
+            lower.contains('bug') ||
+            lower.contains('报错') ||
+            lower.contains('代码') ||
+            lower.contains('优化');
+        if (needsPro) {
+          requestModel = 'deepseek-v4-pro';
+        }
+      }
+
+      // Pro 降级提示
+      if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("Pro 模型需激活后才能使用，已自动切换为 Flash 模式"),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+
       await for (final chunk
           in sendSmartChatStream(
             client: apiClient,
             rawMessages: messages,
             pickedImages: [],
-            deep: useReasoner,
+            model: requestModel,
+            deep: useDeep || useReasoner,
           ).timeout(
             const Duration(seconds: 30),
             onTimeout: (sink) {
@@ -2064,13 +2172,14 @@ class _ChatPageState extends State<ChatPage> {
             );
           },
         ),
-        title: Row(
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // 左侧：标题 + 深度思考
-            Expanded(
-              child: Row(
-                children: [
-                  Column(
+            // 第一行：标题 + 用户
+            Row(
+              children: [
+                Expanded(
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
@@ -2080,69 +2189,65 @@ class _ChatPageState extends State<ChatPage> {
                           color: isDark ? Colors.white : Colors.black87,
                         ),
                       ),
-                      if (!isActivated)
-                        Text(
-                          "今日剩余 $_remainingCount 次",
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isDark ? Colors.white54 : Colors.black45,
-                          ),
-                        )
-                      else
-                        const Text(
-                          "💎 Pro · 无限使用",
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Color(0xFF22D3EE),
-                          ),
-                        ),
                     ],
                   ),
-                  // Deep Thinking toggle removed
-                ],
+                ),
+                // 用户头像
+                Builder(
+                  builder: (_) {
+                    final user = currentUserNotifier.value;
+                    return GestureDetector(
+                      onTap: showUserMenu,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircleAvatar(
+                            radius: 10,
+                            backgroundColor: const Color(0xFF22D3EE),
+                            backgroundImage:
+                                (user?.userMetadata?['avatar_url'] != null)
+                                ? NetworkImage(
+                                    user!.userMetadata!['avatar_url'],
+                                  )
+                                : null,
+                            child: (user?.userMetadata?['avatar_url'] == null)
+                                ? const Icon(
+                                    Icons.person,
+                                    size: 14,
+                                    color: Colors.white,
+                                  )
+                                : null,
+                          ),
+                          const SizedBox(width: 6),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 80),
+                            child: Text(
+                              user?.userMetadata?['name'] ??
+                                  user?.email?.split('@')[0] ??
+                                  "开发模式",
+                              style: const TextStyle(fontSize: 13),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            // 第二行：状态信息
+            Text(
+              !isActivated ? "今日剩余 $_remainingCount 次" : "💎 Pro · 无限使用",
+              style: TextStyle(
+                fontSize: 11,
+                color: !isActivated
+                    ? (isDark ? Colors.white54 : Colors.black45)
+                    : const Color(0xFF22D3EE),
               ),
             ),
-
-            // 右侧：用户
-            Builder(
-              builder: (_) {
-                final user = currentUserNotifier.value;
-                return GestureDetector(
-                  onTap: showUserMenu,
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircleAvatar(
-                        radius: 10,
-                        backgroundColor: const Color(0xFF22D3EE),
-                        backgroundImage:
-                            (user?.userMetadata?['avatar_url'] != null)
-                            ? NetworkImage(user!.userMetadata!['avatar_url'])
-                            : null,
-                        child: (user?.userMetadata?['avatar_url'] == null)
-                            ? const Icon(
-                                Icons.person,
-                                size: 14,
-                                color: Colors.white,
-                              )
-                            : null,
-                      ),
-                      const SizedBox(width: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxWidth: 80),
-                        child: Text(
-                          user?.userMetadata?['name'] ??
-                              user?.email?.split('@')[0] ??
-                              "开发模式",
-                          style: const TextStyle(fontSize: 13),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+            const SizedBox(height: 6),
           ],
         ),
       ),
@@ -2243,7 +2348,7 @@ class _ChatPageState extends State<ChatPage> {
                         parent: AlwaysScrollableScrollPhysics(),
                       ),
                       // Increased bottom padding to prevent input overlap
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 180),
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final msg = messages[i];
@@ -2286,28 +2391,28 @@ class _ChatPageState extends State<ChatPage> {
                 SafeArea(
                   top: false,
                   child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(24),
                       child: BackdropFilter(
                         filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
                         child: Container(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
                           decoration: BoxDecoration(
                             color: isDark
-                                ? const Color(0xFF0F172A).withOpacity(0.85)
-                                : Colors.white.withOpacity(0.85),
+                                ? const Color(0xFF0F172A).withOpacity(0.92)
+                                : Colors.white.withOpacity(0.92),
                             borderRadius: BorderRadius.circular(24),
                             border: Border.all(
                               color: isDark
-                                  ? Colors.white.withOpacity(0.08)
-                                  : Colors.black.withOpacity(0.06),
+                                  ? Colors.white.withOpacity(0.1)
+                                  : Colors.black.withOpacity(0.08),
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.12),
-                                blurRadius: 30,
-                                offset: const Offset(0, 10),
+                                color: Colors.black.withOpacity(0.15),
+                                blurRadius: 40,
+                                offset: const Offset(0, -5),
                               ),
                             ],
                           ),
@@ -2316,82 +2421,169 @@ class _ChatPageState extends State<ChatPage> {
                             children: [
                               Row(
                                 children: [
+                                  // ===== + 按钮 =====
+                                  GestureDetector(
+                                    onTap: pickImage,
+                                    child: Container(
+                                      margin: const EdgeInsets.only(right: 8),
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.05),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: const Icon(Icons.add, size: 18),
+                                    ),
+                                  ),
+
+                                  // ===== Flash =====
+                                  PopupMenuButton<String>(
+                                    onSelected: (value) {
+                                      if (value == 'deepseek-v4-pro' &&
+                                          !isActivated) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text("Pro 需要激活"),
+                                          ),
+                                        );
+                                        return;
+                                      }
+
+                                      setState(() {
+                                        currentModel = value;
+                                      });
+                                      _saveModelPrefs();
+                                    },
+                                    itemBuilder: (context) => [
+                                      const PopupMenuItem(
+                                        value: 'deepseek-v4-flash',
+                                        child: Text('Flash'),
+                                      ),
+                                      const PopupMenuItem(
+                                        value: 'deepseek-v4-pro',
+                                        child: Text('Pro'),
+                                      ),
+                                    ],
+                                    child: Container(
+                                      margin: const EdgeInsets.only(right: 8),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.black.withOpacity(0.05),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Text(
+                                            currentModel == 'deepseek-v4-pro'
+                                                ? 'Pro'
+                                                : 'Flash',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 4),
+                                          const Icon(
+                                            Icons.arrow_drop_down,
+                                            size: 16,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+
+                                  // ===== 深度 =====
+                                  GestureDetector(
+                                    onTap: () {
+                                      if (!isActivated) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text("深度思考需 Pro"),
+                                          ),
+                                        );
+                                        return;
+                                      }
+                                      setState(() {
+                                        useDeep = !useDeep;
+                                      });
+                                      _saveModelPrefs();
+                                    },
+                                    child: Container(
+                                      margin: const EdgeInsets.only(right: 8),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 6,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: useDeep
+                                            ? const Color(0xFF8B5CF6)
+                                            : Colors.black.withOpacity(0.05),
+                                        borderRadius: BorderRadius.circular(14),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Image.asset(
+                                            'assets/ailogo.png',
+                                            width: 28,
+                                            height: 28,
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+
+                                  // ===== 输入框 =====
                                   Expanded(
                                     child: TextField(
                                       controller: controller,
-                                      autofocus: false,
                                       minLines: 1,
                                       maxLines: 5,
-                                      decoration: InputDecoration(
-                                        hintText: "有问题，尽管问",
-                                        filled: true,
-                                        fillColor: isDark
-                                            ? const Color(0xFF1F2937)
-                                            : const Color(0xFFF3F4F6),
-                                        contentPadding:
-                                            const EdgeInsets.symmetric(
-                                              horizontal: 16,
-                                              vertical: 14,
-                                            ),
-                                        border: OutlineInputBorder(
-                                          borderRadius: BorderRadius.circular(
-                                            24,
-                                          ),
-                                          borderSide: BorderSide.none,
-                                        ),
+                                      decoration: const InputDecoration(
+                                        hintText: "想聊点啥",
+                                        border: InputBorder.none,
                                       ),
-                                      style: TextStyle(
-                                        color: isDark
-                                            ? Colors.white
-                                            : Colors.black87,
-                                        fontSize: 15,
-                                      ),
-                                      onSubmitted: (_) {
-                                        FocusScope.of(context).unfocus();
-                                        sendMessage();
-                                      },
-                                      textInputAction: TextInputAction.send,
                                     ),
                                   ),
-                                  const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: isGenerating
+
+                                  // ===== 发送 / 停止 =====
+                                  IconButton(
+                                    icon: Icon(
+                                      isGenerating
+                                          ? Icons.stop
+                                          : Icons.arrow_upward,
+                                    ),
+                                    onPressed: isGenerating
                                         ? cancelGeneration
                                         : sendMessage,
-                                    child: Container(
-                                      width: 44,
-                                      height: 44,
-                                      decoration: BoxDecoration(
-                                        color: isGenerating
-                                            ? Colors.red
-                                            : const Color(0xFF3B82F6),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Icon(
-                                        isGenerating
-                                            ? Icons.stop
-                                            : Icons.arrow_upward,
-                                        color: Colors.white,
-                                      ),
-                                    ),
                                   ),
                                 ],
                               ),
-                              const SizedBox(height: 10),
-                              Row(
-                                children: [
-                                  GestureDetector(
-                                    onTap: pickImage,
-                                    child: Icon(
-                                      Icons.image,
-                                      size: 22,
-                                      color: isDark
-                                          ? Colors.white70
-                                          : Colors.black54,
+                              // 已选图片预览
+                              if (pickedImages.isNotEmpty)
+                                SizedBox(
+                                  height: 64,
+                                  child: ListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: pickedImages.length,
+                                    itemBuilder: (_, i) => Padding(
+                                      padding: const EdgeInsets.only(right: 8),
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(8),
+                                        child: Image.file(
+                                          File(pickedImages[i]),
+                                          width: 56,
+                                          height: 56,
+                                          fit: BoxFit.cover,
+                                        ),
+                                      ),
                                     ),
                                   ),
-                                ],
-                              ),
+                                ),
                             ],
                           ),
                         ),

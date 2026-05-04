@@ -335,7 +335,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _showSnack(String text) {
     if (!mounted) return;
-    
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text)),
+    );
   }
 
   @override

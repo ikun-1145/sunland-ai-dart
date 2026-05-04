@@ -38,6 +38,7 @@ flutter:
     - assets/ailogo.png
     - assets/ten_wx.webp
     - assets/ten_zfb.webp
+    - assets/deepseek.png
 
 flutter_launcher_icons:
   android: true

@@ -437,10 +437,12 @@ class SunlandApiClient {
 
   Future<AiResponse> sendChat({
     required List<ChatMessage> messages,
+    required String model,
     required bool deep,
   }) async {
     final body = {
       'messages': messages.map((message) => message.toApiJson()).toList(),
+      'model': model,
       'deep': deep,
     };
     final data = await _post(body);
@@ -450,6 +452,7 @@ class SunlandApiClient {
   /// 新增：流式聊天 API
   Stream<AiResponse> sendChatStream({
     required List<ChatMessage> messages,
+    required String model,
     required bool deep,
   }) async* {
     final token = await tokenProvider();
@@ -464,6 +467,7 @@ class SunlandApiClient {
 
     req.body = jsonEncode({
       'messages': messages.map((m) => m.toApiJson()).toList(),
+      'model': model,
       'deep': deep,
       'stream': true, // 关键：告诉后端走流式
     });
@@ -919,6 +923,7 @@ Future<AiResponse> sendSmartChat({
   required SunlandApiClient client,
   required List<Map<String, dynamic>> rawMessages,
   required List<String> pickedImages,
+  required String model,
   required bool deep,
 }) async {
   final history = buildChatHistory(
@@ -927,7 +932,7 @@ Future<AiResponse> sendSmartChat({
     maxHistory: 20,
   );
 
-  return await client.sendChat(messages: history, deep: deep);
+  return await client.sendChat(messages: history, model: model, deep: deep);
 }
 
 // ====== 新增：高阶流式聊天包装 API ======
@@ -935,6 +940,7 @@ Stream<AiResponse> sendSmartChatStream({
   required SunlandApiClient client,
   required List<Map<String, dynamic>> rawMessages,
   required List<String> pickedImages,
+  required String model,
   required bool deep,
 }) {
   final history = buildChatHistory(
@@ -942,7 +948,7 @@ Stream<AiResponse> sendSmartChatStream({
     pickedImages: pickedImages,
     maxHistory: 20,
   );
-  return client.sendChatStream(messages: history, deep: deep);
+  return client.sendChatStream(messages: history, model: model, deep: deep);
 }
 
 String buildConversationTitle(String text) {
