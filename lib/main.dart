@@ -598,12 +598,15 @@ class _LoginPageState extends State<LoginPage>
 
                     // --- 输入框卡片背景 ---
                     Container(
-                      padding: const EdgeInsets.all(16),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
                       decoration: BoxDecoration(
                         color: isDark
                             ? Colors.white.withAlpha(13)
                             : Colors.white,
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(14),
                         boxShadow: [
                           BoxShadow(
                             color: Colors.black.withOpacity(
@@ -963,36 +966,45 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     if (msg["isReasoning"] == true) {
-      return GestureDetector(
-        onTap: () {
-          setState(() {
-            msg["expanded"] = !(msg["expanded"] ?? false);
-          });
-        },
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.grey.withAlpha(25),
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: const [
-                  Icon(Icons.psychology, size: 16, color: Colors.grey),
-                  SizedBox(width: 6),
-                  Text(
-                    "思考过程",
-                    style: TextStyle(fontSize: 13, color: Colors.grey),
-                  ),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: GestureDetector(
+          onTap: () {
+            setState(() {
+              msg["expanded"] = !(msg["expanded"] ?? false);
+            });
+          },
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.grey.withAlpha(25),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Image.asset(
+                      'assets/ailogo.png',
+                      width: 32,
+                      height: 32,
+                      color: Colors.grey,
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      "思考过程",
+                      style: TextStyle(fontSize: 13, color: Colors.grey),
+                    ),
+                  ],
+                ),
+                if (msg["expanded"] == true) ...[
+                  const SizedBox(height: 6),
+                  MarkdownBody(data: msg["text"] ?? ""),
                 ],
-              ),
-              if (msg["expanded"] == true) ...[
-                const SizedBox(height: 6),
-                MarkdownBody(data: msg["text"] ?? ""),
               ],
-            ],
+            ),
           ),
         ),
       );
@@ -1023,7 +1035,7 @@ class _ChatPageState extends State<ChatPage> {
                   ),
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 6),
               Flexible(
                 child: Text(
                   msg["text"],
@@ -1046,7 +1058,7 @@ class _ChatPageState extends State<ChatPage> {
           maxWidth: MediaQuery.of(context).size.width * 0.75,
         ),
         child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 5),
+          margin: const EdgeInsets.fromLTRB(0, 8, 0, 6),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF111827) : Colors.white,
@@ -1501,6 +1513,7 @@ class _ChatPageState extends State<ChatPage> {
 
     setState(() {
       isGenerating = true;
+
       if (!isRegenerate) {
         messages.add({"text": text, "isUser": true});
       }
@@ -1510,6 +1523,17 @@ class _ChatPageState extends State<ChatPage> {
         "isStreaming": true,
       });
     });
+
+    // ⭐ 发送即扣次数（防止中途失败绕过）
+    if (user != null && !isActivated) {
+      await repo.incrementUsage(user.id);
+
+      if (mounted) {
+        setState(() {
+          _remainingCount = (_remainingCount - 1).clamp(0, freeDailyLimit);
+        });
+      }
+    }
 
     // Insert conversation and user message if needed
     rememberLocalMessages(); // ⭐ 防止新建对话前丢失当前内容
@@ -1540,10 +1564,6 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       // ===== 使用 Core 构建并发送 =====
-      if (pickedImages.isNotEmpty) {
-        setState(() => pickedImages.clear());
-      }
-
       setState(() {
         if (messages.isNotEmpty) messages.removeLast();
         messages.add({"text": "", "isUser": false, "isStreaming": true});
@@ -1552,6 +1572,9 @@ class _ChatPageState extends State<ChatPage> {
       String? reasoning;
       // ===== 自动模型策略 + Pro 权限校验 =====
       String requestModel = _resolveModel();
+      if (!isActivated) {
+        useDeep = false;
+      }
 
       // 自动策略：长文本/关键词触发 pro（仅 Pro 用户生效）
       if (isActivated && requestModel != 'deepseek-v4-pro') {
@@ -1583,12 +1606,16 @@ class _ChatPageState extends State<ChatPage> {
           in sendSmartChatStream(
             client: apiClient,
             rawMessages: messages,
-            pickedImages: [],
+            pickedImages: pickedImages,
             model: requestModel,
-            deep: useDeep || useReasoner,
+            deep: isActivated ? (useDeep || useReasoner) : false,
           ).timeout(
             const Duration(seconds: 30),
             onTimeout: (sink) {
+              if (messages.isNotEmpty) {
+                messages.removeLast();
+                messages.add({"text": "请求超时，请重试", "isUser": false});
+              }
               sink.close();
             },
           )) {
@@ -1632,19 +1659,16 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
+      // ⭐ 图片发送完成后安全清空
+      if (pickedImages.isNotEmpty) {
+        setState(() => pickedImages.clear());
+      }
+
       rememberLocalMessages();
       if (user != null) await _saveToCloud();
 
       // ===== 成功后计数 =====
-      if (user != null && !isActivated) {
-        await repo.incrementUsage(user.id);
-
-        if (mounted) {
-          setState(() {
-            _remainingCount = (_remainingCount - 1).clamp(0, freeDailyLimit);
-          });
-        }
-      }
+      // ⭐（已提前扣除，防止重复扣除，此处删除）
 
       setState(() {
         isGenerating = false;
@@ -1788,7 +1812,9 @@ class _ChatPageState extends State<ChatPage> {
 
       setState(() {
         for (var img in picked) {
-          pickedImages.add(img.path);
+          if (pickedImages.length < 4) {
+            pickedImages.add(img.path);
+          }
         }
       });
       return;
@@ -1805,7 +1831,9 @@ class _ChatPageState extends State<ChatPage> {
     setState(() {
       for (var file in result.files) {
         if (file.path != null) {
-          pickedImages.add(file.path!);
+          if (pickedImages.length < 4) {
+            pickedImages.add(file.path!);
+          }
         }
       }
     });
@@ -1815,36 +1843,89 @@ class _ChatPageState extends State<ChatPage> {
     final user = currentUserNotifier.value;
     if (user == null) return;
 
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 80,
+    );
+    if (picked == null) return;
+
+    final file = File(picked.path);
+
+    // ⭐ 预览 + 确认弹窗
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return AlertDialog(
+          title: const Text("预览头像"),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircleAvatar(radius: 40, backgroundImage: FileImage(file)),
+              const SizedBox(height: 12),
+              const Text("确认使用这张图片作为头像？"),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text("取消"),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text("确认"),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) return;
+
     setState(() {
       isUploadingAvatar = true;
     });
 
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(source: ImageSource.gallery);
-    if (picked == null) {
-      setState(() {
-        isUploadingAvatar = false;
-      });
-      return;
-    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text("头像上传中...")));
 
-    final file = File(picked.path);
     final fileName = '${user.id}.png';
 
-    // 上传到 Supabase Storage（bucket: avatars）
-    String? publicUrl;
     try {
       await supabase.storage
           .from('avatars')
           .upload(fileName, file, fileOptions: const FileOptions(upsert: true));
 
-      publicUrl = supabase.storage.from('avatars').getPublicUrl(fileName);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text("头像上传失败")));
+      final publicUrl = supabase.storage.from('avatars').getPublicUrl(fileName);
+
+      final current = currentUserNotifier.value;
+      if (current != null) {
+        final updated = User.fromJson({
+          "id": current.id,
+          "email": current.email,
+          "aud": "authenticated",
+          "created_at": current.createdAt,
+          "app_metadata": <String, dynamic>{},
+          "user_metadata": {
+            ...(current.userMetadata ?? {}),
+            "avatar_url": publicUrl,
+          },
+        });
+
+        currentUserNotifier.value = updated;
       }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("头像更新成功")));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text("上传失败: $e")));
     } finally {
       if (mounted) {
         setState(() {
@@ -1852,27 +1933,6 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
     }
-
-    if (publicUrl == null) return;
-
-    // 写入用户 metadata
-    final current = currentUserNotifier.value;
-    if (current != null) {
-      final updated = User.fromJson({
-        "id": current.id,
-        "email": current.email,
-        "aud": "authenticated",
-        "created_at": current.createdAt,
-        "app_metadata": <String, dynamic>{},
-        "user_metadata": Map<String, dynamic>.from({
-          ...(current.userMetadata ?? <String, dynamic>{}),
-          "avatar_url": publicUrl,
-        }),
-      });
-
-      currentUserNotifier.value = updated;
-    }
-    if (!mounted) return;
   }
 
   void showUserMenu() {
@@ -1880,6 +1940,7 @@ class _ChatPageState extends State<ChatPage> {
 
     showModalBottomSheet(
       context: context,
+      isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (_) {
         final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -1891,129 +1952,125 @@ class _ChatPageState extends State<ChatPage> {
           ),
           child: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // 顶部拖拽条
-                  Container(
-                    width: 40,
-                    height: 4,
-                    margin: const EdgeInsets.only(bottom: 12),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.withOpacity(0.3),
-                      borderRadius: BorderRadius.circular(2),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 顶部拖拽条
+                    Container(
+                      width: 40,
+                      height: 4,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      decoration: BoxDecoration(
+                        color: Colors.grey.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                  ),
 
-                  // 用户信息卡片
-                  Container(
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? Colors.white.withOpacity(0.05)
-                          : Colors.grey.withOpacity(0.08),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 22,
-                          backgroundColor: const Color(0xFF22D3EE),
-                          backgroundImage:
-                              (user?.userMetadata?['avatar_url'] != null)
-                              ? NetworkImage(user!.userMetadata!['avatar_url'])
-                              : null,
-                          child: (user?.userMetadata?['avatar_url'] == null)
-                              ? const Icon(Icons.person, color: Colors.white)
-                              : null,
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Text(
-                            user?.email ?? "开发模式（免登录）",
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: isDark ? Colors.white : Colors.black87,
+                    // 用户信息卡片
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: isDark
+                            ? Colors.white.withOpacity(0.05)
+                            : Colors.grey.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 22,
+                            backgroundColor: const Color(0xFF22D3EE),
+                            backgroundImage:
+                                (user?.userMetadata?['avatar_url'] != null)
+                                ? NetworkImage(
+                                    user!.userMetadata!['avatar_url'],
+                                  )
+                                : null,
+                            child: (user?.userMetadata?['avatar_url'] == null)
+                                ? const Icon(Icons.person, color: Colors.white)
+                                : null,
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              user?.email ?? "开发模式（免登录）",
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: isDark ? Colors.white : Colors.black87,
+                              ),
                             ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
 
-                  const SizedBox(height: 12),
+                    const SizedBox(height: 12),
 
-                  // 功能按钮（卡片风）
-                  _menuItem(
-                    icon: Icons.refresh,
-                    text: user == null ? "保留本地对话" : "重新加载对话",
-                    onTap: () {
-                      Navigator.pop(context);
-                      if (user != null) loadConversations();
-                    },
-                  ),
-
-                  _menuItem(
-                    icon: Icons.palette,
-                    text: "主题设置",
-                    onTap: () {
-                      Navigator.pop(context);
-                      _showThemeDialogInChat();
-                    },
-                  ),
-
-                  if (user != null && user.userMetadata?['avatar_url'] == null)
+                    // 功能按钮（卡片风）
                     _menuItem(
-                      icon: Icons.image,
-                      text: "更换头像",
-                      onTap: () async {
+                      icon: Icons.refresh,
+                      text: user == null ? "保留本地对话" : "重新加载对话",
+                      onTap: () {
                         Navigator.pop(context);
-                        if (isUploadingAvatar) return;
-
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text("头像上传中...")),
-                        );
-
-                        await pickAndUploadAvatar();
-
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(
-                          context,
-                        ).showSnackBar(const SnackBar(content: Text("头像已更新")));
+                        if (user != null) loadConversations();
                       },
                     ),
 
-                  if (user != null)
                     _menuItem(
-                      icon: Icons.logout,
-                      text: "退出登录",
-                      color: Colors.red,
-                      onTap: () async {
-                        final navigator = Navigator.of(context);
-
-                        _authToken = null;
-                        final store = SunlandSessionStore();
-                        await store.clearSession();
-
-                        // ⭐ 强制回到登录页，而不是进入开发模式
-                        currentUserNotifier.value = null;
-
-                        navigator.pop();
-
-                        if (!mounted) return;
-
-                        Navigator.pushAndRemoveUntil(
-                          context,
-                          MaterialPageRoute(builder: (_) => const LoginPage()),
-                          (route) => false,
-                        );
+                      icon: Icons.palette,
+                      text: "主题设置",
+                      onTap: () {
+                        Navigator.pop(context);
+                        _showThemeDialogInChat();
                       },
                     ),
 
-                  const SizedBox(height: 8),
-                ],
+                    if (user != null)
+                      _menuItem(
+                        icon: Icons.image,
+                        text: "更换头像",
+                        onTap: () async {
+                          Navigator.pop(context);
+                          if (isUploadingAvatar) return;
+                          await pickAndUploadAvatar();
+                        },
+                      ),
+
+                    if (user != null)
+                      _menuItem(
+                        icon: Icons.logout,
+                        text: "退出登录",
+                        color: Colors.red,
+                        onTap: () async {
+                          final navigator = Navigator.of(context);
+
+                          _authToken = null;
+                          final store = SunlandSessionStore();
+                          await store.clearSession();
+
+                          // ⭐ 强制回到登录页，而不是进入开发模式
+                          currentUserNotifier.value = null;
+
+                          navigator.pop();
+
+                          if (!mounted) return;
+
+                          Navigator.pushAndRemoveUntil(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => const LoginPage(),
+                            ),
+                            (route) => false,
+                          );
+                        },
+                      ),
+
+                    const SizedBox(height: 8),
+                  ],
+                ),
               ),
             ),
           ),
@@ -2057,6 +2114,59 @@ class _ChatPageState extends State<ChatPage> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _modelItem({
+    required String name,
+    bool selected = false,
+    bool locked = false,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        decoration: BoxDecoration(
+          color: selected
+              ? const Color(0xFF22D3EE).withOpacity(0.15)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Row(
+          children: [
+            Image.asset(
+              'assets/deepseek.png',
+              width: 18,
+              height: 18,
+              errorBuilder: (_, __, ___) => const SizedBox(),
+            ),
+            const SizedBox(width: 8),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "DeepSeek $name",
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: locked ? Colors.grey : null,
+                  ),
+                ),
+                Text(
+                  name == "Pro" ? "更强推理能力" : "更快响应速度",
+                  style: TextStyle(fontSize: 11, color: Colors.grey),
+                ),
+              ],
+            ),
+            const Spacer(),
+            if (locked)
+              const Icon(Icons.lock, size: 14, color: Colors.grey)
+            else if (selected)
+              const Icon(Icons.check, size: 14),
+          ],
         ),
       ),
     );
@@ -2348,38 +2458,50 @@ class _ChatPageState extends State<ChatPage> {
                         parent: AlwaysScrollableScrollPhysics(),
                       ),
                       // Increased bottom padding to prevent input overlap
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 180),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final msg = messages[i];
                         final isUser = msg["isUser"];
-                        return AnimatedSlide(
-                          offset: const Offset(0, 0.1),
-                          duration: const Duration(milliseconds: 250),
-                          curve: Curves.easeOut,
-                          child: AnimatedOpacity(
-                            opacity: 1,
+                        return KeyedSubtree(
+                          key: ValueKey(
+                            i.toString() +
+                                (msg["isReasoning"] == true ? "_r" : "_n"),
+                          ),
+                          child: AnimatedSlide(
+                            offset: const Offset(0, 0.1),
                             duration: const Duration(milliseconds: 250),
-                            child: GestureDetector(
-                              onLongPress: () {
-                                if (!isUser) {
-                                  Clipboard.setData(
-                                    ClipboardData(text: msg["text"]),
-                                  );
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text("已复制"),
-                                      duration: Duration(milliseconds: 1200),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Container(
-                                margin: const EdgeInsets.symmetric(vertical: 6),
-                                alignment: isUser
-                                    ? Alignment.centerRight
-                                    : Alignment.centerLeft,
-                                child: buildMessageContent(msg, isUser, isDark),
+                            curve: Curves.easeOut,
+                            child: AnimatedOpacity(
+                              opacity: 1,
+                              duration: const Duration(milliseconds: 250),
+                              child: GestureDetector(
+                                onLongPress: () {
+                                  if (!isUser) {
+                                    Clipboard.setData(
+                                      ClipboardData(text: msg["text"]),
+                                    );
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text("已复制"),
+                                        duration: Duration(milliseconds: 1200),
+                                      ),
+                                    );
+                                  }
+                                },
+                                child: Container(
+                                  margin: const EdgeInsets.symmetric(
+                                    vertical: 6,
+                                  ),
+                                  alignment: isUser
+                                      ? Alignment.centerRight
+                                      : Alignment.centerLeft,
+                                  child: buildMessageContent(
+                                    msg,
+                                    isUser,
+                                    isDark,
+                                  ),
+                                ),
                               ),
                             ),
                           ),
@@ -2419,171 +2541,260 @@ class _ChatPageState extends State<ChatPage> {
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Row(
-                                children: [
-                                  // ===== + 按钮 =====
-                                  GestureDetector(
-                                    onTap: pickImage,
-                                    child: Container(
-                                      margin: const EdgeInsets.only(right: 8),
-                                      padding: const EdgeInsets.all(10),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withOpacity(0.05),
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                      child: const Icon(Icons.add, size: 18),
-                                    ),
-                                  ),
-
-                                  // ===== Flash =====
-                                  PopupMenuButton<String>(
-                                    onSelected: (value) {
-                                      if (value == 'deepseek-v4-pro' &&
-                                          !isActivated) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text("Pro 需要激活"),
-                                          ),
-                                        );
-                                        return;
-                                      }
-
-                                      setState(() {
-                                        currentModel = value;
-                                      });
-                                      _saveModelPrefs();
-                                    },
-                                    itemBuilder: (context) => [
-                                      const PopupMenuItem(
-                                        value: 'deepseek-v4-flash',
-                                        child: Text('Flash'),
-                                      ),
-                                      const PopupMenuItem(
-                                        value: 'deepseek-v4-pro',
-                                        child: Text('Pro'),
-                                      ),
-                                    ],
-                                    child: Container(
-                                      margin: const EdgeInsets.only(right: 8),
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.black.withOpacity(0.05),
-                                        borderRadius: BorderRadius.circular(14),
-                                      ),
-                                      child: Row(
+                              // ===== ① 图片预览区 =====
+                              if (pickedImages.isNotEmpty)
+                                Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  height: 70,
+                                  child: ListView.builder(
+                                    scrollDirection: Axis.horizontal,
+                                    itemCount: pickedImages.length,
+                                    itemBuilder: (_, i) {
+                                      final path = pickedImages[i];
+                                      return Stack(
                                         children: [
-                                          Text(
-                                            currentModel == 'deepseek-v4-pro'
-                                                ? 'Pro'
-                                                : 'Flash',
-                                            style: const TextStyle(
-                                              fontSize: 12,
+                                          Container(
+                                            margin: const EdgeInsets.only(
+                                              right: 8,
+                                            ),
+                                            child: ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              child: Image.file(
+                                                File(path),
+                                                width: 70,
+                                                height: 70,
+                                                fit: BoxFit.cover,
+                                              ),
                                             ),
                                           ),
-                                          const SizedBox(width: 4),
-                                          const Icon(
-                                            Icons.arrow_drop_down,
-                                            size: 16,
+                                          Positioned(
+                                            top: 2,
+                                            right: 10,
+                                            child: GestureDetector(
+                                              onTap: () {
+                                                setState(() {
+                                                  pickedImages.removeAt(i);
+                                                });
+                                              },
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  color: Colors.black54,
+                                                  shape: BoxShape.circle,
+                                                ),
+                                                child: const Icon(
+                                                  Icons.close,
+                                                  size: 14,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ),
                                           ),
                                         ],
-                                      ),
-                                    ),
+                                      );
+                                    },
+                                  ),
+                                ),
+
+                              // ===== ② 输入框 =====
+                              TextField(
+                                minLines: 1,
+                                maxLines: 3,
+                                style: TextStyle(fontSize: 14),
+                                decoration: InputDecoration(
+                                  hintText: "输入消息...",
+                                  isDense: true,
+                                  contentPadding: EdgeInsets.symmetric(
+                                    vertical: 8,
+                                  ),
+                                  border: InputBorder.none,
+                                ),
+                              ),
+
+                              const SizedBox(height: 8),
+
+                              // ===== ③ 功能按钮区 =====
+                              Row(
+                                children: [
+                                  IconButton(
+                                    icon: const Icon(Icons.image),
+                                    onPressed: pickImage,
                                   ),
 
-                                  // ===== 深度 =====
-                                  GestureDetector(
-                                    onTap: () {
+                                  IconButton(
+                                    icon: Image.asset(
+                                      isDark
+                                          ? 'assets/ailogo_dark.png'
+                                          : 'assets/ailogo.png',
+                                      width: 32,
+                                      height: 32,
+                                      color: !isActivated
+                                          ? Colors.grey
+                                          : (useDeep
+                                                ? const Color(0xFF22D3EE)
+                                                : null),
+                                    ),
+                                    onPressed: () {
                                       if (!isActivated) {
                                         ScaffoldMessenger.of(
                                           context,
                                         ).showSnackBar(
                                           const SnackBar(
-                                            content: Text("深度思考需 Pro"),
+                                            content: Text("深度思考为 Pro 专属功能"),
                                           ),
                                         );
                                         return;
                                       }
+
                                       setState(() {
                                         useDeep = !useDeep;
                                       });
+
                                       _saveModelPrefs();
                                     },
+                                  ),
+
+                                  const Spacer(),
+
+                                  GestureDetector(
+                                    onTap: () {
+                                      final isDark =
+                                          Theme.of(context).brightness ==
+                                          Brightness.dark;
+
+                                      showDialog(
+                                        context: context,
+                                        barrierColor: Colors.black.withOpacity(
+                                          0.3,
+                                        ),
+                                        builder: (dialogContext) {
+                                          final isDarkDialog =
+                                              Theme.of(
+                                                dialogContext,
+                                              ).brightness ==
+                                              Brightness.dark;
+
+                                          return Center(
+                                            child: Material(
+                                              color: Colors.transparent,
+                                              child: Container(
+                                                width: 260,
+                                                padding: const EdgeInsets.all(
+                                                  14,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                  color: isDarkDialog
+                                                      ? const Color(0xFF111827)
+                                                      : Colors.white,
+                                                  borderRadius:
+                                                      BorderRadius.circular(16),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.black
+                                                          .withOpacity(0.2),
+                                                      blurRadius: 20,
+                                                    ),
+                                                  ],
+                                                ),
+                                                child: Column(
+                                                  mainAxisSize:
+                                                      MainAxisSize.min,
+                                                  children: [
+                                                    const Text(
+                                                      "选择模型",
+                                                      style: TextStyle(
+                                                        fontSize: 14,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
+
+                                                    const SizedBox(height: 10),
+
+                                                    _modelItem(
+                                                      name: "Flash",
+                                                      selected: currentModel
+                                                          .contains('flash'),
+                                                      onTap: () {
+                                                        setState(
+                                                          () => currentModel =
+                                                              'deepseek-v4-flash',
+                                                        );
+                                                        _saveModelPrefs();
+                                                        Navigator.pop(
+                                                          dialogContext,
+                                                        );
+                                                      },
+                                                    ),
+
+                                                    _modelItem(
+                                                      name: "Pro",
+                                                      locked: !isActivated,
+                                                      selected: currentModel
+                                                          .contains('pro'),
+                                                      onTap: () {
+                                                        if (!isActivated) {
+                                                          Navigator.pop(
+                                                            dialogContext,
+                                                          );
+                                                          ScaffoldMessenger.of(
+                                                            context,
+                                                          ).showSnackBar(
+                                                            const SnackBar(
+                                                              content: Text(
+                                                                "Pro 模型需激活后才能使用",
+                                                              ),
+                                                            ),
+                                                          );
+                                                          return;
+                                                        }
+
+                                                        setState(
+                                                          () => currentModel =
+                                                              'deepseek-v4-pro',
+                                                        );
+                                                        _saveModelPrefs();
+                                                        Navigator.pop(
+                                                          dialogContext,
+                                                        );
+                                                      },
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      );
+                                    },
                                     child: Container(
-                                      margin: const EdgeInsets.only(right: 8),
                                       padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
+                                        horizontal: 12,
                                         vertical: 6,
                                       ),
                                       decoration: BoxDecoration(
-                                        color: useDeep
-                                            ? const Color(0xFF8B5CF6)
+                                        color: isDark
+                                            ? Colors.white.withOpacity(0.1)
                                             : Colors.black.withOpacity(0.05),
-                                        borderRadius: BorderRadius.circular(14),
+                                        borderRadius: BorderRadius.circular(10),
                                       ),
-                                      child: Row(
-                                        children: [
-                                          Image.asset(
-                                            'assets/ailogo.png',
-                                            width: 28,
-                                            height: 28,
-                                          ),
-                                        ],
+                                      child: Text(
+                                        currentModel.contains('pro')
+                                            ? "Pro"
+                                            : "Flash",
+                                        style: const TextStyle(fontSize: 12),
                                       ),
                                     ),
                                   ),
 
-                                  // ===== 输入框 =====
-                                  Expanded(
-                                    child: TextField(
-                                      controller: controller,
-                                      minLines: 1,
-                                      maxLines: 5,
-                                      decoration: const InputDecoration(
-                                        hintText: "想聊点啥",
-                                        border: InputBorder.none,
-                                      ),
-                                    ),
-                                  ),
+                                  const SizedBox(width: 8),
 
-                                  // ===== 发送 / 停止 =====
                                   IconButton(
-                                    icon: Icon(
-                                      isGenerating
-                                          ? Icons.stop
-                                          : Icons.arrow_upward,
-                                    ),
-                                    onPressed: isGenerating
-                                        ? cancelGeneration
-                                        : sendMessage,
+                                    icon: const Icon(Icons.send),
+                                    onPressed: sendMessage,
                                   ),
                                 ],
                               ),
-                              // 已选图片预览
-                              if (pickedImages.isNotEmpty)
-                                SizedBox(
-                                  height: 64,
-                                  child: ListView.builder(
-                                    scrollDirection: Axis.horizontal,
-                                    itemCount: pickedImages.length,
-                                    itemBuilder: (_, i) => Padding(
-                                      padding: const EdgeInsets.only(right: 8),
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(8),
-                                        child: Image.file(
-                                          File(pickedImages[i]),
-                                          width: 56,
-                                          height: 56,
-                                          fit: BoxFit.cover,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ),
                             ],
                           ),
                         ),
