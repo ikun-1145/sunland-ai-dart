@@ -12,6 +12,7 @@ import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'captcha_page.dart';
+import 'settings_page.dart';
 
 const bool debugMode = true;
 
@@ -845,6 +846,7 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  String _searchKeyword = "";
   int compareVersion(String v1, String v2) {
     List<String> split(String v) {
       return v.replaceAll("beta", "-beta.").split(RegExp(r'[.-]'));
@@ -1218,6 +1220,25 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  Future<void> deleteConversation(String id) async {
+    final user = currentUserNotifier.value;
+
+    setState(() {
+      conversations.removeWhere((c) => c['id'] == id);
+      localConversationMessages.remove(id);
+
+      if (currentConversationId == id) {
+        currentConversationId = null;
+        messages.clear();
+      }
+    });
+
+    // ⭐ 同步到云端
+    if (user != null) {
+      await _saveToCloud();
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1412,7 +1433,7 @@ class _ChatPageState extends State<ChatPage> {
       final latestVersion = data["version"];
       final updateUrl = data["url"];
 
-      const currentVersion = "1.0.0 beta5"; // ⭐ 记得改成你当前版本
+      const currentVersion = "1.0.0 beta7"; // ⭐ 记得改成你当前版本
 
       if (compareVersion(latestVersion, currentVersion) > 0 && mounted) {
         showDialog(
@@ -1685,7 +1706,7 @@ class _ChatPageState extends State<ChatPage> {
             final userMsgCount = messages
                 .where((m) => m["isUser"] == true)
                 .length;
-            if (userMsgCount == 1) {
+            if (userMsgCount == 1 && currentTitle == '新对话') {
               // ⭐ 异步生成标题，不阻塞 UI
               Future(() async {
                 String? aiTitle;
@@ -2027,6 +2048,19 @@ class _ChatPageState extends State<ChatPage> {
                         _showThemeDialogInChat();
                       },
                     ),
+                    _menuItem(
+                      icon: Icons.settings,
+                      text: "设置",
+                      onTap: () {
+                        Navigator.pop(context);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => const SettingsPage(),
+                          ),
+                        );
+                      },
+                    ),
 
                     if (user != null)
                       _menuItem(
@@ -2185,70 +2219,253 @@ class _ChatPageState extends State<ChatPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  children: [
-                    Image.asset('assets/ailogo.png', width: 60, height: 60),
-                    const SizedBox(width: 8),
-                    Text(
-                      "霜蓝 AI",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        color: isDark ? Colors.white : Colors.black87,
+                // --- Richer header card ---
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: isDark
+                        ? const Color(0xFF111827)
+                        : Colors.grey.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      Image.asset('assets/ailogo.png', width: 52, height: 52),
+                      const SizedBox(width: 12),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            "霜蓝 AI",
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: isDark ? Colors.white : Colors.black87,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            "你的智能助手",
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white60 : Colors.black45,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
 
                 const SizedBox(height: 20),
 
+                // --- Search TextField ---
+                TextField(
+                  onChanged: (value) {
+                    setState(() {
+                      _searchKeyword = value.toLowerCase();
+                    });
+                  },
+                  decoration: InputDecoration(
+                    hintText: "搜索对话",
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    suffixIcon: _searchKeyword.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.close, size: 18),
+                            onPressed: () {
+                              setState(() {
+                                _searchKeyword = "";
+                              });
+                            },
+                          )
+                        : null,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                    filled: true,
+                    fillColor: isDark
+                        ? const Color(0xFF111827)
+                        : Colors.grey.withOpacity(0.1),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 12),
+
                 GestureDetector(
                   onTap: () {
+                    // ✅ 如果已经是新对话（没有ID + 没消息）就不创建
+                    if (currentConversationId == null && messages.isEmpty) {
+                      Navigator.pop(context);
+                      return;
+                    }
+
                     Navigator.pop(context);
+
                     setState(() {
-                      currentConversationId = null;
+                      final newId = DateTime.now().millisecondsSinceEpoch
+                          .toString();
+
+                      currentConversationId = newId;
+
+                      conversations.insert(0, {'id': newId, 'title': '新对话'});
+
                       messages.clear();
+                      localConversationMessages[newId] = [];
                     });
                   },
                   child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
                     decoration: BoxDecoration(
-                      color: isDark ? const Color(0xFF111827) : Colors.white,
-                      borderRadius: BorderRadius.circular(12),
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
+                      ),
+                      borderRadius: BorderRadius.circular(14),
                     ),
                     child: Center(
                       child: Text(
                         "新建对话",
-                        style: TextStyle(
-                          color: isDark ? Colors.white : Colors.black87,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 20),
+                const SizedBox(height: 12),
 
                 Expanded(
-                  child: ListView.builder(
-                    itemCount: conversations.length,
-                    itemBuilder: (context, index) {
-                      final convo = conversations[index];
-                      return ListTile(
-                        title: Text(
-                          convo['title'] ?? '新对话',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        onTap: () {
-                          Navigator.pop(context);
-                          setState(() {
-                            currentConversationId = convo['id'];
-                            messages = List<Map<String, dynamic>>.from(
-                              localConversationMessages[currentConversationId] ??
-                                  [],
-                            );
-                          });
+                  child: Builder(
+                    builder: (context) {
+                      final filteredConversations = conversations.where((c) {
+                        if (_searchKeyword.isEmpty) return true;
+                        final title = (c['title'] ?? '')
+                            .toString()
+                            .toLowerCase();
+                        return title.contains(_searchKeyword);
+                      }).toList();
+                      if (filteredConversations.isEmpty) {
+                        return Center(
+                          child: Text(
+                            "没有找到相关对话",
+                            style: TextStyle(color: Colors.grey, fontSize: 13),
+                          ),
+                        );
+                      }
+                      return ListView.builder(
+                        itemCount: filteredConversations.length,
+                        itemBuilder: (context, index) {
+                          final convo = filteredConversations[index];
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            decoration: BoxDecoration(
+                              color: currentConversationId == convo['id']
+                                  ? const Color(
+                                      0xFF22D3EE,
+                                    ).withOpacity(isDark ? 0.25 : 0.18)
+                                  : (isDark
+                                        ? const Color(0xFF111827)
+                                        : Colors.grey.withOpacity(0.08)),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child:
+                                (convo['title'] == '新对话' ||
+                                    (localConversationMessages[convo['id']]
+                                            ?.isEmpty ??
+                                        true))
+                                ? ListTile(
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    title: Text(
+                                      convo['title'] ?? '新对话',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontWeight:
+                                            currentConversationId == convo['id']
+                                            ? FontWeight.w600
+                                            : FontWeight.normal,
+                                      ),
+                                    ),
+                                    leading: Icon(
+                                      Icons.chat_bubble_outline,
+                                      size: 18,
+                                      color:
+                                          currentConversationId == convo['id']
+                                          ? const Color(0xFF22D3EE)
+                                          : null,
+                                    ),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      setState(() {
+                                        currentConversationId = convo['id'];
+                                        messages = List<Map<String, dynamic>>.from(
+                                          localConversationMessages[currentConversationId] ??
+                                              [],
+                                        );
+                                      });
+                                    },
+                                  )
+                                : Dismissible(
+                                    key: ValueKey(convo['id']),
+                                    direction: DismissDirection.endToStart,
+                                    background: Container(
+                                      alignment: Alignment.centerRight,
+                                      padding: const EdgeInsets.only(right: 16),
+                                      decoration: BoxDecoration(
+                                        color: Colors.red,
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      child: const Icon(
+                                        Icons.delete,
+                                        color: Colors.white,
+                                      ),
+                                    ),
+                                    onDismissed: (_) {
+                                      deleteConversation(convo['id']);
+                                    },
+                                    child: ListTile(
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                      title: Text(
+                                        convo['title'] ?? '新对话',
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontWeight:
+                                              currentConversationId ==
+                                                  convo['id']
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                        ),
+                                      ),
+                                      leading: Icon(
+                                        Icons.chat_bubble_outline,
+                                        size: 18,
+                                        color:
+                                            currentConversationId == convo['id']
+                                            ? const Color(0xFF22D3EE)
+                                            : null,
+                                      ),
+                                      onTap: () {
+                                        Navigator.pop(context);
+                                        setState(() {
+                                          currentConversationId = convo['id'];
+                                          messages =
+                                              List<Map<String, dynamic>>.from(
+                                                localConversationMessages[currentConversationId] ??
+                                                    [],
+                                              );
+                                        });
+                                      },
+                                    ),
+                                  ),
+                          );
                         },
                       );
                     },
