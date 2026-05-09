@@ -469,6 +469,9 @@ class _LoginPageState extends State<LoginPage>
       await _sessionStore.saveSession(token: result.token, user: result.user);
 
       currentUserNotifier.value = _buildSupabaseUser(result.user);
+      // ⭐ 自动创建 profile（关键）
+      final repo = SupabaseAiRepository();
+      await repo.ensureProfile(result.user.id);
 
       // ✅ 清空输入
       emailController.clear();
@@ -1572,6 +1575,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _initData() async {
     final user = currentUserNotifier.value;
     if (user == null) return;
+    await repo.ensureProfile(user.id); // ⭐ 再保险一层
     await loadConversations();
     await _checkActivation();
 

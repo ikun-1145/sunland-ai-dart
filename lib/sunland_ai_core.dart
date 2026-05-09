@@ -114,10 +114,17 @@ class SunlandUser {
 }
 
 class UserProfile {
-  const UserProfile({this.avatarUrl, this.avatarPath});
+  const UserProfile({
+    this.avatarUrl,
+    this.avatarPath,
+    this.name,
+    this.pro = false,
+  });
 
   final String? avatarUrl;
   final String? avatarPath;
+  final String? name;
+  final bool pro;
 
   bool get hasAvatar => avatarUrl != null && avatarUrl!.isNotEmpty;
 
@@ -125,6 +132,8 @@ class UserProfile {
     return {
       if (avatarUrl != null) 'avatar_url': avatarUrl,
       if (avatarPath != null) 'avatar_path': avatarPath,
+      if (name != null) 'name': name,
+      'pro': pro,
     };
   }
 
@@ -132,6 +141,8 @@ class UserProfile {
     return UserProfile(
       avatarUrl: (json['avatar_url'] ?? json['avatarUrl'])?.toString(),
       avatarPath: (json['avatar_path'] ?? json['avatarPath'])?.toString(),
+      name: json['name']?.toString(),
+      pro: json['pro'] == true,
     );
   }
 }
@@ -712,6 +723,21 @@ class SunlandApiClient {
 }
 
 class SupabaseAiRepository {
+  Future<void> ensureProfile(String userId) async {
+    final existing = await _client
+        .from('user_profiles')
+        .select('user_id')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (existing == null) {
+      await _client.from('user_profiles').insert({
+        'user_id': userId,
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+    }
+  }
+
   SupabaseClient get _client => Supabase.instance.client;
 
   Future<bool> isActivated(String userId) async {
@@ -740,7 +766,7 @@ class SupabaseAiRepository {
   Future<UserProfile?> loadProfile(String userId) async {
     final data = await _client
         .from('user_profiles')
-        .select('avatar_url, avatar_path')
+        .select('avatar_url, avatar_path, name, pro')
         .eq('user_id', userId)
         .maybeSingle();
     if (data == null) return null;
@@ -754,6 +780,25 @@ class SupabaseAiRepository {
       'user_id': userId,
       'avatar_url': profile.avatarUrl ?? '',
       'avatar_path': profile.avatarPath ?? '',
+      'updated_at': DateTime.now().toIso8601String(),
+    }, onConflict: 'user_id');
+  }
+
+  Future<String?> loadNickname(String userId) async {
+    final data = await _client
+        .from('user_profiles')
+        .select('name')
+        .eq('user_id', userId)
+        .maybeSingle();
+
+    if (data == null) return null;
+    return data['name']?.toString();
+  }
+
+  Future<void> saveNickname(String userId, String nickname) async {
+    await _client.from('user_profiles').upsert({
+      'user_id': userId,
+      'name': nickname,
       'updated_at': DateTime.now().toIso8601String(),
     }, onConflict: 'user_id');
   }
@@ -818,6 +863,11 @@ class SupabaseAiRepository {
           .select();
 
       if (updated.isNotEmpty) {
+        await _client.from('user_profiles').upsert({
+          'user_id': userId,
+          'pro': true,
+          'updated_at': DateTime.now().toIso8601String(),
+        }, onConflict: 'user_id');
         return ActivationResult.success;
       }
       return ActivationResult.raceLost;
