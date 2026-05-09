@@ -36,6 +36,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _loading = true;
   bool _uploadingAvatar = false;
   String? _avatarStatus;
+  String? _nickname;
   bool _openedInitialActivation = false;
 
   @override
@@ -44,6 +45,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final rawUser = currentUserNotifier.value;
     if (rawUser != null) {
       _user = SunlandUser(id: rawUser.id, email: rawUser.email ?? '');
+      _nickname = null;
     } else {
       _user = null;
     }
@@ -71,6 +73,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final isActivated = await _repository.isActivated(user.id);
       final usage = await _repository.usageCount(user.id);
       final cloudProfile = await _repository.loadProfile(user.id);
+      final nickname = await _repository.loadNickname(user.id);
       final updatedUser = _user ?? user;
       var finalUser = updatedUser;
       if (cloudProfile?.hasAvatar == true) {
@@ -87,6 +90,7 @@ class _SettingsPageState extends State<SettingsPage> {
         _isActivated = isActivated;
         _usageCount = usage;
         _loading = false;
+        _nickname = nickname ?? _nickname;
       });
       _openInitialActivationIfNeeded();
     } catch (_) {
@@ -94,6 +98,59 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() => _loading = false);
       _openInitialActivationIfNeeded();
     }
+  }
+
+  Future<void> _editNickname() async {
+    final controller = TextEditingController(text: _nickname ?? '');
+
+    await showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('修改昵称'),
+          content: TextField(
+            controller: controller,
+            maxLength: 20,
+            decoration: const InputDecoration(
+              hintText: '输入新的昵称',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final newName = controller.text.trim();
+                if (newName.isEmpty) {
+                  _showSnack('昵称不能为空');
+                  return;
+                }
+
+                try {
+                  await _repository.saveNickname(_user!.id, newName);
+
+                  await Supabase.instance.client.auth.updateUser(
+                    UserAttributes(data: {'nickname': newName}),
+                  );
+
+                  if (!mounted) return;
+                  setState(() => _nickname = newName);
+
+                  Navigator.pop(context);
+                  _showSnack('昵称已更新');
+                } catch (e) {
+                  _showSnack('保存失败');
+                }
+              },
+              child: const Text('保存'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _openInitialActivationIfNeeded() {
@@ -465,6 +522,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       children: [
                         _AvatarHeader(
                           user: user,
+                          nickname: _nickname,
                           uploading: _uploadingAvatar,
                           status: _avatarStatus,
                           onTap: _pickAvatar,
@@ -474,6 +532,11 @@ class _SettingsPageState extends State<SettingsPage> {
                         _SectionTitle('账号'),
                         _SettingsCard(
                           children: [
+                            _ActionRow(
+                              icon: Icons.person,
+                              label: '昵称',
+                              onTap: _editNickname,
+                            ),
                             _InfoRow(
                               icon: Icons.alternate_email,
                               label: '邮箱',
@@ -656,6 +719,7 @@ class _SettingsPageState extends State<SettingsPage> {
 class _AvatarHeader extends StatelessWidget {
   const _AvatarHeader({
     required this.user,
+    required this.nickname,
     required this.uploading,
     required this.status,
     required this.onTap,
@@ -663,6 +727,7 @@ class _AvatarHeader extends StatelessWidget {
   });
 
   final SunlandUser? user;
+  final String? nickname;
   final bool uploading;
   final String? status;
   final VoidCallback onTap;
@@ -720,7 +785,9 @@ class _AvatarHeader extends StatelessWidget {
         ),
         const SizedBox(height: 12),
         Text(
-          user?.email ?? '未登录',
+          (nickname != null && nickname!.isNotEmpty)
+              ? nickname!
+              : (user?.email ?? '未登录'),
           style: const TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.w700,
