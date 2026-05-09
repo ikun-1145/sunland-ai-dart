@@ -1,13 +1,12 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import '../main.dart';
+import 'main.dart';
 
 import 'sunland_ai_core.dart';
 
@@ -20,7 +19,9 @@ class SettingsResult {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  const SettingsPage({super.key, this.openActivationOnStart = false});
+
+  final bool openActivationOnStart;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -35,6 +36,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _loading = true;
   bool _uploadingAvatar = false;
   String? _avatarStatus;
+  bool _openedInitialActivation = false;
 
   @override
   void initState() {
@@ -72,7 +74,7 @@ class _SettingsPageState extends State<SettingsPage> {
       final updatedUser = _user ?? user;
       var finalUser = updatedUser;
       if (cloudProfile?.hasAvatar == true) {
-        finalUser = updatedUser!.copyWith(
+        finalUser = updatedUser.copyWith(
           avatarUrl: cloudProfile!.avatarUrl,
           avatarPath: cloudProfile.avatarPath,
         );
@@ -86,15 +88,32 @@ class _SettingsPageState extends State<SettingsPage> {
         _usageCount = usage;
         _loading = false;
       });
+      _openInitialActivationIfNeeded();
     } catch (_) {
       if (!mounted) return;
       setState(() => _loading = false);
+      _openInitialActivationIfNeeded();
     }
   }
 
+  void _openInitialActivationIfNeeded() {
+    if (_openedInitialActivation ||
+        !widget.openActivationOnStart ||
+        _isActivated ||
+        _user == null) {
+      return;
+    }
+    _openedInitialActivation = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _activate();
+    });
+  }
+
   Future<void> _pickAvatar() async {
+    if (_uploadingAvatar) return;
+    _uploadingAvatar = true;
     final user = _user;
-    if (user == null || _uploadingAvatar) return;
+    if (user == null) return;
 
     final picker = ImagePicker();
     final picked = await picker.pickImage(
@@ -149,6 +168,16 @@ class _SettingsPageState extends State<SettingsPage> {
         _user = updated;
         _avatarStatus = '头像已保存';
       });
+
+      // ⭐ 同步到全局用户（修复主页头像不更新问题）
+      final rawUser = currentUserNotifier.value;
+      if (rawUser != null) {
+        final meta = Map<String, dynamic>.from(rawUser.userMetadata ?? {});
+        meta['avatar_url'] = updated.avatarUrl;
+        rawUser.userMetadata?.addAll(meta);
+        currentUserNotifier.value = rawUser;
+      }
+
       Future<void>.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _avatarStatus = null);
       });
@@ -327,7 +356,7 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (context) {
         return AlertDialog(
           title: const Text('退出登录？'),
-          content: const Text('本机仍会保留已同步的历史缓存。'),
+          content: const Text('将清除本机登录状态；已同步的历史缓存会保留。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -341,15 +370,33 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       },
     );
+
     if (confirmed != true) return;
-    await _store.clearSession();
-    if (!mounted) return;
-    Navigator.pop(context, const SettingsResult(loggedOut: true));
+
+    try {
+      // 1. Supabase 退出登录
+      await Supabase.instance.client.auth.signOut();
+
+      // 2. 清除本地登录状态
+      await _store.clearSession();
+
+      // 3. 清空全局用户状态
+      currentUserNotifier.value = null;
+
+      if (!mounted) return;
+
+      // 4. 返回并通知已登出
+      Navigator.pop(context, const SettingsResult(loggedOut: true));
+    } catch (e) {
+      _showSnack('退出失败，请重试');
+    }
   }
 
   void _showSnack(String text) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    messenger.showSnackBar(SnackBar(content: Text(text)));
   }
 
   @override
@@ -362,20 +409,10 @@ class _SettingsPageState extends State<SettingsPage> {
     final usageFraction = _isActivated ? 1.0 : remain / freeDailyLimit;
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text('设置'),
-        backgroundColor: Colors.transparent,
-        flexibleSpace: ClipRect(
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-            child: Container(
-              color: isDark
-                  ? Colors.black.withOpacity(0.25)
-                  : Colors.white.withOpacity(0.4),
-            ),
-          ),
-        ),
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         foregroundColor: isDark ? Colors.white : Colors.black87,
         surfaceTintColor: Colors.transparent,
         actions: [
@@ -388,13 +425,7 @@ class _SettingsPageState extends State<SettingsPage> {
       ),
       body: Container(
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: isDark
-                ? [Color(0xFF0B0F1A), Color(0xFF111827)]
-                : [Color(0xFFEAF4FF), Color(0xFFF7FBFF)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+          color: Theme.of(context).scaffoldBackgroundColor,
         ),
         child: Stack(
           children: [
@@ -430,7 +461,7 @@ class _SettingsPageState extends State<SettingsPage> {
               child: _loading
                   ? const Center(child: CircularProgressIndicator())
                   : ListView(
-                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 28),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
                       children: [
                         _AvatarHeader(
                           user: user,
@@ -458,6 +489,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 10),
                         // --- Theme Switcher Section ---
                         _SectionTitle('外观'),
                         _SettingsCard(
@@ -493,6 +525,7 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 10),
                         // --- End Theme Switcher Section ---
                         _SectionTitle('今日使用'),
                         _SettingsCard(
@@ -557,12 +590,14 @@ class _SettingsPageState extends State<SettingsPage> {
                             ),
                           ],
                         ),
+                        const SizedBox(height: 10),
                         _SectionTitle('会员'),
                         _ProPanel(
                           activated: _isActivated,
                           onActivate: _activate,
                           onPay: _showPaySheet,
                         ),
+                        const SizedBox(height: 10),
                         _SectionTitle('其他'),
                         _SettingsCard(
                           children: [
@@ -609,7 +644,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _openExternal(String url) async {
     final uri = Uri.parse(url);
-    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+    try {
+      final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!ok) _showSnack('暂时无法打开链接');
+    } catch (_) {
       _showSnack('暂时无法打开链接');
     }
   }
@@ -642,22 +680,9 @@ class _AvatarHeader extends StatelessWidget {
             alignment: Alignment.center,
             children: [
               Container(
-                width: 84,
-                height: 84,
-                padding: const EdgeInsets.all(3),
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF22D3EE), Color(0xFFA78BFA)],
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF22D3EE).withOpacity(0.25),
-                      blurRadius: 24,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
+                width: 72,
+                height: 72,
+                decoration: const BoxDecoration(shape: BoxShape.circle),
                 child: CircleAvatar(
                   backgroundColor: Colors.white,
                   backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
@@ -677,8 +702,8 @@ class _AvatarHeader extends StatelessWidget {
               ),
               if (uploading)
                 const SizedBox(
-                  width: 92,
-                  height: 92,
+                  width: 80,
+                  height: 80,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
               const Positioned(
@@ -696,7 +721,11 @@ class _AvatarHeader extends StatelessWidget {
         const SizedBox(height: 12),
         Text(
           user?.email ?? '未登录',
-          style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+          style: const TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
         ),
         const SizedBox(height: 6),
         Container(
@@ -719,7 +748,12 @@ class _AvatarHeader extends StatelessWidget {
         const SizedBox(height: 8),
         Text(
           status ?? '点击头像上传新头像',
-          style: const TextStyle(color: Colors.black45, fontSize: 12),
+          style: TextStyle(
+            color: Theme.of(context).brightness == Brightness.dark
+                ? Colors.white38
+                : Colors.black45,
+            fontSize: 12,
+          ),
         ),
       ],
     );
@@ -733,16 +767,14 @@ class _SectionTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return Padding(
       padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
       child: Text(
         text,
         style: TextStyle(
-          fontSize: 13,
-          color: isDark ? Colors.white54 : Colors.black54,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
+          fontSize: 12,
+          color: Theme.of(context).hintColor,
+          fontWeight: FontWeight.w600,
         ),
       ),
     );
@@ -756,24 +788,18 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return ClipRRect(
       borderRadius: BorderRadius.circular(14),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-        child: Container(
-          decoration: BoxDecoration(
-            color: isDark
-                ? Colors.white.withOpacity(0.04)
-                : Colors.white.withOpacity(0.5),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withOpacity(0.12)
-                  : Colors.white.withOpacity(0.7),
-            ),
-          ),
-          child: Column(children: children),
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).cardColor,
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          children: List.generate(children.length * 2 - 1, (index) {
+            if (index.isEven) return children[index ~/ 2];
+            return Divider(height: 1, indent: 56);
+          }),
         ),
       ),
     );
@@ -800,7 +826,7 @@ class _InfoRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       child: Row(
         children: [
-          Icon(icon, color: const Color(0xFF0891B2)),
+          Icon(icon, color: Theme.of(context).colorScheme.primary),
           const SizedBox(width: 12),
           Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
           const SizedBox(width: 12),
@@ -837,15 +863,22 @@ class _ActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = danger ? Colors.redAccent : const Color(0xFF0891B2);
-    return ListTile(
-      leading: Icon(icon, color: color),
-      title: Text(
-        label,
-        style: TextStyle(color: danger ? Colors.redAccent : null),
+    final color = danger
+        ? Colors.redAccent
+        : Theme.of(context).colorScheme.primary;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: ListTile(
+          leading: Icon(icon, color: color),
+          title: Text(
+            label,
+            style: TextStyle(color: danger ? Colors.redAccent : null),
+          ),
+          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
+        ),
       ),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: onTap,
     );
   }
 }
@@ -867,11 +900,11 @@ class _ProPanel extends StatelessWidget {
       return Container(
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0x3322D3EE), Color(0x33A78BFA)],
-          ),
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: const Color(0x5522D3EE)),
+          border: Border.all(
+            color: Theme.of(context).dividerColor.withOpacity(0.18),
+          ),
         ),
         child: const Row(
           children: [
@@ -901,18 +934,11 @@ class _ProPanel extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0x5522D3EE), Color(0x55A78BFA)],
-        ),
+        color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0x3322D3EE)),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0xFF22D3EE).withOpacity(0.25),
-            blurRadius: 30,
-            spreadRadius: 2,
-          ),
-        ],
+        border: Border.all(
+          color: Theme.of(context).dividerColor.withOpacity(0.12),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -950,13 +976,22 @@ class _ProPanel extends StatelessWidget {
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
                       colors: [Color(0xFF22D3EE), Color(0xFFA78BFA)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
                     ),
-                    borderRadius: BorderRadius.circular(10),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF22D3EE).withOpacity(0.3),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
                   ),
                   child: Material(
                     color: Colors.transparent,
                     child: InkWell(
-                      borderRadius: BorderRadius.circular(10),
+                      borderRadius: BorderRadius.circular(12),
                       onTap: onActivate,
                       child: const Padding(
                         padding: EdgeInsets.symmetric(vertical: 12),

@@ -14,7 +14,18 @@ class UpdateService {
   /// 检查更新
   static Future<void> check(BuildContext context) async {
     try {
-      final res = await http.get(Uri.parse("https://sunland.dev/update.json"));
+      final res = await http.get(
+        Uri.parse(
+          "https://sunland.dev/update.json?t=${DateTime.now().millisecondsSinceEpoch}",
+        ),
+      );
+
+      if (res.statusCode != 200) {
+        print("❌ 更新接口状态异常: ${res.statusCode}");
+        return;
+      }
+
+      print("📦 更新接口返回: ${res.body}");
 
       if (!res.body.trim().startsWith("{")) {
         print("❌ 更新接口返回异常: ${res.body}");
@@ -29,19 +40,33 @@ class UpdateService {
       final desc = data["desc"]?.toString() ?? "";
       final appStoreUrl = data["app_store_url"]?.toString();
 
-      if (latest == null || apkUrl == null) return;
+      if (latest == null) {
+        print("❌ version 字段缺失");
+        return;
+      }
 
       final packageInfo = await PackageInfo.fromPlatform();
       final current = packageInfo.version;
 
-      // iOS 直接忽略更新（未上架 App Store）
-      if (Platform.isIOS) return;
+      print("📱 当前版本: $current, 最新版本: $latest");
+
+      if (Platform.isIOS) {
+        if (appStoreUrl != null && _isNewVersion(current, latest)) {
+          _showIOSDialog(context, appStoreUrl, force, desc);
+        }
+        return;
+      }
+
+      if (apkUrl == null) {
+        print("❌ apk_url/url 字段缺失");
+        return;
+      }
 
       if (_isNewVersion(current, latest)) {
         _showDialog(context, apkUrl, force, desc);
       }
-    } catch (_) {
-      // 忽略错误（避免影响启动）
+    } catch (e) {
+      print("❌ 更新检查失败: $e");
     }
   }
 
@@ -146,6 +171,9 @@ class UpdateService {
     BuildContext context,
     String url,
   ) async {
+    final navigator = Navigator.of(context);
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
     final dir = await getApplicationDocumentsDirectory();
     final path = "${dir.path}/sunland_update.apk";
 
@@ -153,8 +181,6 @@ class UpdateService {
 
     double progress = 0;
     bool done = false;
-
-    if (!context.mounted) return;
 
     showDialog(
       context: context,
@@ -202,18 +228,17 @@ class UpdateService {
 
       done = true;
 
-      if (context.mounted) {
-        Navigator.pop(context);
-      }
+      navigator.pop();
+      _updateProgress = null; // 防止泄露
 
       await OpenFile.open(path);
     } catch (e) {
-      if (context.mounted) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("下载失败：$e")));
-      }
+      print("❌ 下载失败: $e");
+      navigator.pop();
+      _updateProgress = null; // 防止泄露
+      scaffoldMessenger.showSnackBar(
+        const SnackBar(content: Text("下载失败，请检查网络或稍后重试")),
+      );
     }
   }
 }

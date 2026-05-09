@@ -6,6 +6,10 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'package:characters/characters.dart';
+import 'package:flutter/foundation.dart';
+
 const String sunlandApiBase = 'https://api.sunland.dev';
 const String supabaseUrl = 'https://klyrasrqgxijwrxuoevj.supabase.co';
 const String supabaseAnonKey =
@@ -427,6 +431,40 @@ class SunlandAuthApi {
     }
     return (token: token, user: user);
   }
+
+  Future<({String token, SunlandUser user})?> refreshToken(
+    String oldToken,
+  ) async {
+    final response = await client.post(
+      Uri.parse('$sunlandApiBase/refresh'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $oldToken',
+      },
+    );
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      return null;
+    }
+
+    final body = _decodeJson(response.body);
+    final token = body['token']?.toString();
+    if (token == null || token.isEmpty) return null;
+
+    final rawUser = body['user'];
+    SunlandUser? user;
+    if (rawUser is Map) {
+      user = SunlandUser.fromJson(
+        Map<String, dynamic>.from(
+          rawUser.map((k, v) => MapEntry(k.toString(), v)),
+        ),
+      );
+    }
+    user ??= userFromJwt(token);
+    if (user == null) return null;
+
+    return (token: token, user: user);
+  }
 }
 
 class SunlandApiClient {
@@ -490,15 +528,15 @@ class SunlandApiClient {
 
     final decoder = utf8.decoder;
     String buffer = '';
-    String fullText = '';
+    final textBuffer = StringBuffer();
     String? reasoning;
 
     await for (final chunk in streamed.stream.transform(decoder)) {
       buffer += chunk;
 
       // 按行切分（兼容 SSE / JSONL）
-      final lines = buffer.split('\n');
-      buffer = lines.removeLast();
+      final lines = buffer.split(RegExp(r'\r?\n'));
+      buffer = lines.removeLast(); // 保留未完整的一行，避免截断 JSON
 
       for (var line in lines) {
         line = line.trim();
@@ -510,8 +548,12 @@ class SunlandApiClient {
         }
 
         if (line == '[DONE]') {
-          if (fullText.isNotEmpty) {
-            yield AiResponse(content: fullText, reasoning: reasoning);
+          // 如果只有 reasoning（没有 content），也要补发一次
+          final finalText = textBuffer.toString();
+          if (finalText.isEmpty && reasoning != null && reasoning.isNotEmpty) {
+            yield AiResponse(content: finalText, reasoning: reasoning);
+          } else if (finalText.isNotEmpty) {
+            yield AiResponse(content: finalText, reasoning: reasoning);
           }
           return;
         }
@@ -520,6 +562,7 @@ class SunlandApiClient {
         try {
           json = _tryDecode(line);
         } catch (_) {
+          buffer = line + buffer;
           continue;
         }
         if (json == null) continue;
@@ -535,12 +578,16 @@ class SunlandApiClient {
               final r = (delta['reasoning_content'] ?? delta['reasoning'])
                   ?.toString();
 
-              if (piece.isNotEmpty) {
-                fullText += piece;
-                yield AiResponse(content: fullText, reasoning: reasoning);
-              }
+              // 先累加 reasoning，再输出，避免 UI 慢一拍
               if (r != null && r.isNotEmpty) {
                 reasoning = (reasoning ?? '') + r;
+              }
+              if (piece.isNotEmpty) {
+                textBuffer.write(piece);
+                yield AiResponse(
+                  content: textBuffer.toString(),
+                  reasoning: reasoning,
+                );
               }
             }
           }
@@ -549,8 +596,9 @@ class SunlandApiClient {
     }
 
     // 兜底
-    if (fullText.isNotEmpty) {
-      yield AiResponse(content: fullText, reasoning: reasoning);
+    final finalText = textBuffer.toString();
+    if (finalText.isNotEmpty) {
+      yield AiResponse(content: finalText, reasoning: reasoning);
     }
   }
 
@@ -610,14 +658,14 @@ class SunlandApiClient {
       } on TimeoutException {
         if (retry < 2) {
           retry++;
-          await Future.delayed(const Duration(milliseconds: 800));
+          await Future.delayed(Duration(milliseconds: 800 * (retry + 1)));
           continue;
         }
         throw const ApiException('请求超时，请检查网络');
       } on SocketException {
         if (retry < 2) {
           retry++;
-          await Future.delayed(const Duration(milliseconds: 800));
+          await Future.delayed(Duration(milliseconds: 800 * (retry + 1)));
           continue;
         }
         throw const ApiException('网络连接失败');
@@ -653,7 +701,11 @@ class SunlandApiClient {
         );
       }
       return null;
-    } catch (_) {
+    } catch (e) {
+      assert(() {
+        debugPrint('JSON decode failed: $text');
+        return true;
+      }());
       return null;
     }
   }
@@ -806,6 +858,25 @@ SunlandUser? userFromJwt(String token) {
   }
 }
 
+bool isJwtExpired(String token, {Duration skew = Duration.zero}) {
+  try {
+    final parts = token.split('.');
+    if (parts.length < 2) return true;
+    final payload = utf8.decode(
+      base64Url.decode(base64Url.normalize(parts[1])),
+    );
+    final decoded = jsonDecode(payload);
+    if (decoded is! Map) return true;
+    final exp = decoded['exp'];
+    final seconds = exp is int ? exp : int.tryParse(exp?.toString() ?? '');
+    if (seconds == null) return false;
+    final expiresAt = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+    return expiresAt.isBefore(DateTime.now().add(skew));
+  } catch (_) {
+    return true;
+  }
+}
+
 Map<String, dynamic> _decodeJson(String text) {
   if (text.isEmpty) return <String, dynamic>{};
 
@@ -883,6 +954,7 @@ List<Conversation> mergeConversations(
 List<ChatMessage> buildChatHistory({
   required List<Map<String, dynamic>> rawMessages,
   required List<String> pickedImages,
+  String? ocrText,
   required int maxHistory,
 }) {
   final history = <ChatMessage>[
@@ -894,7 +966,9 @@ List<ChatMessage> buildChatHistory({
         (m) =>
             m["text"] != "思考中..." &&
             m["text"] != "深度思考中..." &&
-            m["isReasoning"] != true,
+            m["isReasoning"] != true &&
+            !(m["isUser"] != true &&
+                (m["text"] ?? '').toString().trim().isEmpty),
       )
       .toList();
 
@@ -903,19 +977,36 @@ List<ChatMessage> buildChatHistory({
       : valid;
 
   for (var msg in recent) {
+    var content = (msg["text"] ?? '').toString().trim();
+    var reasoning = msg["reasoning"]?.toString().trim();
+    if ((reasoning == null || reasoning.isEmpty) && content.startsWith('🧠 ')) {
+      final parts = content.split('\n\n');
+      reasoning = parts.first.replaceFirst('🧠 ', '').trim();
+      content = parts.length > 1 ? parts.sublist(1).join('\n\n').trim() : '';
+    }
+
     history.add(
       ChatMessage(
         role: msg["isUser"] ? "user" : "assistant",
-        content: (msg["text"] ?? '').toString().trim(),
-        reasoning: msg["reasoning"]?.toString(),
+        content: content,
+        reasoning: reasoning,
       ),
     );
   }
 
   if (pickedImages.isNotEmpty) {
-    history.add(
-      ChatMessage(role: 'user', content: '用户发送了${pickedImages.length}张图片'),
-    );
+    if (ocrText != null && ocrText.isNotEmpty) {
+      history.add(
+        ChatMessage(role: 'user', content: '以下是图片中识别的文字内容（可能存在误差）：\n$ocrText'),
+      );
+    } else {
+      history.add(
+        ChatMessage(
+          role: 'user',
+          content: '用户发送了${pickedImages.length}张图片（内容不可见）',
+        ),
+      );
+    }
   }
 
   return history;
@@ -943,6 +1034,7 @@ Stream<AiResponse> sendSmartChatStream({
   required SunlandApiClient client,
   required List<Map<String, dynamic>> rawMessages,
   required List<String> pickedImages,
+  String? ocrText,
   required String model,
   required bool deep,
 }) {
@@ -950,14 +1042,54 @@ Stream<AiResponse> sendSmartChatStream({
     rawMessages: rawMessages,
     pickedImages: pickedImages,
     maxHistory: 20,
+    ocrText: ocrText,
   );
   return client.sendChatStream(messages: history, model: model, deep: deep);
+}
+
+// 全局 OCR 实例（懒加载，避免重复创建，可回收）
+TextRecognizer? __textRecognizer;
+TextRecognizer get _textRecognizer {
+  __textRecognizer ??= TextRecognizer(script: TextRecognitionScript.chinese);
+  return __textRecognizer!;
+}
+
+/// 释放 TextRecognizer 占用的原生资源，建议在应用退出时调用
+void disposeTextRecognizer() {
+  __textRecognizer?.close();
+  __textRecognizer = null;
+}
+
+// ====== 新增：本地OCR提取 ======
+Future<String> extractTextFromImages(List<String> imagePaths) async {
+  final buffer = StringBuffer();
+
+  for (final path in imagePaths) {
+    try {
+      final inputImage = InputImage.fromFilePath(path);
+      final recognizedText = await _textRecognizer.processImage(inputImage);
+
+      final text = recognizedText.text.trim();
+      if (text.isNotEmpty) {
+        final limited = text.length > 1000 ? text.substring(0, 1000) : text;
+        buffer.writeln('【图片识别内容】');
+        buffer.writeln(limited);
+        buffer.writeln();
+      }
+    } catch (_) {
+      // 忽略单张图片错误
+    }
+  }
+
+  return buffer.toString().trim();
 }
 
 String buildConversationTitle(String text) {
   final trimmed = text.trim().replaceAll('\n', ' ');
   if (trimmed.isEmpty) return '新对话';
-  return trimmed.length > 15 ? '${trimmed.substring(0, 15)}…' : trimmed;
+
+  final chars = trimmed.characters;
+  return chars.length > 15 ? '${chars.take(15)}…' : trimmed;
 }
 
 class ModerationResult {
@@ -1031,7 +1163,7 @@ class InputModerator {
     for (final rule in _rules) {
       for (final term in rule.terms) {
         final compactTerm = normalize(term);
-        if (compactTerm.isNotEmpty && compact.contains(compactTerm)) {
+        if (compactTerm.length >= 2 && compact.contains(compactTerm)) {
           return ModerationResult(category: rule.category, term: term);
         }
       }

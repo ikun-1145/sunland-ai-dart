@@ -9,6 +9,7 @@ dependencies:
   flutter:
     sdk: flutter
   http: ^1.2.0
+  google_mlkit_text_recognition: ^0.13.0
   supabase_flutter: ^2.5.6
   cupertino_icons: ^1.0.8
   flutter_svg: ^2.0.10

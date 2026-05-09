@@ -18,6 +18,47 @@ const bool debugMode = true;
 
 // ⭐ 全局 token 存储
 String? _authToken;
+final SunlandSessionStore _sessionStore = SunlandSessionStore();
+
+User _buildSupabaseUser(SunlandUser user) {
+  final metadata = <String, dynamic>{};
+  if (user.avatarUrl != null && user.avatarUrl!.isNotEmpty) {
+    metadata['avatar_url'] = user.avatarUrl;
+  }
+  if (user.avatarPath != null && user.avatarPath!.isNotEmpty) {
+    metadata['avatar_path'] = user.avatarPath;
+  }
+
+  return User.fromJson({
+    "id": user.id,
+    "email": user.email,
+    "aud": "authenticated",
+    "created_at": DateTime.now().toIso8601String(),
+    "app_metadata": <String, dynamic>{},
+    "user_metadata": metadata,
+  })!;
+}
+
+Future<String?> _readFreshAuthToken({bool notify = true}) async {
+  var token = _authToken ?? await _sessionStore.readToken();
+  if (token == null || token.isEmpty) return null;
+
+  if (isJwtExpired(token, skew: const Duration(seconds: 30))) {
+    final refreshed = await const SunlandAuthApi().refreshToken(token);
+    if (refreshed == null) {
+      await _sessionStore.clearSession();
+      _authToken = null;
+      if (notify) currentUserNotifier.value = null;
+      return null;
+    }
+    token = refreshed.token;
+    await _sessionStore.saveSession(token: token, user: refreshed.user);
+    if (notify) currentUserNotifier.value = _buildSupabaseUser(refreshed.user);
+  }
+
+  _authToken = token;
+  return token;
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -128,21 +169,12 @@ class _RootPageState extends State<RootPage> {
   }
 
   Future<void> _restoreLogin() async {
-    final store = SunlandSessionStore();
-    final token = await store.readToken();
-    final user = await store.readUser();
+    final token = await _readFreshAuthToken(notify: false);
+    final user = await _sessionStore.readUser();
 
     if (token != null && user != null) {
       _authToken = token;
-
-      currentUserNotifier.value = User.fromJson({
-        "id": user.id,
-        "email": user.email,
-        "aud": "authenticated",
-        "created_at": DateTime.now().toIso8601String(),
-        "app_metadata": <String, dynamic>{},
-        "user_metadata": Map<String, dynamic>.from(user.toJson()),
-      });
+      currentUserNotifier.value = _buildSupabaseUser(user);
 
       final prefs = await SharedPreferences.getInstance();
       final chosen = prefs.getBool('theme_chosen') ?? false;
@@ -204,7 +236,6 @@ class _RootPageState extends State<RootPage> {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return ValueListenableBuilder<User?>(
       valueListenable: currentUserNotifier,
       builder: (context, user, _) {
@@ -310,7 +341,6 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage>
     with SingleTickerProviderStateMixin {
   final api = const SunlandAuthApi();
-  final store = SunlandSessionStore();
 
   final emailController = TextEditingController();
   final codeController = TextEditingController();
@@ -413,26 +443,32 @@ class _LoginPageState extends State<LoginPage>
       return;
     }
 
+    final token = await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const CaptchaPage()),
+    );
+
+    if (token == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("验证失败")));
+      return;
+    }
+
     setState(() => verifying = true);
 
     try {
       final result = await api.verifyCode(
         email: email,
         code: code,
-        captchaToken: "", // 登录阶段不再二次验证
+        captchaToken: token,
       );
 
       _authToken = result.token;
-      await store.saveSession(token: result.token, user: result.user);
+      await _sessionStore.saveSession(token: result.token, user: result.user);
 
-      currentUserNotifier.value = User.fromJson({
-        "id": result.user.id,
-        "email": result.user.email,
-        "aud": "authenticated",
-        "created_at": DateTime.now().toIso8601String(),
-        "app_metadata": <String, dynamic>{},
-        "user_metadata": Map<String, dynamic>.from(result.user.toJson()),
-      });
+      currentUserNotifier.value = _buildSupabaseUser(result.user);
 
       // ✅ 清空输入
       emailController.clear();
@@ -846,6 +882,35 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  // Normalize messages: combine "reasoning" + next assistant message into one
+  List<Map<String, dynamic>> normalizeMessages(
+    List<Map<String, dynamic>> msgs,
+  ) {
+    final result = <Map<String, dynamic>>[];
+
+    for (int i = 0; i < msgs.length; i++) {
+      final msg = msgs[i];
+
+      if (msg["isReasoning"] == true && i + 1 < msgs.length) {
+        final next = msgs[i + 1];
+
+        if (next["isUser"] == false) {
+          result.add({
+            "text": next["text"],
+            "reasoning": msg["text"],
+            "isUser": false,
+          });
+          i++;
+          continue;
+        }
+      }
+
+      result.add(msg);
+    }
+
+    return result;
+  }
+
   String _searchKeyword = "";
   int compareVersion(String v1, String v2) {
     List<String> split(String v) {
@@ -875,6 +940,7 @@ class _ChatPageState extends State<ChatPage> {
     if (!isGenerating) return;
 
     _cancelRequested = true;
+    _generationSerial++;
 
     setState(() {
       isGenerating = false;
@@ -967,61 +1033,20 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
 
-    if (msg["isReasoning"] == true) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: GestureDetector(
-          onTap: () {
-            setState(() {
-              msg["expanded"] = !(msg["expanded"] ?? false);
-            });
-          },
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: Colors.grey.withAlpha(25),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Image.asset(
-                      'assets/ailogo.png',
-                      width: 32,
-                      height: 32,
-                      color: Colors.grey,
-                    ),
-                    const SizedBox(width: 6),
-                    const Text(
-                      "思考过程",
-                      style: TextStyle(fontSize: 13, color: Colors.grey),
-                    ),
-                  ],
-                ),
-                if (msg["expanded"] == true) ...[
-                  const SizedBox(height: 6),
-                  MarkdownBody(data: msg["text"] ?? ""),
-                ],
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
     if (msg["text"] == "思考中..." || msg["text"] == "深度思考中...") {
+      final isDeep = msg["text"] == "深度思考中...";
+
       return Align(
         alignment: Alignment.centerLeft,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 8),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
-            color: isDark
-                ? const Color(0xFF111827).withOpacity(0.6)
-                : Colors.white.withOpacity(0.6),
+            color: isDeep
+                ? (isDark ? const Color(0xFF1E293B) : const Color(0xFFE0F2FE))
+                : (isDark
+                      ? const Color(0xFF111827).withOpacity(0.6)
+                      : Colors.white.withOpacity(0.6)),
             borderRadius: BorderRadius.circular(14),
           ),
           child: Row(
@@ -1033,19 +1058,33 @@ class _ChatPageState extends State<ChatPage> {
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
                   valueColor: AlwaysStoppedAnimation<Color>(
-                    isDark ? Colors.white70 : Colors.black54,
+                    isDeep
+                        ? const Color(0xFF22D3EE)
+                        : (isDark ? Colors.white70 : Colors.black54),
                   ),
                 ),
               ),
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  msg["text"],
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: isDark ? Colors.white70 : Colors.black54,
-                  ),
-                ),
+              const SizedBox(width: 8),
+              TweenAnimationBuilder<int>(
+                tween: IntTween(begin: 0, end: 3),
+                duration: const Duration(milliseconds: 900),
+                builder: (context, value, child) {
+                  final dots = '.' * value;
+                  return Text(
+                    isDeep ? "深度思考$dots" : "思考$dots",
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: isDeep ? FontWeight.w500 : FontWeight.normal,
+                      color: isDeep
+                          ? const Color(0xFF22D3EE)
+                          : (isDark ? Colors.white70 : Colors.black54),
+                    ),
+                  );
+                },
+                onEnd: () {
+                  // trigger rebuild for looping animation
+                  if (mounted) setState(() {});
+                },
               ),
             ],
           ),
@@ -1078,9 +1117,105 @@ class _ChatPageState extends State<ChatPage> {
               ),
             ],
           ),
-          child: DefaultTextStyle(
-            style: const TextStyle(fontSize: 14),
-            child: MarkdownBody(data: msg["text"] ?? ""),
+          child: Builder(
+            builder: (_) {
+              var text = (msg["text"] ?? "").toString();
+              var reasoning = (msg["reasoning"] ?? "").toString();
+
+              if (reasoning.isEmpty && text.startsWith("🧠 ")) {
+                final parts = text.split("\n\n");
+                reasoning = parts.first.replaceFirst("🧠 ", "");
+                text = parts.length > 1 ? parts.sublist(1).join("\n\n") : "";
+              }
+
+              if (reasoning.trim().isNotEmpty) {
+                final content = text;
+
+                msg["expanded"] ??= false;
+                bool expanded = msg["expanded"] == true;
+
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // 🧠 折叠卡片（带状态持久）
+                    GestureDetector(
+                      onTap: () {
+                        setState(() {
+                          msg["expanded"] = !expanded;
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.black.withOpacity(0.04),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              expanded
+                                  ? Icons.keyboard_arrow_down
+                                  : Icons.keyboard_arrow_right,
+                              size: 16,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              "思考过程",
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    AnimatedSize(
+                      duration: const Duration(milliseconds: 200),
+                      curve: Curves.easeInOut,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const SizedBox(height: 6),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 150),
+                            child: SingleChildScrollView(
+                              physics: expanded
+                                  ? const BouncingScrollPhysics()
+                                  : const NeverScrollableScrollPhysics(),
+                              child: Text(
+                                reasoning,
+                                maxLines: expanded ? null : 3,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey,
+                                  height: 1.4,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    if (content.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      MarkdownBody(data: content),
+                    ],
+                  ],
+                );
+              }
+
+              return MarkdownBody(data: text);
+            },
           ),
         ),
       ),
@@ -1089,6 +1224,7 @@ class _ChatPageState extends State<ChatPage> {
 
   late final SunlandApiClient apiClient;
   late final SupabaseAiRepository repo;
+  late final SunlandSessionStore store;
   final supabase = Supabase.instance.client;
   bool useReasoner = false;
   String currentModel = 'deepseek-v4-flash';
@@ -1105,10 +1241,85 @@ class _ChatPageState extends State<ChatPage> {
   String? currentConversationId;
   bool isGenerating = false;
   bool _cancelRequested = false;
+  int _generationSerial = 0;
   List<String> pickedImages = [];
   bool isUploadingAvatar = false;
 
   bool isLocalConversation(String? id) => id?.startsWith('local_') ?? false;
+
+  Map<String, dynamic> _messageToCloud(Map<String, dynamic> message) {
+    final rawText = (message['text'] ?? '').toString();
+    var content = rawText;
+    var reasoning = (message['reasoning'] ?? '').toString().trim();
+    if (rawText.startsWith('🧠 ')) {
+      final parts = rawText.split('\n\n');
+      reasoning = parts.first.replaceFirst('🧠 ', '').trim();
+      content = parts.length > 1 ? parts.sublist(1).join('\n\n') : '';
+    }
+
+    return {
+      'role': message['isUser'] == true ? 'user' : 'assistant',
+      'content': content.trim(),
+      if (reasoning.isNotEmpty) 'reasoning': reasoning,
+    };
+  }
+
+  Map<String, dynamic> _messageFromCloud(Map message) {
+    final role = message['role']?.toString() ?? 'assistant';
+    final content = (message['content'] ?? '').toString();
+    final reasoning = (message['reasoning'] ?? message['reasoning_content'])
+        ?.toString()
+        .trim();
+    return {
+      'text': content,
+      if (reasoning != null && reasoning.isNotEmpty) 'reasoning': reasoning,
+      'isUser': role == 'user',
+      'expanded': false,
+    };
+  }
+
+  List<Conversation> _buildConversationModels() {
+    return conversations
+        .where((convo) => !isLocalConversation(convo['id']?.toString()))
+        .map((convo) {
+          final id = convo['id']?.toString() ?? '';
+          final msgs = localConversationMessages[id] ?? [];
+          return Conversation(
+            id: id,
+            title: (convo['title'] ?? '新对话').toString(),
+            history: [
+              const ChatMessage(role: 'system', content: sunlandSystemPrompt),
+              ...msgs.map(
+                (message) => ChatMessage.fromJson(_messageToCloud(message)),
+              ),
+            ],
+            updatedAt:
+                int.tryParse((convo['updatedAt'] ?? '').toString()) ??
+                DateTime.now().millisecondsSinceEpoch,
+          );
+        })
+        .where((convo) => convo.id.isNotEmpty)
+        .toList();
+  }
+
+  void _applyConversationModels(List<Conversation> models) {
+    final convos = <Map<String, dynamic>>[];
+    localConversationMessages.clear();
+
+    for (final item in models) {
+      convos.add({
+        'id': item.id,
+        'title': item.title,
+        'updatedAt': item.updatedAt,
+      });
+      localConversationMessages[item.id] = item.history
+          .where((message) => !message.isSystem)
+          .map((message) => _messageFromCloud(message.toJson()))
+          .toList();
+    }
+
+    conversations = convos;
+  }
 
   void rememberLocalMessages() {
     final id = currentConversationId;
@@ -1139,6 +1350,11 @@ class _ChatPageState extends State<ChatPage> {
     if (user == null) return;
 
     try {
+      final cached = await store.readConversations(user.id);
+      if (cached.isNotEmpty && mounted) {
+        setState(() => _applyConversationModels(cached));
+      }
+
       final data = await supabase
           .from('conversations')
           .select('data')
@@ -1146,36 +1362,18 @@ class _ChatPageState extends State<ChatPage> {
           .maybeSingle();
 
       if (data == null || data['data'] == null) {
-        setState(() => conversations = []);
+        if (cached.isEmpty && mounted) {
+          setState(() => conversations = []);
+        }
         return;
       }
 
       final rawList = data['data'] as List;
-      final List<Map<String, dynamic>> convos = [];
-
-      for (final item in rawList) {
-        if (item is! Map) continue;
-        final id = item['id']?.toString();
-        if (id == null || id == '__xixi_user_profile__') continue;
-
-        convos.add({'id': id, 'title': item['title'] ?? '新对话'});
-
-        final history = item['history'];
-        if (history is List) {
-          localConversationMessages[id] = history
-              .whereType<Map>()
-              .where((m) => m['role'] != 'system')
-              .map(
-                (m) => {
-                  'text': (m['content'] ?? '').toString(),
-                  'isUser': m['role'] == 'user',
-                },
-              )
-              .toList();
-        }
-      }
-
-      setState(() => conversations = convos);
+      final cloudModels = conversationsFromCloudRows(rawList);
+      final merged = mergeConversations(cached, cloudModels);
+      await store.saveConversations(user.id, merged);
+      if (!mounted) return;
+      setState(() => _applyConversationModels(merged));
     } catch (e) {
       debugPrint('loadConversations error: $e');
     }
@@ -1186,30 +1384,39 @@ class _ChatPageState extends State<ChatPage> {
     if (user == null) return;
 
     try {
-      final List<Map<String, dynamic>> dataList = [];
+      final models = _buildConversationModels();
+      await store.saveConversations(user.id, models);
 
-      for (final convo in conversations) {
-        final id = convo['id']?.toString();
-        if (id == null || isLocalConversation(id)) continue;
-
-        final msgs = localConversationMessages[id] ?? [];
-        final history = <Map<String, dynamic>>[
-          {'role': 'system', 'content': sunlandSystemPrompt},
-          ...msgs.map(
-            (m) => {
-              'role': m['isUser'] == true ? 'user' : 'assistant',
-              'content': (m['text'] ?? '').toString(),
-            },
-          ),
-        ];
-
-        dataList.add({
-          'id': id,
-          'title': convo['title'] ?? '新对话',
-          'history': history,
-          'updatedAt': DateTime.now().millisecondsSinceEpoch,
-        });
+      final existing = await supabase
+          .from('conversations')
+          .select('data')
+          .eq('user_id', user.id)
+          .maybeSingle();
+      final preserved = <Map<String, dynamic>>[];
+      final oldRows = existing?['data'];
+      if (oldRows is List) {
+        preserved.addAll(
+          oldRows
+              .whereType<Map>()
+              .where((item) {
+                return item['id'] == profileMetaId || item['type'] == 'profile';
+              })
+              .map(
+                (item) => Map<String, dynamic>.from(
+                  item.map((key, value) => MapEntry(key.toString(), value)),
+                ),
+              ),
+        );
       }
+
+      final dataList = [
+        ...models.map((item) {
+          final json = item.toJson();
+          json['updatedAt'] = DateTime.now().millisecondsSinceEpoch;
+          return json;
+        }),
+        ...preserved,
+      ];
 
       await supabase.from('conversations').upsert({
         'user_id': user.id,
@@ -1242,8 +1449,9 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
-    apiClient = SunlandApiClient(tokenProvider: () async => _authToken);
+    apiClient = SunlandApiClient(tokenProvider: _readFreshAuthToken);
     repo = SupabaseAiRepository();
+    store = SunlandSessionStore();
     _initData();
   }
 
@@ -1336,11 +1544,11 @@ class _ChatPageState extends State<ChatPage> {
                         "aud": "authenticated",
                         "created_at": current.createdAt,
                         "app_metadata": <String, dynamic>{},
-                        "user_metadata": Map<String, dynamic>.from({
-                          ...(current.userMetadata ?? <String, dynamic>{}),
-                          "avatar_url": avatarUrl,
+                        "user_metadata": {
+                          if (avatarUrl != null && avatarUrl.isNotEmpty)
+                            "avatar_url": avatarUrl,
                           "name": name,
-                        }),
+                        },
                       });
 
                       currentUserNotifier.value = updated;
@@ -1371,8 +1579,10 @@ class _ChatPageState extends State<ChatPage> {
       final convo = conversations.first;
       currentConversationId = convo["id"];
       setState(() {
-        messages = List<Map<String, dynamic>>.from(
-          localConversationMessages[currentConversationId] ?? [],
+        messages = normalizeMessages(
+          List<Map<String, dynamic>>.from(
+            localConversationMessages[currentConversationId] ?? [],
+          ),
         );
       });
     }
@@ -1391,6 +1601,10 @@ class _ChatPageState extends State<ChatPage> {
         }
         if (savedDeep != null) {
           useDeep = savedDeep;
+        }
+        if (!isActivated) {
+          currentModel = 'deepseek-v4-flash';
+          useDeep = false;
         }
       });
     }
@@ -1414,26 +1628,46 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> checkUpdate() async {
     try {
-      final client = HttpClient();
-      final request = await client.getUrl(
-        Uri.parse("https://sunland.dev/update.json"),
+      final url = Uri.parse(
+        "https://sunland.dev/update.json?t=${DateTime.now().millisecondsSinceEpoch}",
       );
+
+      final client = HttpClient();
+      final request = await client.getUrl(url);
       final response = await request.close();
 
-      if (response.statusCode != 200) return;
+      if (response.statusCode != 200) {
+        print("❌ 更新接口状态异常: ${response.statusCode}");
+        return;
+      }
 
       final body = await response.transform(utf8.decoder).join();
 
+      print("📦 更新接口返回: $body");
+
       if (!body.trim().startsWith("{")) {
+        print("❌ 返回不是JSON");
         return;
       }
 
       final data = jsonDecode(body);
 
-      final latestVersion = data["version"];
-      final updateUrl = data["url"];
+      final latestVersion = data["version"]?.toString();
+      final updateUrl = (data["apk_url"] ?? data["url"])?.toString();
 
-      const currentVersion = "1.0.0 beta7"; // ⭐ 记得改成你当前版本
+      if (latestVersion == null) {
+        print("❌ version字段缺失");
+        return;
+      }
+
+      const currentVersion = "1.0.8";
+
+      print("📱 当前版本: $currentVersion, 最新版本: $latestVersion");
+
+      if (updateUrl == null) {
+        print("❌ url/apk_url字段缺失");
+        return;
+      }
 
       if (compareVersion(latestVersion, currentVersion) > 0 && mounted) {
         showDialog(
@@ -1453,6 +1687,8 @@ class _ChatPageState extends State<ChatPage> {
                   final uri = Uri.parse(updateUrl);
                   if (await canLaunchUrl(uri)) {
                     await launchUrl(uri);
+                  } else {
+                    print("❌ 无法打开更新链接");
                   }
                 },
                 child: const Text("立即更新"),
@@ -1462,7 +1698,7 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
     } catch (e) {
-      // debug log removed
+      print("❌ 更新检查失败: $e");
     }
   }
 
@@ -1470,25 +1706,30 @@ class _ChatPageState extends State<ChatPage> {
     final user = currentUserNotifier.value;
     if (user == null) return;
 
-    final activated = await repo.isActivated(user.id);
-
-    if (mounted) {
-      setState(() {
-        isActivated = activated;
-      });
-    }
-
-    // ✅ 加上剩余次数
-    if (!activated) {
-      final count = await repo.usageCount(user.id);
+    try {
+      final activated = await repo.isActivated(user.id);
+      final count = activated ? 0 : await repo.usageCount(user.id);
       if (mounted) {
-        setState(() => _remainingCount = freeDailyLimit - count);
+        setState(() {
+          isActivated = activated;
+          _remainingCount = activated
+              ? freeDailyLimit
+              : (freeDailyLimit - count).clamp(0, freeDailyLimit).toInt();
+          if (!activated) {
+            currentModel = 'deepseek-v4-flash';
+            useDeep = false;
+          }
+        });
       }
+    } catch (e) {
+      debugPrint('_checkActivation error: $e');
     }
   }
 
   Future<void> sendMessage() async {
+    if (isGenerating) return; // prevent concurrent triggers early
     _cancelRequested = false;
+    final generationId = ++_generationSerial;
     FocusScope.of(context).unfocus();
 
     // ===== 使用次数检查 =====
@@ -1505,9 +1746,7 @@ class _ChatPageState extends State<ChatPage> {
       }
       if (count >= freeDailyLimit) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text("今日使用次数已达上限（20次），升级 Pro 可无限使用")),
-          );
+          _showLimitSheet();
         }
         return;
       }
@@ -1515,9 +1754,14 @@ class _ChatPageState extends State<ChatPage> {
     // 防并发触发（允许重生但防乱点）
     if (isGenerating && messages.isNotEmpty) return;
     final text = controller.text.trim();
-    final isRegenerate = (text == _lastUserText);
-    if (text.isEmpty) return;
 
+    if (text.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("请输入内容")));
+      return;
+    }
+    final isRegenerate = (text == _lastUserText);
     // ✅ 内容审核
     final modResult = InputModerator.check(text);
     if (modResult != null) {
@@ -1538,23 +1782,14 @@ class _ChatPageState extends State<ChatPage> {
       if (!isRegenerate) {
         messages.add({"text": text, "isUser": true});
       }
+      final isDeepMode = isActivated && useDeep;
       messages.add({
-        "text": (useDeep || useReasoner) ? "深度思考中..." : "思考中...",
+        "text": isDeepMode ? "深度思考中..." : "思考中...",
         "isUser": false,
         "isStreaming": true,
+        "expanded": false,
       });
     });
-
-    // ⭐ 发送即扣次数（防止中途失败绕过）
-    if (user != null && !isActivated) {
-      await repo.incrementUsage(user.id);
-
-      if (mounted) {
-        setState(() {
-          _remainingCount = (_remainingCount - 1).clamp(0, freeDailyLimit);
-        });
-      }
-    }
 
     // Insert conversation and user message if needed
     rememberLocalMessages(); // ⭐ 防止新建对话前丢失当前内容
@@ -1565,6 +1800,7 @@ class _ChatPageState extends State<ChatPage> {
       conversations.insert(0, {
         'id': newId,
         'title': buildConversationTitle(text),
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
       });
       localConversationMessages[newId] = [];
     }
@@ -1587,10 +1823,59 @@ class _ChatPageState extends State<ChatPage> {
       // ===== 使用 Core 构建并发送 =====
       setState(() {
         if (messages.isNotEmpty) messages.removeLast();
-        messages.add({"text": "", "isUser": false, "isStreaming": true});
+        messages.add({
+          "text": "",
+          "reasoning": "",
+          "isUser": false,
+          "isStreaming": true,
+          "expanded": false, // ✅ 保持一致
+        });
       });
 
-      String? reasoning;
+      String responseContent = "";
+      String responseReasoning = "";
+      int contentFlushTs = DateTime.now().millisecondsSinceEpoch;
+      int reasoningFlushTs = contentFlushTs;
+      var pendingFlush = false;
+      var streamActive = true;
+      var streamTimedOut = false;
+
+      void flushStreamingMessage({bool force = false}) {
+        if (!mounted ||
+            _cancelRequested ||
+            generationId != _generationSerial ||
+            messages.isEmpty ||
+            (!force && !streamActive)) {
+          return;
+        }
+
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final shouldFlushContent = force || now - contentFlushTs >= 50;
+        final shouldFlushReasoning = force || now - reasoningFlushTs >= 90;
+        if (!shouldFlushContent && !shouldFlushReasoning) {
+          if (!pendingFlush) {
+            pendingFlush = true;
+            Future<void>.delayed(const Duration(milliseconds: 50), () {
+              if (!mounted) return;
+              pendingFlush = false;
+              flushStreamingMessage();
+            });
+          }
+          return;
+        }
+
+        if (shouldFlushContent) contentFlushTs = now;
+        if (shouldFlushReasoning) reasoningFlushTs = now;
+
+        setState(() {
+          final last = messages.last;
+          if (last["isUser"] == true) return;
+          last["text"] = responseContent;
+          last["reasoning"] = responseReasoning;
+          last["isStreaming"] = !force;
+        });
+      }
+
       // ===== 自动模型策略 + Pro 权限校验 =====
       String requestModel = _resolveModel();
       if (!isActivated) {
@@ -1623,73 +1908,95 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
 
+      // ===== OCR 图片识别（本地） =====
+      String? ocrText;
+      if (pickedImages.isNotEmpty) {
+        try {
+          ocrText = await extractTextFromImages(
+            pickedImages,
+          ).timeout(const Duration(seconds: 12));
+        } catch (_) {
+          ocrText = "用户发送了${pickedImages.length}张图片（OCR 识别失败，后端请根据上下文推断）";
+        }
+      }
+
+      // ===== 将 OCR 内容合并到用户消息（更自然）=====
+      final List<String> effectiveImages = <String>[];
+      if (ocrText != null && ocrText.trim().isNotEmpty) {
+        final lastUserIndex = messages.lastIndexWhere(
+          (m) => m["isUser"] == true,
+        );
+        if (lastUserIndex != -1) {
+          final original = messages[lastUserIndex]["text"] ?? "";
+          messages[lastUserIndex]["text"] =
+              "$original\n\n📸 图片内容（OCR识别，可能有误）：\n$ocrText";
+        }
+      } else if (pickedImages.isNotEmpty) {
+        effectiveImages.addAll(pickedImages);
+      }
+
       await for (final chunk
           in sendSmartChatStream(
             client: apiClient,
             rawMessages: messages,
-            pickedImages: pickedImages,
+            pickedImages: effectiveImages,
             model: requestModel,
-            deep: isActivated ? (useDeep || useReasoner) : false,
+            deep: isActivated ? useDeep : false,
           ).timeout(
             const Duration(seconds: 30),
             onTimeout: (sink) {
-              if (messages.isNotEmpty) {
-                messages.removeLast();
-                messages.add({"text": "请求超时，请重试", "isUser": false});
-              }
+              streamTimedOut = true;
               sink.close();
             },
           )) {
-        if (_cancelRequested) break;
+        if (_cancelRequested || generationId != _generationSerial) break;
 
-        if (chunk.reasoning != null && chunk.reasoning!.isNotEmpty) {
-          reasoning = chunk.reasoning;
+        responseContent = chunk.content;
+        if (useDeep && chunk.reasoning != null && chunk.reasoning!.isNotEmpty) {
+          responseReasoning = chunk.reasoning!;
         }
-
-        // --- Custom animated streaming update ---
-        final fullText = chunk.content;
-        final currentText = messages.last["text"] ?? "";
-
-        if (fullText.length > currentText.length) {
-          final newPart = fullText.substring(currentText.length);
-
-          for (int i = 0; i < newPart.length; i++) {
-            await Future.delayed(const Duration(milliseconds: 8));
-            if (_cancelRequested) break;
-
-            setState(() {
-              messages.last["text"] =
-                  (messages.last["text"] ?? "") + newPart[i];
-            });
-          }
-        }
+        flushStreamingMessage();
         scrollToBottom();
       }
 
-      if (reasoning != null && reasoning.isNotEmpty) {
-        final finalText = messages.last["text"];
-        setState(() {
-          messages.removeLast();
-          messages.add({
-            "text": reasoning,
-            "isUser": false,
-            "isReasoning": true,
-            "expanded": false,
-          });
-          messages.add({"text": finalText, "isUser": false});
-        });
+      streamActive = false;
+      if (_cancelRequested || generationId != _generationSerial) {
+        return;
       }
+      if (streamTimedOut) {
+        throw const ApiException('请求超时，请重试');
+      }
+      flushStreamingMessage(force: true);
+      await Future.delayed(const Duration(milliseconds: 30));
+      flushStreamingMessage(force: true); // ensure last chunk flushed
 
       // ⭐ 图片发送完成后安全清空
       if (pickedImages.isNotEmpty) {
         setState(() => pickedImages.clear());
       }
 
+      if (user != null && !isActivated) {
+        await repo.incrementUsage(user.id);
+        final count = await repo.usageCount(user.id);
+        if (mounted) {
+          setState(() {
+            _remainingCount = (freeDailyLimit - count)
+                .clamp(0, freeDailyLimit)
+                .toInt();
+          });
+        }
+      }
+
+      final activeIndex = conversations.indexWhere(
+        (c) => c['id'] == currentConversationId,
+      );
+      if (activeIndex != -1) {
+        conversations[activeIndex]['updatedAt'] =
+            DateTime.now().millisecondsSinceEpoch;
+      }
+
       rememberLocalMessages();
       if (user != null) await _saveToCloud();
-
-      // ===== 成功后计数 =====
-      // ⭐（已提前扣除，防止重复扣除，此处删除）
 
       setState(() {
         isGenerating = false;
@@ -1702,11 +2009,13 @@ class _ChatPageState extends State<ChatPage> {
           final index = conversations.indexWhere((c) => c['id'] == convoId);
           if (index != -1) {
             final currentTitle = conversations[index]['title'] ?? '';
+            final fallbackTitle = buildConversationTitle(text);
             // 只在默认标题时更新
             final userMsgCount = messages
                 .where((m) => m["isUser"] == true)
                 .length;
-            if (userMsgCount == 1 && currentTitle == '新对话') {
+            if (userMsgCount == 1 &&
+                (currentTitle == '新对话' || currentTitle == fallbackTitle)) {
               // ⭐ 异步生成标题，不阻塞 UI
               Future(() async {
                 String? aiTitle;
@@ -1773,7 +2082,8 @@ class _ChatPageState extends State<ChatPage> {
           isGenerating = false;
           _cancelRequested = false;
           // 防止“思考中...”卡住
-          if (messages.isNotEmpty &&
+          if (_cancelRequested &&
+              messages.isNotEmpty &&
               (messages.last["text"] == "思考中..." ||
                   messages.last["text"] == "深度思考中...")) {
             messages.removeLast();
@@ -1793,9 +2103,15 @@ class _ChatPageState extends State<ChatPage> {
 
   void scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (scrollController.hasClients) {
+      if (!scrollController.hasClients) return;
+
+      final max = scrollController.position.maxScrollExtent;
+      final current = scrollController.offset;
+
+      // only auto-scroll if near bottom
+      if (max - current < 120) {
         scrollController.animateTo(
-          scrollController.position.maxScrollExtent,
+          max,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -1929,7 +2245,8 @@ class _ChatPageState extends State<ChatPage> {
           "created_at": current.createdAt,
           "app_metadata": <String, dynamic>{},
           "user_metadata": {
-            ...(current.userMetadata ?? {}),
+            if (current.userMetadata?["name"] != null)
+              "name": current.userMetadata?["name"],
             "avatar_url": publicUrl,
           },
         });
@@ -2051,14 +2368,9 @@ class _ChatPageState extends State<ChatPage> {
                     _menuItem(
                       icon: Icons.settings,
                       text: "设置",
-                      onTap: () {
+                      onTap: () async {
                         Navigator.pop(context);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const SettingsPage(),
-                          ),
-                        );
+                        await _openSettings();
                       },
                     ),
 
@@ -2073,39 +2385,125 @@ class _ChatPageState extends State<ChatPage> {
                         },
                       ),
 
-                    if (user != null)
-                      _menuItem(
-                        icon: Icons.logout,
-                        text: "退出登录",
-                        color: Colors.red,
-                        onTap: () async {
-                          final navigator = Navigator.of(context);
-
-                          _authToken = null;
-                          final store = SunlandSessionStore();
-                          await store.clearSession();
-
-                          // ⭐ 强制回到登录页，而不是进入开发模式
-                          currentUserNotifier.value = null;
-
-                          navigator.pop();
-
-                          if (!mounted) return;
-
-                          Navigator.pushAndRemoveUntil(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => const LoginPage(),
-                            ),
-                            (route) => false,
-                          );
-                        },
-                      ),
-
                     const SizedBox(height: 8),
                   ],
                 ),
               ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _openSettings({bool openActivation = false}) async {
+    final result = await Navigator.push<SettingsResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SettingsPage(openActivationOnStart: openActivation),
+      ),
+    );
+
+    if (!mounted) return;
+    if (result?.loggedOut == true || currentUserNotifier.value == null) {
+      _authToken = null;
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const RootPage()),
+        (_) => false,
+      );
+      return;
+    }
+
+    await _checkActivation();
+    await loadConversations();
+    if (mounted) setState(() {});
+  }
+
+  void _showLimitSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return SafeArea(
+          child: Container(
+            margin: const EdgeInsets.all(12),
+            padding: const EdgeInsets.fromLTRB(18, 18, 18, 20),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF111827) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.18),
+                  blurRadius: 28,
+                  offset: const Offset(0, 10),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF22D3EE).withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: const Icon(
+                        Icons.workspace_premium,
+                        color: Color(0xFF0891B2),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        "今日免费次数已用完",
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  "免费用户每天 20 次。升级 Pro 后可永久无限使用，并解锁 DeepSeek V4 Pro 与深度思考。",
+                  style: TextStyle(
+                    color: isDark ? Colors.white60 : Colors.black54,
+                    height: 1.45,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _openSettings(openActivation: true);
+                        },
+                        child: const Text("输入激活码"),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: FilledButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          _openSettings(openActivation: true);
+                        },
+                        child: const Text("升级 Pro"),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         );
@@ -2176,7 +2574,7 @@ class _ChatPageState extends State<ChatPage> {
               'assets/deepseek.png',
               width: 18,
               height: 18,
-              errorBuilder: (_, __, ___) => const SizedBox(),
+              errorBuilder: (_, _, _) => const SizedBox(),
             ),
             const SizedBox(width: 8),
             Column(
@@ -2211,6 +2609,11 @@ class _ChatPageState extends State<ChatPage> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
     return Scaffold(
+      onDrawerChanged: (isOpened) {
+        if (isOpened) {
+          FocusManager.instance.primaryFocus?.unfocus();
+        }
+      },
       drawer: Drawer(
         backgroundColor: isDark ? const Color(0xFF0F0F0F) : Colors.white,
         child: SafeArea(
@@ -2309,7 +2712,11 @@ class _ChatPageState extends State<ChatPage> {
 
                       currentConversationId = newId;
 
-                      conversations.insert(0, {'id': newId, 'title': '新对话'});
+                      conversations.insert(0, {
+                        'id': newId,
+                        'title': '新对话',
+                        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+                      });
 
                       messages.clear();
                       localConversationMessages[newId] = [];
@@ -2401,13 +2808,19 @@ class _ChatPageState extends State<ChatPage> {
                                     ),
                                     onTap: () {
                                       Navigator.pop(context);
-                                      setState(() {
-                                        currentConversationId = convo['id'];
-                                        messages = List<Map<String, dynamic>>.from(
-                                          localConversationMessages[currentConversationId] ??
-                                              [],
-                                        );
-                                      });
+                                      if (currentConversationId !=
+                                          convo['id']) {
+                                        rememberLocalMessages();
+                                        setState(() {
+                                          currentConversationId = convo['id'];
+                                          messages = normalizeMessages(
+                                            List<Map<String, dynamic>>.from(
+                                              localConversationMessages[currentConversationId] ??
+                                                  [],
+                                            ),
+                                          );
+                                        });
+                                      }
                                     },
                                   )
                                 : Dismissible(
@@ -2415,7 +2828,10 @@ class _ChatPageState extends State<ChatPage> {
                                     direction: DismissDirection.endToStart,
                                     background: Container(
                                       alignment: Alignment.centerRight,
-                                      padding: const EdgeInsets.only(right: 16),
+                                      padding: const EdgeInsets.only(
+                                        right: 16,
+                                        top: 8,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: Colors.red,
                                         borderRadius: BorderRadius.circular(12),
@@ -2454,14 +2870,19 @@ class _ChatPageState extends State<ChatPage> {
                                       ),
                                       onTap: () {
                                         Navigator.pop(context);
-                                        setState(() {
-                                          currentConversationId = convo['id'];
-                                          messages =
+                                        if (currentConversationId !=
+                                            convo['id']) {
+                                          rememberLocalMessages();
+                                          setState(() {
+                                            currentConversationId = convo['id'];
+                                            messages = normalizeMessages(
                                               List<Map<String, dynamic>>.from(
                                                 localConversationMessages[currentConversationId] ??
                                                     [],
-                                              );
-                                        });
+                                              ),
+                                            );
+                                          });
+                                        }
                                       },
                                     ),
                                   ),
@@ -2519,44 +2940,56 @@ class _ChatPageState extends State<ChatPage> {
                     ],
                   ),
                 ),
+                if (!isActivated)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: TextButton.icon(
+                      onPressed: () => _openSettings(openActivation: true),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 9,
+                          vertical: 6,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        foregroundColor: const Color(0xFF7C3AED),
+                        backgroundColor: const Color(
+                          0xFF7C3AED,
+                        ).withValues(alpha: 0.1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                      ),
+                      icon: const Icon(Icons.diamond_outlined, size: 14),
+                      label: const Text(
+                        "Pro",
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ),
                 // 用户头像
                 Builder(
                   builder: (_) {
                     final user = currentUserNotifier.value;
                     return GestureDetector(
                       onTap: showUserMenu,
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          CircleAvatar(
-                            radius: 10,
-                            backgroundColor: const Color(0xFF22D3EE),
-                            backgroundImage:
-                                (user?.userMetadata?['avatar_url'] != null)
-                                ? NetworkImage(
-                                    user!.userMetadata!['avatar_url'],
-                                  )
-                                : null,
-                            child: (user?.userMetadata?['avatar_url'] == null)
-                                ? const Icon(
-                                    Icons.person,
-                                    size: 14,
-                                    color: Colors.white,
-                                  )
-                                : null,
-                          ),
-                          const SizedBox(width: 6),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxWidth: 80),
-                            child: Text(
-                              user?.userMetadata?['name'] ??
-                                  user?.email?.split('@')[0] ??
-                                  "开发模式",
-                              style: const TextStyle(fontSize: 13),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
+                      child: CircleAvatar(
+                        radius: 17,
+                        backgroundColor: const Color(0xFF22D3EE),
+                        backgroundImage:
+                            (user?.userMetadata?['avatar_url'] != null)
+                            ? NetworkImage(user!.userMetadata!['avatar_url'])
+                            : null,
+                        child: (user?.userMetadata?['avatar_url'] == null)
+                            ? const Icon(
+                                Icons.person,
+                                size: 14,
+                                color: Colors.white,
+                              )
+                            : null,
                       ),
                     );
                   },
@@ -2815,6 +3248,7 @@ class _ChatPageState extends State<ChatPage> {
 
                               // ===== ② 输入框 =====
                               TextField(
+                                controller: controller,
                                 minLines: 1,
                                 maxLines: 3,
                                 style: TextStyle(fontSize: 14),
@@ -2838,28 +3272,10 @@ class _ChatPageState extends State<ChatPage> {
                                     onPressed: pickImage,
                                   ),
 
-                                  IconButton(
-                                    icon: Image.asset(
-                                      isDark
-                                          ? 'assets/ailogo_dark.png'
-                                          : 'assets/ailogo.png',
-                                      width: 32,
-                                      height: 32,
-                                      color: !isActivated
-                                          ? Colors.grey
-                                          : (useDeep
-                                                ? const Color(0xFF22D3EE)
-                                                : null),
-                                    ),
-                                    onPressed: () {
+                                  GestureDetector(
+                                    onTap: () {
                                       if (!isActivated) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text("深度思考为 Pro 专属功能"),
-                                          ),
-                                        );
+                                        _showLimitSheet();
                                         return;
                                       }
 
@@ -2869,16 +3285,41 @@ class _ChatPageState extends State<ChatPage> {
 
                                       _saveModelPrefs();
                                     },
+                                    child: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: useDeep
+                                            ? const Color(
+                                                0xFF22D3EE,
+                                              ).withOpacity(0.2)
+                                            : Colors.transparent,
+                                        borderRadius: BorderRadius.circular(10),
+                                        border: useDeep
+                                            ? Border.all(
+                                                color: const Color(0xFF22D3EE),
+                                                width: 1.5,
+                                              )
+                                            : null,
+                                      ),
+                                      child: Image.asset(
+                                        isDark
+                                            ? 'assets/ailogo_dark.png'
+                                            : 'assets/ailogo.png',
+                                        width: 28,
+                                        height: 28,
+                                        color: !isActivated
+                                            ? Colors.grey
+                                            : (useDeep
+                                                  ? const Color(0xFF22D3EE)
+                                                  : null),
+                                      ),
+                                    ),
                                   ),
 
                                   const Spacer(),
 
                                   GestureDetector(
                                     onTap: () {
-                                      final isDark =
-                                          Theme.of(context).brightness ==
-                                          Brightness.dark;
-
                                       showDialog(
                                         context: context,
                                         barrierColor: Colors.black.withOpacity(
@@ -2954,15 +3395,7 @@ class _ChatPageState extends State<ChatPage> {
                                                           Navigator.pop(
                                                             dialogContext,
                                                           );
-                                                          ScaffoldMessenger.of(
-                                                            context,
-                                                          ).showSnackBar(
-                                                            const SnackBar(
-                                                              content: Text(
-                                                                "Pro 模型需激活后才能使用",
-                                                              ),
-                                                            ),
-                                                          );
+                                                          _showLimitSheet();
                                                           return;
                                                         }
 
@@ -3008,7 +3441,24 @@ class _ChatPageState extends State<ChatPage> {
 
                                   IconButton(
                                     icon: const Icon(Icons.send),
-                                    onPressed: sendMessage,
+                                    onPressed: isGenerating
+                                        ? null
+                                        : () {
+                                            final text = controller.text.trim();
+
+                                            if (text.isEmpty) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text("请输入内容"),
+                                                ),
+                                              );
+                                              return;
+                                            }
+
+                                            sendMessage();
+                                          },
                                   ),
                                 ],
                               ),
