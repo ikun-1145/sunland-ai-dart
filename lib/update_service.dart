@@ -46,7 +46,7 @@ class UpdateService {
       }
 
       final packageInfo = await PackageInfo.fromPlatform();
-      final current = packageInfo.version;
+      final current = "${packageInfo.version}+${packageInfo.buildNumber}";
 
       print("📱 当前版本: $current, 最新版本: $latest");
 
@@ -73,12 +73,17 @@ class UpdateService {
   /// 比较版本号
   static bool _isNewVersion(String current, String latest) {
     List<int> parseMain(String v) {
-      final main = v.split('-').first;
+      final main = v.split('+').first.split('-').first;
       return main.split('.').map((e) => int.tryParse(e) ?? 0).toList();
     }
 
+    int parseBuild(String v) {
+      if (!v.contains('+')) return 0;
+      return int.tryParse(v.split('+').last) ?? 0;
+    }
+
     int parseBeta(String v) {
-      if (!v.contains('-')) return 9999; // 正式版优先级最高
+      if (!v.contains('-')) return 9999;
       final suffix = v.split('-').last;
       final num = RegExp(r'\d+').firstMatch(suffix);
       return num != null ? int.parse(num.group(0)!) : 0;
@@ -95,7 +100,14 @@ class UpdateService {
       if (li < ci) return false;
     }
 
-    // 主版本相同，比较 beta
+    // 主版本相同 → 比较 build number
+    final cBuild = parseBuild(current);
+    final lBuild = parseBuild(latest);
+
+    if (lBuild > cBuild) return true;
+    if (lBuild < cBuild) return false;
+
+    // build 也相同 → 比较 beta
     final cBeta = parseBeta(current);
     final lBeta = parseBeta(latest);
 
