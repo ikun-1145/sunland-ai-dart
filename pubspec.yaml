@@ -1,7 +1,7 @@
 name: sunland_ai_app
 description: "A new Flutter project."
 publish_to: 'none' 
-version: 1.0.0+1
+version: 1.0.8+2
 
 environment:
   sdk: ^3.11.4

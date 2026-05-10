@@ -48,7 +48,7 @@ const String _captchaHtml = '''
     function onSuccess(token) {
       console.log("Turnstile success, token:", token);
       window.location.href = "sunland://captcha?token=" + encodeURIComponent(token);
-      throw new Error("STOP_NAVIGATION");
+      return;
     }
   </script>
 </body>

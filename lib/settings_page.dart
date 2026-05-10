@@ -168,83 +168,96 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _pickAvatar() async {
     if (_uploadingAvatar) return;
-    _uploadingAvatar = true;
-    final user = _user;
-    if (user == null) return;
-
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 768,
-      maxHeight: 768,
-      imageQuality: 82,
-    );
-    if (picked == null) return;
-
-    // === 格式限制（仅允许常见图片格式） ===
-    final path = picked.path.toLowerCase();
-    final allowed = ['.jpg', '.jpeg', '.png', '.webp'];
-    final isValidFormat = allowed.any((ext) => path.endsWith(ext));
-    if (!isValidFormat) {
-      _showSnack('仅支持 JPG / PNG / WEBP 格式图片');
-      return;
-    }
-
-    final file = File(picked.path);
-    if (!await file.exists()) return;
-    final size = await file.length();
-    // === 0 字节文件安全检查 ===
-    if (size == 0) {
-      _showSnack('图片文件异常，请重新选择');
-      return;
-    }
-    if (size > 8 * 1024 * 1024) {
-      _showSnack('图片太大，请选择 8MB 内的图片');
-      return;
-    }
-
-    setState(() {
-      _uploadingAvatar = true;
-      _avatarStatus = '正在上传头像...';
-    });
-
+    setState(() => _uploadingAvatar = true);
     try {
-      final profile = await _repository.uploadAvatar(
-        userId: user.id,
-        file: file,
-      );
-      await _repository.saveProfile(user.id, profile);
-      await _store.saveProfile(user.id, profile);
-      final updated = user.copyWith(
-        avatarUrl: profile.avatarUrl,
-        avatarPath: profile.avatarPath,
-      );
-      await _store.saveUser(updated);
-      if (!mounted) return;
-      setState(() {
-        _user = updated;
-        _avatarStatus = '头像已保存';
-      });
+      final user = _user;
+      if (user == null) return;
 
-      // ⭐ 同步到全局用户（修复主页头像不更新问题）
-      final rawUser = currentUserNotifier.value;
-      if (rawUser != null) {
-        final meta = Map<String, dynamic>.from(rawUser.userMetadata ?? {});
-        meta['avatar_url'] = updated.avatarUrl;
-        rawUser.userMetadata?.addAll(meta);
-        currentUserNotifier.value = rawUser;
+      final picker = ImagePicker();
+      final picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 768,
+        maxHeight: 768,
+        imageQuality: 82,
+      );
+      if (picked == null) return;
+
+      // === 格式限制（仅允许常见图片格式） ===
+      final path = picked.path.toLowerCase();
+      final allowed = ['.jpg', '.jpeg', '.png', '.webp'];
+      final isValidFormat = allowed.any((ext) => path.endsWith(ext));
+      if (!isValidFormat) {
+        _showSnack('仅支持 JPG / PNG / WEBP 格式图片');
+        return;
       }
 
-      Future<void>.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _avatarStatus = null);
+      final file = File(picked.path);
+      if (!await file.exists()) return;
+      final size = await file.length();
+      // === 0 字节文件安全检查 ===
+      if (size == 0) {
+        _showSnack('图片文件异常，请重新选择');
+        return;
+      }
+      if (size > 8 * 1024 * 1024) {
+        _showSnack('图片太大，请选择 8MB 内的图片');
+        return;
+      }
+
+      setState(() {
+        _avatarStatus = '正在上传头像...';
       });
-    } catch (error) {
-      if (!mounted) return;
-      debugPrint(error.toString());
-      setState(() => _avatarStatus = '上传失败，请检查网络');
+
+      try {
+        final profile = await _repository.uploadAvatar(
+          userId: user.id,
+          file: file,
+        );
+        await _repository.saveProfile(user.id, profile);
+        await _store.saveProfile(user.id, profile);
+        final updated = user.copyWith(
+          avatarUrl: profile.avatarUrl,
+          avatarPath: profile.avatarPath,
+        );
+        await _store.saveUser(updated);
+        if (!mounted) return;
+        setState(() {
+          _user = updated;
+          _avatarStatus = '头像已保存';
+        });
+
+        // ⭐ 同步到全局用户（修复主页头像不更新问题）
+        currentUserNotifier.value = _userFromSunland(updated);
+      } catch (error) {
+        if (!mounted) return;
+        debugPrint(error.toString());
+        setState(() => _avatarStatus = '上传失败，请检查网络');
+      }
     } finally {
       if (mounted) setState(() => _uploadingAvatar = false);
     }
+
+    Future<void>.delayed(const Duration(seconds: 2), () {
+      if (mounted) setState(() => _avatarStatus = null);
+    });
+  }
+
+  User _userFromSunland(SunlandUser user) {
+    final metadata = <String, dynamic>{};
+    if (user.avatarUrl != null && user.avatarUrl!.isNotEmpty) {
+      metadata['avatar_url'] = user.avatarUrl;
+    }
+    if (user.avatarPath != null && user.avatarPath!.isNotEmpty) {
+      metadata['avatar_path'] = user.avatarPath;
+    }
+    return User.fromJson({
+      "id": user.id,
+      "email": user.email,
+      "aud": "authenticated",
+      "created_at": DateTime.now().toIso8601String(),
+      "app_metadata": <String, dynamic>{},
+      "user_metadata": metadata,
+    })!;
   }
 
   Future<void> _activate() async {

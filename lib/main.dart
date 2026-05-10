@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
 import 'dart:io';
-import 'dart:convert';
 import 'dart:ui';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
@@ -13,6 +12,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'captcha_page.dart';
 import 'settings_page.dart';
+import 'update_service.dart';
 
 const bool debugMode = true;
 
@@ -58,6 +58,52 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
 
   _authToken = token;
   return token;
+}
+
+/// 全局主题选择弹框，避免三处重复定义
+Future<void> showThemeSelectionDialog(BuildContext context) async {
+  final prefs = await SharedPreferences.getInstance();
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) {
+      return AlertDialog(
+        title: const Text("选择主题"),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              title: const Text("浅色模式"),
+              onTap: () async {
+                themeNotifier.value = ThemeMode.light;
+                await saveThemeMode(ThemeMode.light);
+                await prefs.setBool('theme_chosen', true);
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              title: const Text("深色模式"),
+              onTap: () async {
+                themeNotifier.value = ThemeMode.dark;
+                await saveThemeMode(ThemeMode.dark);
+                await prefs.setBool('theme_chosen', true);
+                Navigator.pop(context);
+              },
+            ),
+            ListTile(
+              title: const Text("跟随系统"),
+              onTap: () async {
+                themeNotifier.value = ThemeMode.system;
+                await saveThemeMode(ThemeMode.system);
+                await prefs.setBool('theme_chosen', true);
+                Navigator.pop(context);
+              },
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 void main() async {
@@ -188,50 +234,7 @@ class _RootPageState extends State<RootPage> {
   }
 
   void _showThemeDialog() {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        return AlertDialog(
-          title: const Text("选择主题"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                title: const Text("浅色模式"),
-                onTap: () async {
-                  themeNotifier.value = ThemeMode.light;
-                  await saveThemeMode(ThemeMode.light);
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool('theme_chosen', true);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text("深色模式"),
-                onTap: () async {
-                  themeNotifier.value = ThemeMode.dark;
-                  await saveThemeMode(ThemeMode.dark);
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool('theme_chosen', true);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text("跟随系统"),
-                onTap: () async {
-                  themeNotifier.value = ThemeMode.system;
-                  await saveThemeMode(ThemeMode.system);
-                  final prefs = await SharedPreferences.getInstance();
-                  await prefs.setBool('theme_chosen', true);
-                  Navigator.pop(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
+    showThemeSelectionDialog(context);
   }
 
   @override
@@ -484,56 +487,6 @@ class _LoginPageState extends State<LoginPage>
         context,
         MaterialPageRoute(builder: (_) => const SplashPage()),
       );
-
-      // ⭐ 首次登录弹出主题选择
-      final prefs = await SharedPreferences.getInstance();
-      final chosen = prefs.getBool('theme_chosen') ?? false;
-
-      if (!chosen && mounted) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (_) {
-              return AlertDialog(
-                title: const Text("选择主题"),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    ListTile(
-                      title: const Text("浅色模式"),
-                      onTap: () async {
-                        themeNotifier.value = ThemeMode.light;
-                        await saveThemeMode(ThemeMode.light);
-                        await prefs.setBool('theme_chosen', true);
-                        Navigator.pop(context);
-                      },
-                    ),
-                    ListTile(
-                      title: const Text("深色模式"),
-                      onTap: () async {
-                        themeNotifier.value = ThemeMode.dark;
-                        await saveThemeMode(ThemeMode.dark);
-                        await prefs.setBool('theme_chosen', true);
-                        Navigator.pop(context);
-                      },
-                    ),
-                    ListTile(
-                      title: const Text("跟随系统"),
-                      onTap: () async {
-                        themeNotifier.value = ThemeMode.system;
-                        await saveThemeMode(ThemeMode.system);
-                        await prefs.setBool('theme_chosen', true);
-                        Navigator.pop(context);
-                      },
-                    ),
-                  ],
-                ),
-              );
-            },
-          );
-        });
-      }
     } catch (e) {
       ScaffoldMessenger.of(
         context,
@@ -580,297 +533,389 @@ class _LoginPageState extends State<LoginPage>
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: isDark
-                ? const [Color(0xFF0B0F1A), Color(0xFF0F172A)]
-                : const [Color(0xFFF8FAFF), Color(0xFFEAF2FF)],
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
+                ? const [Color(0xFF0B0F1A), Color(0xFF020617)]
+                : const [Color(0xFFF0F9FF), Color(0xFFE0F2FE)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
           ),
         ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: FadeTransition(
-              opacity: _fade,
-              child: SlideTransition(
-                position: _slide,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // --- Header Section ---
-                    Column(
-                      children: [
-                        Image.asset('assets/ailogo.png', width: 90),
-                        const SizedBox(height: 32),
+        child: Stack(
+          children: [
+            Positioned(
+              top: -100,
+              left: -80,
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF22D3EE).withOpacity(0.2),
+                ),
+              ),
+            ),
+            Positioned(
+              bottom: -120,
+              right: -80,
+              child: Container(
+                width: 240,
+                height: 240,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF6366F1).withOpacity(0.2),
+                ),
+              ),
+            ),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: FadeTransition(
+                  opacity: _fade,
+                  child: SlideTransition(
+                    position: _slide,
+                    child: AnimatedScale(
+                      scale: 1,
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeOutBack,
+                      child: AnimatedOpacity(
+                        opacity: 1,
+                        duration: const Duration(milliseconds: 500),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            // --- Header Section ---
+                            Column(
+                              children: [
+                                TweenAnimationBuilder<double>(
+                                  tween: Tween(begin: 0.8, end: 1.0),
+                                  duration: const Duration(milliseconds: 800),
+                                  curve: Curves.easeOutBack,
+                                  builder: (_, value, child) {
+                                    return Transform.scale(
+                                      scale: value,
+                                      child: child,
+                                    );
+                                  },
+                                  child: Image.asset(
+                                    'assets/ailogo.png',
+                                    width: 90,
+                                  ),
+                                ),
+                                const SizedBox(height: 32),
 
-                        Text(
-                          "霜蓝 AI",
-                          style: TextStyle(
-                            color: isDark ? Colors.white : Colors.black87,
-                            fontSize: 26,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-
-                        const SizedBox(height: 6),
-
-                        Text(
-                          "你的专属智能助手 ✨",
-                          style: TextStyle(
-                            color: isDark ? Colors.white70 : Colors.black54,
-                            fontSize: 14,
-                          ),
-                        ),
-
-                        const SizedBox(height: 4),
-
-                        Text(
-                          "登录后即可开始对话、创作与探索",
-                          style: TextStyle(
-                            color: isDark ? Colors.white38 : Colors.black38,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-
-                    const SizedBox(height: 30),
-
-                    // --- 输入框卡片背景 ---
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 10,
-                      ),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? Colors.white.withAlpha(13)
-                            : Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(
-                              isDark ? 0.3 : 0.08,
-                            ),
-                            blurRadius: 20,
-                            offset: const Offset(0, 10),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          TextField(
-                            controller: emailController,
-                            onChanged: (_) => setState(() {}),
-                            style: TextStyle(
-                              color: isDark ? Colors.white : Colors.black87,
-                            ),
-                            decoration: InputDecoration(
-                              hintText: "邮箱",
-                              hintStyle: TextStyle(
-                                color: isDark ? Colors.white38 : Colors.black38,
-                              ),
-                              border: InputBorder.none,
-                            ),
-                          ),
-
-                          Divider(
-                            color: isDark ? Colors.white12 : Colors.black12,
-                          ),
-
-                          Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  controller: codeController,
-                                  onChanged: (_) => setState(() {}),
+                                Text(
+                                  "霜蓝 AI",
                                   style: TextStyle(
                                     color: isDark
                                         ? Colors.white
                                         : Colors.black87,
-                                  ),
-                                  decoration: InputDecoration(
-                                    hintText: "验证码",
-                                    hintStyle: TextStyle(
-                                      color: isDark
-                                          ? Colors.white38
-                                          : Colors.black38,
-                                    ),
-                                    border: InputBorder.none,
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 1.2,
                                   ),
                                 ),
-                              ),
-                              TextButton(
-                                onPressed: (sending || countdown > 0)
-                                    ? null
-                                    : sendCode,
-                                child: Text(
-                                  sending
-                                      ? "发送中..."
-                                      : countdown > 0
-                                      ? "${countdown}s"
-                                      : "发送",
-                                  style: TextStyle(
-                                    color: (sending || countdown > 0)
-                                        ? (isDark
-                                              ? Colors.white38
-                                              : Colors.black38)
-                                        : const Color(0xFF3B82F6),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
 
-                    const SizedBox(height: 24),
+                                const SizedBox(height: 6),
 
-                    // --- 登录按钮增强（渐变） ---
-                    Container(
-                      width: double.infinity,
-                      height: 44,
-                      decoration: BoxDecoration(
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF22D3EE), Color(0xFF6366F1)],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.transparent,
-                          shadowColor: Colors.transparent,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          disabledBackgroundColor: Colors.grey.withOpacity(0.3),
-                        ),
-                        onPressed: canLogin ? login : null,
-                        child: verifying
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : Text(
-                                "登录",
-                                style: TextStyle(
-                                  color: canLogin
-                                      ? Colors.white
-                                      : Colors.white54,
-                                ),
-                              ),
-                      ),
-                    ),
-
-                    // --- 底部提示 ---
-                    const SizedBox(height: 12),
-
-                    GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          agreed = !agreed;
-                        });
-                      },
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          Checkbox(
-                            value: agreed,
-                            activeColor: const Color(0xFF22D3EE),
-                            checkColor: Colors.black,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            onChanged: (v) {
-                              setState(() {
-                                agreed = v ?? false;
-                              });
-                            },
-                          ),
-                          Expanded(
-                            child: Wrap(
-                              children: [
                                 Text(
-                                  "我已阅读并同意 ",
+                                  "你的专属智能助手 ✨",
                                   style: TextStyle(
                                     color: isDark
-                                        ? Colors.white60
+                                        ? Colors.white70
                                         : Colors.black54,
-                                    fontSize: 11,
+                                    fontSize: 14,
                                   ),
                                 ),
-                                GestureDetector(
-                                  onTap: () {
-                                    launchUrl(
-                                      Uri.parse(
-                                        "https://sunland.dev/xukexieyi",
-                                      ),
-                                      mode: LaunchMode.externalApplication,
-                                    );
-                                  },
-                                  child: const Text(
-                                    "用户协议",
-                                    style: TextStyle(
-                                      color: Color(0xFF22D3EE),
-                                      fontSize: 11,
-                                      decoration: TextDecoration.underline,
-                                    ),
-                                  ),
-                                ),
-                                const Text(" "),
+
+                                const SizedBox(height: 4),
+
                                 Text(
-                                  "和 ",
+                                  "登录后即可开始对话、创作与探索",
                                   style: TextStyle(
                                     color: isDark
-                                        ? Colors.white60
-                                        : Colors.black54,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                                GestureDetector(
-                                  onTap: () {
-                                    launchUrl(
-                                      Uri.parse("https://sunland.dev/privacy"),
-                                      mode: LaunchMode.externalApplication,
-                                    );
-                                  },
-                                  child: const Text(
-                                    "隐私政策",
-                                    style: TextStyle(
-                                      color: Color(0xFF22D3EE),
-                                      fontSize: 11,
-                                      decoration: TextDecoration.underline,
-                                    ),
+                                        ? Colors.white38
+                                        : Colors.black38,
+                                    fontSize: 12,
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        ],
+
+                            const SizedBox(height: 30),
+
+                            // --- 输入框卡片背景 ---
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 12,
+                                vertical: 10,
+                              ),
+                              decoration: BoxDecoration(
+                                color: isDark
+                                    ? Colors.white.withOpacity(0.06)
+                                    : Colors.white.withOpacity(0.7),
+                                borderRadius: BorderRadius.circular(18),
+                                border: Border.all(
+                                  color: isDark
+                                      ? Colors.white.withOpacity(0.08)
+                                      : Colors.black.withOpacity(0.05),
+                                ),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(
+                                      isDark ? 0.4 : 0.08,
+                                    ),
+                                    blurRadius: 30,
+                                    offset: const Offset(0, 10),
+                                  ),
+                                ],
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(18),
+                                child: BackdropFilter(
+                                  filter: ImageFilter.blur(
+                                    sigmaX: 16,
+                                    sigmaY: 16,
+                                  ),
+                                  child: Column(
+                                    children: [
+                                      TextField(
+                                        controller: emailController,
+                                        onChanged: (_) => setState(() {}),
+                                        style: TextStyle(
+                                          color: isDark
+                                              ? Colors.white
+                                              : Colors.black87,
+                                        ),
+                                        decoration: InputDecoration(
+                                          hintText: "邮箱",
+                                          hintStyle: TextStyle(
+                                            color: isDark
+                                                ? Colors.white38
+                                                : Colors.black38,
+                                          ),
+                                          border: InputBorder.none,
+                                        ),
+                                      ),
+
+                                      Divider(
+                                        color: isDark
+                                            ? Colors.white12
+                                            : Colors.black12,
+                                      ),
+
+                                      Row(
+                                        children: [
+                                          Expanded(
+                                            child: TextField(
+                                              controller: codeController,
+                                              onChanged: (_) => setState(() {}),
+                                              style: TextStyle(
+                                                color: isDark
+                                                    ? Colors.white
+                                                    : Colors.black87,
+                                              ),
+                                              decoration: InputDecoration(
+                                                hintText: "验证码",
+                                                hintStyle: TextStyle(
+                                                  color: isDark
+                                                      ? Colors.white38
+                                                      : Colors.black38,
+                                                ),
+                                                border: InputBorder.none,
+                                              ),
+                                            ),
+                                          ),
+                                          TextButton(
+                                            onPressed:
+                                                (sending || countdown > 0)
+                                                ? null
+                                                : sendCode,
+                                            child: Text(
+                                              sending
+                                                  ? "发送中..."
+                                                  : countdown > 0
+                                                  ? "${countdown}s"
+                                                  : "发送",
+                                              style: TextStyle(
+                                                color:
+                                                    (sending || countdown > 0)
+                                                    ? (isDark
+                                                          ? Colors.white38
+                                                          : Colors.black38)
+                                                    : const Color(0xFF22D3EE),
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // --- 登录按钮增强（渐变） ---
+                            AnimatedScale(
+                              scale: canLogin ? 1 : 0.97,
+                              duration: const Duration(milliseconds: 120),
+                              child: Container(
+                                width: double.infinity,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF22D3EE),
+                                      Color(0xFF6366F1),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Material(
+                                  color: Colors.transparent,
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: canLogin ? login : null,
+                                    child: Center(
+                                      child: verifying
+                                          ? const SizedBox(
+                                              width: 18,
+                                              height: 18,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: Colors.white,
+                                              ),
+                                            )
+                                          : Text(
+                                              "登录",
+                                              style: TextStyle(
+                                                color: canLogin
+                                                    ? Colors.white
+                                                    : Colors.white54,
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            // --- 底部提示 ---
+                            const SizedBox(height: 12),
+
+                            GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  agreed = !agreed;
+                                });
+                              },
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Checkbox(
+                                    value: agreed,
+                                    activeColor: const Color(0xFF22D3EE),
+                                    checkColor: Colors.black,
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    onChanged: (v) {
+                                      setState(() {
+                                        agreed = v ?? false;
+                                      });
+                                    },
+                                  ),
+                                  Expanded(
+                                    child: Wrap(
+                                      children: [
+                                        Text(
+                                          "我已阅读并同意 ",
+                                          style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white60
+                                                : Colors.black54,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () {
+                                            launchUrl(
+                                              Uri.parse(
+                                                "https://sunland.dev/xukexieyi",
+                                              ),
+                                              mode: LaunchMode
+                                                  .externalApplication,
+                                            );
+                                          },
+                                          child: const Text(
+                                            "用户协议",
+                                            style: TextStyle(
+                                              color: Color(0xFF22D3EE),
+                                              fontSize: 11,
+                                              decoration:
+                                                  TextDecoration.underline,
+                                            ),
+                                          ),
+                                        ),
+                                        const Text(" "),
+                                        Text(
+                                          "和 ",
+                                          style: TextStyle(
+                                            color: isDark
+                                                ? Colors.white60
+                                                : Colors.black54,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                        GestureDetector(
+                                          onTap: () {
+                                            launchUrl(
+                                              Uri.parse(
+                                                "https://sunland.dev/privacy",
+                                              ),
+                                              mode: LaunchMode
+                                                  .externalApplication,
+                                            );
+                                          },
+                                          child: const Text(
+                                            "隐私政策",
+                                            style: TextStyle(
+                                              color: Color(0xFF22D3EE),
+                                              fontSize: 11,
+                                              decoration:
+                                                  TextDecoration.underline,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+
+                            const SizedBox(height: 6),
+
+                            Text(
+                              "未注册会自动创建账号",
+                              style: TextStyle(
+                                color: isDark ? Colors.white60 : Colors.black54,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-
-                    const SizedBox(height: 6),
-
-                    Text(
-                      "未注册会自动创建账号",
-                      style: TextStyle(
-                        color: isDark ? Colors.white60 : Colors.black54,
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -885,6 +930,8 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  // Prevent duplicate profile dialog
+  bool _profileDialogShown = false;
   // Normalize messages: combine "reasoning" + next assistant message into one
   List<Map<String, dynamic>> normalizeMessages(
     List<Map<String, dynamic>> msgs,
@@ -915,30 +962,6 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _searchKeyword = "";
-  int compareVersion(String v1, String v2) {
-    List<String> split(String v) {
-      return v.replaceAll("beta", "-beta.").split(RegExp(r'[.-]'));
-    }
-
-    final a = split(v1);
-    final b = split(v2);
-
-    for (int i = 0; i < 4; i++) {
-      final x = i < a.length ? a[i] : "0";
-      final y = i < b.length ? b[i] : "0";
-
-      if (x == "beta" && y != "beta") return -1;
-      if (x != "beta" && y == "beta") return 1;
-
-      final xi = int.tryParse(x) ?? 0;
-      final yi = int.tryParse(y) ?? 0;
-
-      if (xi != yi) return xi.compareTo(yi);
-    }
-
-    return 0;
-  }
-
   void cancelGeneration() {
     if (!isGenerating) return;
 
@@ -958,43 +981,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _showThemeDialogInChat() {
-    showDialog(
-      context: context,
-      builder: (_) {
-        return AlertDialog(
-          title: const Text("选择主题"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              ListTile(
-                title: const Text("浅色模式"),
-                onTap: () async {
-                  themeNotifier.value = ThemeMode.light;
-                  await saveThemeMode(ThemeMode.light);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text("深色模式"),
-                onTap: () async {
-                  themeNotifier.value = ThemeMode.dark;
-                  await saveThemeMode(ThemeMode.dark);
-                  Navigator.pop(context);
-                },
-              ),
-              ListTile(
-                title: const Text("跟随系统"),
-                onTap: () async {
-                  themeNotifier.value = ThemeMode.system;
-                  await saveThemeMode(ThemeMode.system);
-                  Navigator.pop(context);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
+    showThemeSelectionDialog(context);
   }
 
   Widget buildMessageContent(
@@ -1468,103 +1455,188 @@ class _ChatPageState extends State<ChatPage> {
       builder: (_) {
         return StatefulBuilder(
           builder: (context, setStateDialog) {
-            return AlertDialog(
-              title: const Text("完善资料"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
+            final isDark = Theme.of(context).brightness == Brightness.dark;
+            return Scaffold(
+              backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.white,
+              body: Stack(
                 children: [
-                  GestureDetector(
-                    onTap: () async {
-                      final picker = ImagePicker();
-                      final picked = await picker.pickImage(
-                        source: ImageSource.gallery,
-                      );
-                      if (picked != null) {
-                        setStateDialog(() {
-                          avatarPath = picked.path;
-                        });
-                      }
-                    },
-                    child: CircleAvatar(
-                      radius: 30,
-                      backgroundColor: const Color(0xFF22D3EE),
-                      backgroundImage: avatarPath != null
-                          ? FileImage(File(avatarPath!))
-                          : null,
-                      child: avatarPath == null
-                          ? const Icon(Icons.camera_alt, color: Colors.white)
-                          : null,
+                  // 🌈 背景渐变
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: isDark
+                            ? const [Color(0xFF0B0F1A), Color(0xFF020617)]
+                            : const [Color(0xFFF0F9FF), Color(0xFFE0F2FE)],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      hintText: "输入昵称",
-                      border: OutlineInputBorder(),
+                  // 🌟 装饰光斑
+                  Positioned(
+                    top: -100,
+                    left: -80,
+                    child: Container(
+                      width: 200,
+                      height: 200,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF22D3EE).withOpacity(0.2),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: -120,
+                    right: -80,
+                    child: Container(
+                      width: 240,
+                      height: 240,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF6366F1).withOpacity(0.2),
+                      ),
+                    ),
+                  ),
+                  // 主内容
+                  SafeArea(
+                    child: Center(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Text(
+                              "完善资料",
+                              style: TextStyle(
+                                fontSize: 22,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            GestureDetector(
+                              onTap: () async {
+                                final picker = ImagePicker();
+                                final picked = await picker.pickImage(
+                                  source: ImageSource.gallery,
+                                );
+                                if (picked != null) {
+                                  setStateDialog(() {
+                                    avatarPath = picked.path;
+                                  });
+                                }
+                              },
+                              child: CircleAvatar(
+                                radius: 40,
+                                backgroundColor: const Color(0xFF22D3EE),
+                                backgroundImage: avatarPath != null
+                                    ? FileImage(File(avatarPath!))
+                                    : null,
+                                child: avatarPath == null
+                                    ? const Icon(
+                                        Icons.camera_alt,
+                                        color: Colors.white,
+                                      )
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: nameController,
+                              textAlign: TextAlign.center,
+                              decoration: InputDecoration(
+                                hintText: "输入昵称",
+                                filled: true,
+                                fillColor: isDark
+                                    ? Colors.white.withOpacity(0.05)
+                                    : Colors.white,
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                  borderSide: BorderSide.none,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: TextButton(
+                                    onPressed: () async {
+                                      final user = currentUserNotifier.value;
+                                      if (user == null) return;
+
+                                      final defaultName =
+                                          "用户${user.id.substring(0, 6)}";
+
+                                      await supabase
+                                          .from('user_profiles')
+                                          .upsert({
+                                            'user_id': user.id,
+                                            'name': defaultName,
+                                            'updated_at': DateTime.now()
+                                                .toIso8601String(),
+                                          }, onConflict: 'user_id');
+
+                                      final prefs =
+                                          await SharedPreferences.getInstance();
+                                      await prefs.setBool(
+                                        'profile_done_${user.id}',
+                                        true,
+                                      );
+
+                                      if (!context.mounted) return;
+                                      Navigator.pop(context);
+                                    },
+                                    child: const Text("跳过"),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: ElevatedButton(
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: const Color(0xFF22D3EE),
+                                      foregroundColor: Colors.white,
+                                    ),
+                                    onPressed: () async {
+                                      final user = currentUserNotifier.value;
+                                      if (user == null) return;
+
+                                      String name = nameController.text.trim();
+
+                                      if (name.isEmpty) {
+                                        name = "用户${user.id.substring(0, 6)}";
+                                      }
+
+                                      await supabase
+                                          .from('user_profiles')
+                                          .upsert({
+                                            'user_id': user.id,
+                                            'name': name,
+                                            'updated_at': DateTime.now()
+                                                .toIso8601String(),
+                                          }, onConflict: 'user_id');
+
+                                      final prefs =
+                                          await SharedPreferences.getInstance();
+                                      await prefs.setBool(
+                                        'profile_done_${user.id}',
+                                        true,
+                                      );
+
+                                      if (!context.mounted) return;
+                                      Navigator.pop(context);
+                                    },
+                                    child: const Text("保存"),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
                 ],
               ),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    final user = currentUserNotifier.value;
-                    if (user == null) return;
-
-                    final name = nameController.text.trim();
-                    if (name.isEmpty) {
-                      ScaffoldMessenger.of(
-                        context,
-                      ).showSnackBar(const SnackBar(content: Text("请输入昵称")));
-                      return;
-                    }
-
-                    String? avatarUrl;
-
-                    if (avatarPath != null) {
-                      final file = File(avatarPath!);
-                      final fileName = '${user.id}.png';
-
-                      await supabase.storage
-                          .from('avatars')
-                          .upload(
-                            fileName,
-                            file,
-                            fileOptions: const FileOptions(upsert: true),
-                          );
-
-                      avatarUrl = supabase.storage
-                          .from('avatars')
-                          .getPublicUrl(fileName);
-                    }
-
-                    final current = currentUserNotifier.value;
-                    if (current != null) {
-                      final updated = User.fromJson({
-                        "id": current.id,
-                        "email": current.email,
-                        "aud": "authenticated",
-                        "created_at": current.createdAt,
-                        "app_metadata": <String, dynamic>{},
-                        "user_metadata": {
-                          if (avatarUrl != null && avatarUrl.isNotEmpty)
-                            "avatar_url": avatarUrl,
-                          "name": name,
-                        },
-                      });
-
-                      currentUserNotifier.value = updated;
-                    }
-
-                    if (!context.mounted) return;
-                    Navigator.pop(context);
-                    if (!mounted) return;
-                    setState(() {});
-                  },
-                  child: const Text("保存"),
-                ),
-              ],
             );
           },
         );
@@ -1591,7 +1663,24 @@ class _ChatPageState extends State<ChatPage> {
       });
     }
     await _loadModelPrefs();
-    await checkUpdate();
+    await UpdateService.check(context);
+
+    // ⭐ 在页面稳定后判断是否新用户（唯一正确位置）
+    Future.delayed(const Duration(milliseconds: 400), () async {
+      final user = currentUserNotifier.value;
+      if (user == null || !mounted) return;
+
+      final prefs = await SharedPreferences.getInstance();
+      final shown = prefs.getBool('profile_done_${user.id}') ?? false;
+
+      final profile = await repo.loadProfile(user.id);
+      final isNewUser = (profile?.name == null || profile!.name!.isEmpty);
+
+      if (!shown && isNewUser && mounted && !_profileDialogShown) {
+        _profileDialogShown = true;
+        showProfileSetupDialog();
+      }
+    });
   }
 
   Future<void> _loadModelPrefs() async {
@@ -1630,82 +1719,6 @@ class _ChatPageState extends State<ChatPage> {
     return currentModel;
   }
 
-  Future<void> checkUpdate() async {
-    try {
-      final url = Uri.parse(
-        "https://sunland.dev/update.json?t=${DateTime.now().millisecondsSinceEpoch}",
-      );
-
-      final client = HttpClient();
-      final request = await client.getUrl(url);
-      final response = await request.close();
-
-      if (response.statusCode != 200) {
-        print("❌ 更新接口状态异常: ${response.statusCode}");
-        return;
-      }
-
-      final body = await response.transform(utf8.decoder).join();
-
-      print("📦 更新接口返回: $body");
-
-      if (!body.trim().startsWith("{")) {
-        print("❌ 返回不是JSON");
-        return;
-      }
-
-      final data = jsonDecode(body);
-
-      final latestVersion = data["version"]?.toString();
-      final updateUrl = (data["apk_url"] ?? data["url"])?.toString();
-
-      if (latestVersion == null) {
-        print("❌ version字段缺失");
-        return;
-      }
-
-      const currentVersion = "1.0.8";
-
-      print("📱 当前版本: $currentVersion, 最新版本: $latestVersion");
-
-      if (updateUrl == null) {
-        print("❌ url/apk_url字段缺失");
-        return;
-      }
-
-      if (compareVersion(latestVersion, currentVersion) > 0 && mounted) {
-        showDialog(
-          context: context,
-          barrierDismissible: false,
-          builder: (_) => AlertDialog(
-            title: const Text("发现新版本"),
-            content: Text("当前版本 $currentVersion\n最新版本 $latestVersion"),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text("稍后"),
-              ),
-              TextButton(
-                onPressed: () async {
-                  Navigator.pop(context);
-                  final uri = Uri.parse(updateUrl);
-                  if (await canLaunchUrl(uri)) {
-                    await launchUrl(uri);
-                  } else {
-                    print("❌ 无法打开更新链接");
-                  }
-                },
-                child: const Text("立即更新"),
-              ),
-            ],
-          ),
-        );
-      }
-    } catch (e) {
-      print("❌ 更新检查失败: $e");
-    }
-  }
-
   Future<void> _checkActivation() async {
     final user = currentUserNotifier.value;
     if (user == null) return;
@@ -1732,9 +1745,10 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> sendMessage() async {
     if (isGenerating) return; // prevent concurrent triggers early
+    setState(() => isGenerating = true); // 立即锁定，防止并发
     _cancelRequested = false;
     final generationId = ++_generationSerial;
-    FocusScope.of(context).unfocus();
+    if (mounted) FocusScope.of(context).unfocus();
 
     // ===== 使用次数检查 =====
     final user = currentUserNotifier.value;
@@ -1749,20 +1763,19 @@ class _ChatPageState extends State<ChatPage> {
         return;
       }
       if (count >= freeDailyLimit) {
+        setState(() => isGenerating = false);
         if (mounted) {
           _showLimitSheet();
         }
         return;
       }
     }
-    // 防并发触发（允许重生但防乱点）
-    if (isGenerating && messages.isNotEmpty) return;
     final text = controller.text.trim();
-
     if (text.isEmpty) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("请输入内容")));
+      setState(() => isGenerating = false);
       return;
     }
     final isRegenerate = (text == _lastUserText);
@@ -1774,6 +1787,7 @@ class _ChatPageState extends State<ChatPage> {
           context,
         ).showSnackBar(SnackBar(content: Text(InputModerator.refusalText)));
       }
+      setState(() => isGenerating = false);
       return;
     }
 
@@ -1781,8 +1795,6 @@ class _ChatPageState extends State<ChatPage> {
     _lastUserText = text;
 
     setState(() {
-      isGenerating = true;
-
       if (!isRegenerate) {
         messages.add({"text": text, "isUser": true});
       }
@@ -2083,9 +2095,7 @@ class _ChatPageState extends State<ChatPage> {
     } finally {
       if (mounted) {
         setState(() {
-          isGenerating = false;
-          _cancelRequested = false;
-          // 防止“思考中...”卡住
+          // 防止"思考中..."卡住（先检查，再清零）
           if (_cancelRequested &&
               messages.isNotEmpty &&
               (messages.last["text"] == "思考中..." ||
@@ -2093,6 +2103,8 @@ class _ChatPageState extends State<ChatPage> {
             messages.removeLast();
             messages.add({"text": "请求超时或失败，请重试", "isUser": false});
           }
+          isGenerating = false;
+          _cancelRequested = false;
         });
       }
     }
