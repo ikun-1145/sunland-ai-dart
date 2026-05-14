@@ -324,6 +324,28 @@ class SunlandSessionStore {
     await prefs.remove(_userKey);
   }
 
+  Future<void> clearAll() async {
+    final prefs = await SharedPreferences.getInstance();
+
+    // 1. 清除登录信息
+    await clearSession();
+
+    // 2. 删除所有对话缓存（conversations_ 前缀）
+    final keys = prefs.getKeys();
+    for (final key in keys) {
+      if (key.startsWith('conversations_')) {
+        await prefs.remove(key);
+      }
+    }
+
+    // 3. 删除用户资料缓存（profile 前缀）
+    for (final key in keys) {
+      if (key.startsWith(profileCachePrefix)) {
+        await prefs.remove(key);
+      }
+    }
+  }
+
   Future<List<Conversation>> readConversations(String userId) async {
     final prefs = await SharedPreferences.getInstance();
     final text = prefs.getString('conversations_$userId');

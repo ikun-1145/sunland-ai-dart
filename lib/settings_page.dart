@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -38,6 +39,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _avatarStatus;
   String? _nickname;
   bool _openedInitialActivation = false;
+  String _version = '';
 
   @override
   void initState() {
@@ -50,6 +52,15 @@ class _SettingsPageState extends State<SettingsPage> {
       _user = null;
     }
     _load();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    final info = await PackageInfo.fromPlatform();
+    if (!mounted) return;
+    setState(() {
+      _version = '${info.version} (${info.buildNumber})';
+    });
   }
 
   Future<void> _load() async {
@@ -106,48 +117,125 @@ class _SettingsPageState extends State<SettingsPage> {
     await showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('修改昵称'),
-          content: TextField(
-            controller: controller,
-            maxLength: 20,
-            decoration: const InputDecoration(
-              hintText: '输入新的昵称',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                final newName = controller.text.trim();
-                if (newName.isEmpty) {
-                  _showSnack('昵称不能为空');
-                  return;
-                }
-
-                try {
-                  await _repository.saveNickname(_user!.id, newName);
-
-                  await Supabase.instance.client.auth.updateUser(
-                    UserAttributes(data: {'nickname': newName}),
-                  );
-
-                  if (!mounted) return;
-                  setState(() => _nickname = newName);
-
-                  Navigator.pop(context);
-                  _showSnack('昵称已更新');
-                } catch (e) {
-                  _showSnack('保存失败');
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
+        return StatefulBuilder(
+          builder: (context, setStateDialog) {
+            return Dialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: const [
+                        Icon(Icons.edit, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          '修改昵称',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    TextField(
+                      controller: controller,
+                      maxLength: 20,
+                      autofocus: true,
+                      decoration: InputDecoration(
+                        hintText: '输入新的昵称',
+                        filled: true,
+                        fillColor: Theme.of(context).cardColor,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 12,
+                        ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                          borderSide: BorderSide.none,
+                        ),
+                        suffixIcon: controller.text.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  controller.clear();
+                                  setStateDialog(() {});
+                                },
+                              )
+                            : null,
+                      ),
+                      onChanged: (_) => setStateDialog(() {}),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      '仅支持中英文、数字，最多20字符',
+                      style: TextStyle(fontSize: 12, color: Colors.black45),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () => Navigator.pop(context),
+                            style: OutlinedButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text('取消'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () async {
+                              final newName = controller.text.trim();
+                              final valid = RegExp(
+                                r'^[a-zA-Z0-9\u4e00-\u9fa5_]+$',
+                              );
+                              if (newName.isEmpty) {
+                                _showSnack('昵称不能为空');
+                                return;
+                              }
+                              if (!valid.hasMatch(newName)) {
+                                _showSnack('昵称包含非法字符');
+                                return;
+                              }
+                              try {
+                                await _repository.saveNickname(
+                                  _user!.id,
+                                  newName,
+                                );
+                                if (!mounted) return;
+                                setState(() => _nickname = newName);
+                                await _load();
+                                Navigator.pop(context);
+                                _showSnack('昵称已更新');
+                              } catch (e) {
+                                debugPrint('昵称保存错误: $e');
+                                _showSnack('保存失败');
+                              }
+                            },
+                            style: FilledButton.styleFrom(
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            child: const Text('保存'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
         );
       },
     );
@@ -341,11 +429,7 @@ class _SettingsPageState extends State<SettingsPage> {
                           }
                         },
                   child: submitting
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
+                      ? Image.asset('assets/loading.gif', width: 18, height: 18)
                       : const Text('激活'),
                 ),
               ],
@@ -426,7 +510,7 @@ class _SettingsPageState extends State<SettingsPage> {
       builder: (context) {
         return AlertDialog(
           title: const Text('退出登录？'),
-          content: const Text('将清除本机登录状态；已同步的历史缓存会保留。'),
+          content: const Text('将清除本机登录状态与本地历史记录；重新登录后会从云端同步。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -449,14 +533,18 @@ class _SettingsPageState extends State<SettingsPage> {
 
       // 2. 清除本地登录状态
       await _store.clearSession();
+      // 2.1 清除本地历史记录缓存（退出后不保留本地对话）
+      try {
+        await _store.clearAll(); // 若你的实现中没有该方法，请确保删除本地聊天/缓存数据
+      } catch (_) {}
 
       // 3. 清空全局用户状态
       currentUserNotifier.value = null;
 
       if (!mounted) return;
 
-      // 4. 返回并通知已登出
-      Navigator.pop(context, const SettingsResult(loggedOut: true));
+      // 4. 跳转到登录页（清空返回栈）
+      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
     } catch (e) {
       _showSnack('退出失败，请重试');
     }
@@ -529,7 +617,13 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             SafeArea(
               child: _loading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? Center(
+                      child: Image.asset(
+                        'assets/loading.gif',
+                        width: 32,
+                        height: 32,
+                      ),
+                    )
                   : ListView(
                       padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
                       children: [
@@ -702,7 +796,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         const SizedBox(height: 20),
                         Center(
                           child: Text(
-                            '霜蓝 AI · v1.0.0 beta · 数据安全存储于云端',
+                            '霜蓝 AI · v$_version · 数据安全存储于云端',
                             style: TextStyle(
                               color: isDark ? Colors.white38 : Colors.black38,
                               fontSize: 11,
@@ -779,11 +873,7 @@ class _AvatarHeader extends StatelessWidget {
                 ),
               ),
               if (uploading)
-                const SizedBox(
-                  width: 80,
-                  height: 80,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                ),
+                Image.asset('assets/loading.gif', width: 48, height: 48),
               const Positioned(
                 right: 2,
                 bottom: 2,

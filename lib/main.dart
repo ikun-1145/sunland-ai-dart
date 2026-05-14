@@ -347,6 +347,8 @@ class _LoginPageState extends State<LoginPage>
 
   final emailController = TextEditingController();
   final codeController = TextEditingController();
+  final FocusNode emailFocus = FocusNode();
+  final FocusNode codeFocus = FocusNode();
 
   bool sending = false;
   bool verifying = false;
@@ -440,22 +442,12 @@ class _LoginPageState extends State<LoginPage>
     if (email.isEmpty || code.isEmpty) return;
 
     if (!agreed) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("请先同意用户协议与隐私政策")));
-      return;
-    }
-
-    final token = await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const CaptchaPage()),
-    );
-
-    if (token == null) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("验证失败")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("⚠️ 请先勾选用户协议与隐私政策"),
+          duration: Duration(seconds: 2),
+        ),
+      );
       return;
     }
 
@@ -465,7 +457,7 @@ class _LoginPageState extends State<LoginPage>
       final result = await api.verifyCode(
         email: email,
         code: code,
-        captchaToken: token,
+        captchaToken: '',
       );
 
       _authToken = result.token;
@@ -520,6 +512,8 @@ class _LoginPageState extends State<LoginPage>
     countdownTimer?.cancel();
     emailController.dispose();
     codeController.dispose();
+    emailFocus.dispose();
+    codeFocus.dispose();
     _animController.dispose();
     super.dispose();
   }
@@ -528,6 +522,7 @@ class _LoginPageState extends State<LoginPage>
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.white,
       body: Container(
         decoration: BoxDecoration(
@@ -566,8 +561,13 @@ class _LoginPageState extends State<LoginPage>
               ),
             ),
             Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: SingleChildScrollView(
+                padding: EdgeInsets.fromLTRB(
+                  24,
+                  0,
+                  24,
+                  MediaQuery.of(context).viewInsets.bottom + 24,
+                ),
                 child: FadeTransition(
                   opacity: _fade,
                   child: SlideTransition(
@@ -580,7 +580,7 @@ class _LoginPageState extends State<LoginPage>
                         opacity: 1,
                         duration: const Duration(milliseconds: 500),
                         child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             // --- Header Section ---
                             Column(
@@ -668,87 +668,126 @@ class _LoginPageState extends State<LoginPage>
                                   ),
                                 ],
                               ),
-                              child: ClipRRect(
-                                borderRadius: BorderRadius.circular(18),
-                                child: BackdropFilter(
-                                  filter: ImageFilter.blur(
-                                    sigmaX: 16,
-                                    sigmaY: 16,
-                                  ),
-                                  child: Column(
-                                    children: [
-                                      TextField(
-                                        controller: emailController,
-                                        onChanged: (_) => setState(() {}),
-                                        style: TextStyle(
-                                          color: isDark
-                                              ? Colors.white
-                                              : Colors.black87,
-                                        ),
-                                        decoration: InputDecoration(
-                                          hintText: "邮箱",
-                                          hintStyle: TextStyle(
-                                            color: isDark
-                                                ? Colors.white38
-                                                : Colors.black38,
+                              child: Padding(
+                                padding: const EdgeInsets.all(4),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(18),
+                                  child: BackdropFilter(
+                                    filter: ImageFilter.blur(
+                                      sigmaX: 16,
+                                      sigmaY: 16,
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        AnimatedContainer(
+                                          duration: const Duration(
+                                            milliseconds: 200,
                                           ),
-                                          border: InputBorder.none,
-                                        ),
-                                      ),
-
-                                      Divider(
-                                        color: isDark
-                                            ? Colors.white12
-                                            : Colors.black12,
-                                      ),
-
-                                      Row(
-                                        children: [
-                                          Expanded(
-                                            child: TextField(
-                                              controller: codeController,
-                                              onChanged: (_) => setState(() {}),
-                                              style: TextStyle(
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(
+                                              10,
+                                            ),
+                                            border: Border.all(
+                                              color: emailFocus.hasFocus
+                                                  ? const Color(0xFF22D3EE)
+                                                  : Colors.transparent,
+                                              width: 1.6,
+                                            ),
+                                          ),
+                                          child: TextField(
+                                            focusNode: emailFocus,
+                                            controller: emailController,
+                                            onChanged: (_) => setState(() {}),
+                                            style: TextStyle(
+                                              color: isDark
+                                                  ? Colors.white
+                                                  : Colors.black87,
+                                            ),
+                                            decoration: InputDecoration(
+                                              hintText: "邮箱",
+                                              hintStyle: TextStyle(
                                                 color: isDark
-                                                    ? Colors.white
-                                                    : Colors.black87,
+                                                    ? Colors.white38
+                                                    : Colors.black38,
                                               ),
-                                              decoration: InputDecoration(
-                                                hintText: "验证码",
-                                                hintStyle: TextStyle(
-                                                  color: isDark
-                                                      ? Colors.white38
-                                                      : Colors.black38,
+                                              border: InputBorder.none,
+                                            ),
+                                          ),
+                                        ),
+
+                                        Divider(
+                                          color: isDark
+                                              ? Colors.white12
+                                              : Colors.black12,
+                                        ),
+
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: AnimatedContainer(
+                                                duration: const Duration(
+                                                  milliseconds: 200,
                                                 ),
-                                                border: InputBorder.none,
-                                              ),
-                                            ),
-                                          ),
-                                          TextButton(
-                                            onPressed:
-                                                (sending || countdown > 0)
-                                                ? null
-                                                : sendCode,
-                                            child: Text(
-                                              sending
-                                                  ? "发送中..."
-                                                  : countdown > 0
-                                                  ? "${countdown}s"
-                                                  : "发送",
-                                              style: TextStyle(
-                                                color:
-                                                    (sending || countdown > 0)
-                                                    ? (isDark
+                                                decoration: BoxDecoration(
+                                                  borderRadius:
+                                                      BorderRadius.circular(10),
+                                                  border: Border.all(
+                                                    color: codeFocus.hasFocus
+                                                        ? const Color(
+                                                            0xFF6366F1,
+                                                          )
+                                                        : Colors.transparent,
+                                                    width: 1.6,
+                                                  ),
+                                                ),
+                                                child: TextField(
+                                                  focusNode: codeFocus,
+                                                  controller: codeController,
+                                                  onChanged: (_) =>
+                                                      setState(() {}),
+                                                  style: TextStyle(
+                                                    color: isDark
+                                                        ? Colors.white
+                                                        : Colors.black87,
+                                                  ),
+                                                  decoration: InputDecoration(
+                                                    hintText: "验证码",
+                                                    hintStyle: TextStyle(
+                                                      color: isDark
                                                           ? Colors.white38
-                                                          : Colors.black38)
-                                                    : const Color(0xFF22D3EE),
-                                                fontWeight: FontWeight.w500,
+                                                          : Colors.black38,
+                                                    ),
+                                                    border: InputBorder.none,
+                                                  ),
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
+                                            TextButton(
+                                              onPressed:
+                                                  (sending || countdown > 0)
+                                                  ? null
+                                                  : sendCode,
+                                              child: Text(
+                                                sending
+                                                    ? "发送中..."
+                                                    : countdown > 0
+                                                    ? "${countdown}s"
+                                                    : "发送",
+                                                style: TextStyle(
+                                                  color:
+                                                      (sending || countdown > 0)
+                                                      ? (isDark
+                                                            ? Colors.white38
+                                                            : Colors.black38)
+                                                      : const Color(0xFF22D3EE),
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               ),
@@ -757,9 +796,15 @@ class _LoginPageState extends State<LoginPage>
                             const SizedBox(height: 24),
 
                             // --- 登录按钮增强（渐变） ---
-                            AnimatedScale(
-                              scale: canLogin ? 1 : 0.97,
-                              duration: const Duration(milliseconds: 120),
+                            AnimatedBuilder(
+                              animation: _animController,
+                              builder: (_, child) {
+                                final scale = 1 + (0.03 * (1 - _fade.value));
+                                return Transform.scale(
+                                  scale: canLogin ? scale : 0.97,
+                                  child: child,
+                                );
+                              },
                               child: Container(
                                 width: double.infinity,
                                 height: 48,
@@ -773,29 +818,37 @@ class _LoginPageState extends State<LoginPage>
                                     end: Alignment.bottomRight,
                                   ),
                                   borderRadius: BorderRadius.circular(12),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(
+                                        0xFF22D3EE,
+                                      ).withOpacity(0.4),
+                                      blurRadius: 18,
+                                      spreadRadius: 1,
+                                    ),
+                                  ],
                                 ),
                                 child: Material(
                                   color: Colors.transparent,
                                   borderRadius: BorderRadius.circular(12),
                                   child: InkWell(
                                     borderRadius: BorderRadius.circular(12),
+                                    splashColor: Colors.white.withOpacity(0.25),
                                     onTap: canLogin ? login : null,
                                     child: Center(
                                       child: verifying
-                                          ? const SizedBox(
-                                              width: 18,
-                                              height: 18,
-                                              child: CircularProgressIndicator(
-                                                strokeWidth: 2,
-                                                color: Colors.white,
-                                              ),
+                                          ? Image.asset(
+                                              'assets/loading.gif',
+                                              width: 22,
+                                              height: 22,
                                             )
-                                          : Text(
+                                          : const Text(
                                               "登录",
                                               style: TextStyle(
-                                                color: canLogin
-                                                    ? Colors.white
-                                                    : Colors.white54,
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: 1,
+                                                color: Colors.white,
                                               ),
                                             ),
                                     ),
@@ -1745,6 +1798,19 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> sendMessage() async {
     if (isGenerating) return; // prevent concurrent triggers early
+    // ⭐ 优先拦截 Pro 权限（避免被当成免费额度用尽）
+    if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("⚠️ Pro 功能需要激活后才能使用"),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      setState(() => isGenerating = false);
+      return;
+    }
     setState(() => isGenerating = true); // 立即锁定，防止并发
     _cancelRequested = false;
     final generationId = ++_generationSerial;
