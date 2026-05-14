@@ -837,10 +837,29 @@ class _LoginPageState extends State<LoginPage>
                                     onTap: canLogin ? login : null,
                                     child: Center(
                                       child: verifying
-                                          ? Image.asset(
-                                              'assets/loading.gif',
-                                              width: 22,
-                                              height: 22,
+                                          ? Column(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                const SizedBox(
+                                                  width: 20,
+                                                  height: 20,
+                                                  child: CircularProgressIndicator(
+                                                    strokeWidth: 2,
+                                                    valueColor:
+                                                        AlwaysStoppedAnimation<
+                                                          Color
+                                                        >(Colors.white),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 6),
+                                                const Text(
+                                                  "加载中...",
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    color: Colors.white,
+                                                  ),
+                                                ),
+                                              ],
                                             )
                                           : const Text(
                                               "登录",
@@ -1095,17 +1114,20 @@ class _ChatPageState extends State<ChatPage> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(
-                    isDeep
-                        ? const Color(0xFF22D3EE)
-                        : (isDark ? Colors.white70 : Colors.black54),
-                  ),
-                ),
+              TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.9, end: 1.1),
+                duration: const Duration(milliseconds: 900),
+                curve: Curves.easeInOut,
+                builder: (context, value, child) {
+                  return Transform.scale(
+                    scale: value,
+                    child: Opacity(opacity: 0.7 + (value - 0.9), child: child),
+                  );
+                },
+                onEnd: () {
+                  if (mounted) setState(() {});
+                },
+                child: Image.asset('assets/ailogo.png', width: 22, height: 22),
               ),
               const SizedBox(width: 8),
               TweenAnimationBuilder<int>(
@@ -1114,7 +1136,7 @@ class _ChatPageState extends State<ChatPage> {
                 builder: (context, value, child) {
                   final dots = '.' * value;
                   return Text(
-                    isDeep ? "深度思考$dots" : "思考$dots",
+                    "${isDeep ? "深度思考$dots" : "思考$dots"} 加载中...",
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: isDeep ? FontWeight.w500 : FontWeight.normal,
@@ -1125,7 +1147,6 @@ class _ChatPageState extends State<ChatPage> {
                   );
                 },
                 onEnd: () {
-                  // trigger rebuild for looping animation
                   if (mounted) setState(() {});
                 },
               ),

@@ -410,8 +410,9 @@ class SunlandAuthApi {
   const SunlandAuthApi({http.Client? client}) : _client = client;
 
   final http.Client? _client;
+  static http.Client? _cachedClient;
 
-  http.Client get client => _client ?? http.Client();
+  http.Client get client => _client ?? (_cachedClient ??= http.Client());
 
   Future<void> requestCode(String email, {required String captchaToken}) async {
     final response = await client.post(
@@ -885,6 +886,10 @@ class SupabaseAiRepository {
           .select();
 
       if (updated.isNotEmpty) {
+        final record = updated[0];
+        if ((record['used_by'] ?? '') != userId) {
+          return ActivationResult.raceLost;
+        }
         await _client.from('user_profiles').upsert({
           'user_id': userId,
           'pro': true,
@@ -941,9 +946,13 @@ bool isJwtExpired(String token, {Duration skew = Duration.zero}) {
     if (decoded is! Map) return true;
     final exp = decoded['exp'];
     final seconds = exp is int ? exp : int.tryParse(exp?.toString() ?? '');
-    if (seconds == null) return false;
-    final expiresAt = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
-    return expiresAt.isBefore(DateTime.now().add(skew));
+    if (seconds == null || seconds < 0) return true;
+    try {
+      final expiresAt = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
+      return expiresAt.isBefore(DateTime.now().add(skew));
+    } catch (_) {
+      return true;
+    }
   } catch (_) {
     return true;
   }
