@@ -582,9 +582,11 @@ class SunlandApiClient {
         }
 
         if (line == '[DONE]') {
-          // 如果只有 reasoning（没有 content），也要补发一次
-          final finalText = textBuffer.toString();
-          if (finalText.isEmpty && reasoning != null && reasoning.isNotEmpty) {
+          // 确保最后一个chunk被发送
+          final finalText = textBuffer.toString().trim();
+
+          // 如果有reasoning或content，始终发送一次完整响应
+          if (reasoning != null && reasoning.isNotEmpty) {
             yield AiResponse(content: finalText, reasoning: reasoning);
           } else if (finalText.isNotEmpty) {
             yield AiResponse(content: finalText, reasoning: reasoning);
@@ -643,15 +645,25 @@ class SunlandApiClient {
     if (userMessage.trim().length < 3) return null;
     final prompt =
         '请根据下面的对话生成一个简短标题（不超过12个字，不要标点结尾）：\n用户：$userMessage\n助手：$aiMessage';
-    final data = await _post({
-      'messages': [
-        {'role': 'system', 'content': '你是一个标题生成器，只返回标题本身。'},
-        {'role': 'user', 'content': prompt},
-      ],
-    });
-    final title = _parseAiResponse(data).content.trim();
-    if (title.isEmpty) return null;
-    return title.length > 12 ? '${title.substring(0, 12)}…' : title;
+
+    try {
+      String lastContent = '';
+      await for (final resp in sendChatStream(
+        messages: [
+          const ChatMessage(role: 'system', content: '你是一个标题生成器，只返回标题本身。'),
+          ChatMessage(role: 'user', content: prompt),
+        ],
+        model: 'flash',
+        deep: false,
+      )) {
+        lastContent = resp.content;
+      }
+      final title = lastContent.trim();
+      if (title.isEmpty) return null;
+      return title.length > 12 ? '${title.substring(0, 12)}…' : title;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {

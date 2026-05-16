@@ -99,6 +99,7 @@ class CaptchaPage extends StatefulWidget {
 
 class _CaptchaPageState extends State<CaptchaPage> {
   bool _handled = false;
+  bool _pageLoaded = false;
   late final WebViewController controller;
 
   @override
@@ -110,13 +111,15 @@ class _CaptchaPageState extends State<CaptchaPage> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) => print("Page started: $url"),
-          onPageFinished: (url) => print("Page finished: $url"),
+          onPageFinished: (url) {
+            print("Page finished: $url");
+            setState(() => _pageLoaded = true);
+          },
           onNavigationRequest: (request) {
             print("WebView URL: ${request.url}");
 
-            if (_handled) return NavigationDecision.prevent;
-
             if (request.url.startsWith("sunland://captcha")) {
+              if (_handled) return NavigationDecision.prevent;
               _handled = true;
 
               final uri = Uri.parse(request.url);
@@ -135,7 +138,7 @@ class _CaptchaPageState extends State<CaptchaPage> {
           },
         ),
       )
-      ..loadHtmlString(_captchaHtml, baseUrl: 'https://sunland.dev');
+      ..loadHtmlString(_captchaHtml, baseUrl: 'about:blank');
   }
 
   @override
@@ -153,24 +156,25 @@ class _CaptchaPageState extends State<CaptchaPage> {
           WebViewWidget(controller: controller),
 
           // Loading overlay（页面加载时更高级一点）
-          Positioned.fill(
-            child: Container(
-              color: Colors.black.withOpacity(0.4),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Image.asset('assets/loading.gif', width: 40, height: 40),
-                    const SizedBox(height: 16),
-                    const Text(
-                      "正在进行安全验证...",
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                  ],
+          if (!_pageLoaded)
+            Positioned.fill(
+              child: Container(
+                color: Colors.black.withOpacity(0.4),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Image.asset('assets/loading.gif', width: 40, height: 40),
+                      const SizedBox(height: 16),
+                      const Text(
+                        "正在进行安全验证...",
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

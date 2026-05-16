@@ -18,6 +18,7 @@ const bool debugMode = true;
 
 // ⭐ 全局 token 存储
 String? _authToken;
+Completer<String?>? _tokenRefreshInProgress;
 final SunlandSessionStore _sessionStore = SunlandSessionStore();
 
 User _buildSupabaseUser(SunlandUser user) {
@@ -44,16 +45,31 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
   if (token == null || token.isEmpty) return null;
 
   if (isJwtExpired(token, skew: const Duration(seconds: 30))) {
-    final refreshed = await const SunlandAuthApi().refreshToken(token);
-    if (refreshed == null) {
-      await _sessionStore.clearSession();
-      _authToken = null;
-      if (notify) currentUserNotifier.value = null;
-      return null;
+    // 如果已有刷新在进行，等待结果
+    if (_tokenRefreshInProgress != null) {
+      return _tokenRefreshInProgress!.future;
     }
-    token = refreshed.token;
-    await _sessionStore.saveSession(token: token, user: refreshed.user);
-    if (notify) currentUserNotifier.value = _buildSupabaseUser(refreshed.user);
+
+    _tokenRefreshInProgress = Completer<String?>();
+    try {
+      final refreshed = await const SunlandAuthApi().refreshToken(token);
+      if (refreshed == null) {
+        await _sessionStore.clearSession();
+        _authToken = null;
+        if (notify) currentUserNotifier.value = null;
+        _tokenRefreshInProgress!.complete(null);
+        return null;
+      }
+      token = refreshed.token;
+      await _sessionStore.saveSession(token: token, user: refreshed.user);
+      if (notify)
+        currentUserNotifier.value = _buildSupabaseUser(refreshed.user);
+      _authToken = token;
+      _tokenRefreshInProgress!.complete(token);
+      return token;
+    } finally {
+      _tokenRefreshInProgress = null;
+    }
   }
 
   _authToken = token;
@@ -461,9 +477,21 @@ class _LoginPageState extends State<LoginPage>
       );
 
       _authToken = result.token;
-      await _sessionStore.saveSession(token: result.token, user: result.user);
 
-      currentUserNotifier.value = _buildSupabaseUser(result.user);
+      // ✅ 分开处理，任何一个失败都回滚
+      try {
+        await _sessionStore.saveSession(token: result.token, user: result.user);
+      } catch (e) {
+        debugPrint('Session save failed: $e');
+        _authToken = null;
+        throw Exception('登录数据保存失败，请重试');
+      }
+
+      // ✅ 只有存储成功才更新 UI
+      if (mounted) {
+        currentUserNotifier.value = _buildSupabaseUser(result.user);
+      }
+
       // ⭐ 自动创建 profile（关键）
       final repo = SupabaseAiRepository();
       await repo.ensureProfile(result.user.id);
@@ -1037,19 +1065,23 @@ class _ChatPageState extends State<ChatPage> {
   void cancelGeneration() {
     if (!isGenerating) return;
 
+    // ✅ 直接取消stream，防止幽灵请求
+    _currentStreamSubscription?.cancel();
+    _currentStreamSubscription = null;
+
     _cancelRequested = true;
     _generationSerial++;
 
     setState(() {
       isGenerating = false;
+      // 👇 防止残留“思考中...”
+      if (messages.isNotEmpty &&
+          (messages.last["text"] == "思考中..." ||
+              messages.last["text"] == "深度思考中...")) {
+        messages.removeLast();
+      }
+      messages.add({"text": "已停止生成", "isUser": false});
     });
-
-    // 👇 防止残留“思考中...”
-    if (messages.isNotEmpty &&
-        (messages.last["text"] == "思考中..." ||
-            messages.last["text"] == "深度思考中...")) {
-      messages.removeLast();
-    }
   }
 
   void _showThemeDialogInChat() {
@@ -1306,6 +1338,7 @@ class _ChatPageState extends State<ChatPage> {
   bool isGenerating = false;
   bool _cancelRequested = false;
   int _generationSerial = 0;
+  StreamSubscription<AiResponse>? _currentStreamSubscription;
   List<String> pickedImages = [];
   bool isUploadingAvatar = false;
 
@@ -1388,10 +1421,14 @@ class _ChatPageState extends State<ChatPage> {
   void rememberLocalMessages() {
     final id = currentConversationId;
     if (id == null) return;
-    localConversationMessages[id] = messages
+    // ✅ 限制单对话消息数，防止无限增长
+    final limited = messages.length > 100
+        ? messages.sublist(messages.length - 100)
+        : messages;
+    localConversationMessages[id] = limited
         .map((message) => Map<String, dynamic>.from(message))
         .toList();
-    // 限制缓存数量，防止内存增长
+    // 限制缓存对话数量，防止内存增长
     if (localConversationMessages.length > 20) {
       localConversationMessages.remove(localConversationMessages.keys.first);
     }
@@ -1449,43 +1486,52 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       final models = _buildConversationModels();
-      await store.saveConversations(user.id, models);
 
+      // ✅ 改为基于时间戳的CRDT合并
       final existing = await supabase
           .from('conversations')
           .select('data')
           .eq('user_id', user.id)
           .maybeSingle();
-      final preserved = <Map<String, dynamic>>[];
-      final oldRows = existing?['data'];
-      if (oldRows is List) {
-        preserved.addAll(
-          oldRows
-              .whereType<Map>()
-              .where((item) {
-                return item['id'] == profileMetaId || item['type'] == 'profile';
-              })
-              .map(
-                (item) => Map<String, dynamic>.from(
-                  item.map((key, value) => MapEntry(key.toString(), value)),
-                ),
-              ),
-        );
+
+      final merged = <String, Map<String, dynamic>>{};
+
+      // 先加载云端数据
+      if (existing?['data'] is List) {
+        for (final item in existing!['data'] as List) {
+          if (item is Map && item['id'] != null) {
+            merged[item['id'].toString()] = Map<String, dynamic>.from(
+              item.map((k, v) => MapEntry(k.toString(), v)),
+            );
+          }
+        }
       }
 
-      final dataList = [
-        ...models.map((item) {
-          final json = item.toJson();
-          json['updatedAt'] = DateTime.now().millisecondsSinceEpoch;
-          return json;
-        }),
-        ...preserved,
-      ];
+      // 再用本地数据（只有时间戳更新的才覆盖）
+      for (final model in models) {
+        final cloudVersion = merged[model.id];
+        if (cloudVersion == null ||
+            model.updatedAt > (cloudVersion['updatedAt'] as int? ?? 0)) {
+          merged[model.id] = {
+            'id': model.id,
+            'title': model.title,
+            'history': model.history.map((m) => m.toJson()).toList(),
+            'updatedAt': DateTime.now().millisecondsSinceEpoch,
+          };
+        }
+      }
 
+      // ✅ 保存合并后的结果
       await supabase.from('conversations').upsert({
         'user_id': user.id,
-        'data': dataList,
+        'data': merged.values.toList(),
       }, onConflict: 'user_id');
+
+      // 同步本地缓存
+      final mergedModels =
+          merged.values.map((json) => Conversation.fromJson(json)).toList()
+            ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+      await store.saveConversations(user.id, mergedModels);
     } catch (e) {
       debugPrint('_saveToCloud error: $e');
     }
@@ -1799,13 +1845,10 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       final activated = await repo.isActivated(user.id);
-      final count = activated ? 0 : await repo.usageCount(user.id);
       if (mounted) {
         setState(() {
           isActivated = activated;
-          _remainingCount = activated
-              ? freeDailyLimit
-              : (freeDailyLimit - count).clamp(0, freeDailyLimit).toInt();
+          _remainingCount = freeDailyLimit;
           if (!activated) {
             currentModel = 'deepseek-v4-flash';
             useDeep = false;
@@ -1819,6 +1862,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> sendMessage() async {
     if (isGenerating) return; // prevent concurrent triggers early
+    if (_cancelRequested) return;
     // ⭐ 优先拦截 Pro 权限（避免被当成免费额度用尽）
     if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
       if (mounted) {
@@ -1837,26 +1881,21 @@ class _ChatPageState extends State<ChatPage> {
     final generationId = ++_generationSerial;
     if (mounted) FocusScope.of(context).unfocus();
 
-    // ===== 使用次数检查 =====
-    final user = currentUserNotifier.value;
-    if (user != null && !isActivated) {
-      int count;
-      try {
-        count = await repo
-            .usageCount(user.id)
-            .timeout(const Duration(seconds: 5));
-      } catch (e) {
-        setState(() => isGenerating = false);
-        return;
+    // ✅ 新增：免费用户额度检查
+    if (!isActivated && _remainingCount <= 0) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("今日免费次数已用完，请升级到Pro或明天再试"),
+            duration: Duration(seconds: 3),
+          ),
+        );
       }
-      if (count >= freeDailyLimit) {
-        setState(() => isGenerating = false);
-        if (mounted) {
-          _showLimitSheet();
-        }
-        return;
-      }
+      setState(() => isGenerating = false);
+      return;
     }
+
+    final user = currentUserNotifier.value;
     final text = controller.text.trim();
     if (text.isEmpty) {
       ScaffoldMessenger.of(
@@ -2018,7 +2057,18 @@ class _ChatPageState extends State<ChatPage> {
           ocrText = await extractTextFromImages(
             pickedImages,
           ).timeout(const Duration(seconds: 12));
-        } catch (_) {
+        } on TimeoutException {
+          ocrText = "用户发送了${pickedImages.length}张图片（OCR 识别超时，后端请根据上下文推断）";
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("图片识别超时，将以文字描述发送"),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        } catch (e) {
+          debugPrint('OCR error: $e');
           ocrText = "用户发送了${pickedImages.length}张图片（OCR 识别失败，后端请根据上下文推断）";
         }
       }
@@ -2038,28 +2088,62 @@ class _ChatPageState extends State<ChatPage> {
         effectiveImages.addAll(pickedImages);
       }
 
-      await for (final chunk
-          in sendSmartChatStream(
-            client: apiClient,
-            rawMessages: messages,
-            pickedImages: effectiveImages,
-            model: requestModel,
-            deep: isActivated ? useDeep : false,
-          ).timeout(
-            const Duration(seconds: 30),
-            onTimeout: (sink) {
-              streamTimedOut = true;
-              sink.close();
-            },
-          )) {
-        if (_cancelRequested || generationId != _generationSerial) break;
+      // ====== Streaming with retry wrapper ======
+      Future<void> runStream() {
+        final completer = Completer<void>();
+        _currentStreamSubscription =
+            sendSmartChatStream(
+                  client: apiClient,
+                  rawMessages: messages,
+                  pickedImages: effectiveImages,
+                  model: requestModel,
+                  deep: isActivated ? useDeep : false,
+                )
+                .timeout(
+                  const Duration(seconds: 30),
+                  onTimeout: (sink) {
+                    streamTimedOut = true;
+                    sink.close();
+                  },
+                )
+                .listen(
+                  (chunk) {
+                    if (_cancelRequested || generationId != _generationSerial) {
+                      _currentStreamSubscription?.cancel();
+                      _currentStreamSubscription = null;
+                      if (!completer.isCompleted) completer.complete();
+                      return;
+                    }
 
-        responseContent = chunk.content;
-        if (useDeep && chunk.reasoning != null && chunk.reasoning!.isNotEmpty) {
-          responseReasoning = chunk.reasoning!;
-        }
-        flushStreamingMessage();
-        scrollToBottom();
+                    responseContent = chunk.content;
+                    if (useDeep &&
+                        chunk.reasoning != null &&
+                        chunk.reasoning!.isNotEmpty) {
+                      responseReasoning = chunk.reasoning!;
+                    }
+                    flushStreamingMessage();
+                    scrollToBottom();
+                  },
+                  onError: (e) {
+                    _currentStreamSubscription = null;
+                    if (!completer.isCompleted) completer.completeError(e);
+                  },
+                  onDone: () {
+                    _currentStreamSubscription = null;
+                    if (!completer.isCompleted) completer.complete();
+                  },
+                  cancelOnError: false,
+                );
+        return completer.future;
+      }
+
+      try {
+        await runStream();
+      } catch (_) {
+        // retry once
+        if (_cancelRequested || generationId != _generationSerial) return;
+        await Future.delayed(const Duration(milliseconds: 800));
+        await runStream();
       }
 
       streamActive = false;
@@ -2076,18 +2160,6 @@ class _ChatPageState extends State<ChatPage> {
       // ⭐ 图片发送完成后安全清空
       if (pickedImages.isNotEmpty) {
         setState(() => pickedImages.clear());
-      }
-
-      if (user != null && !isActivated) {
-        await repo.incrementUsage(user.id);
-        final count = await repo.usageCount(user.id);
-        if (mounted) {
-          setState(() {
-            _remainingCount = (freeDailyLimit - count)
-                .clamp(0, freeDailyLimit)
-                .toInt();
-          });
-        }
       }
 
       final activeIndex = conversations.indexWhere(
@@ -2154,7 +2226,16 @@ class _ChatPageState extends State<ChatPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text("错误: $e"), duration: Duration(seconds: 10)),
+          SnackBar(
+            content: Text(
+              e.toString().contains("timeout")
+                  ? "请求超时了，稍后再试一下 ⏳"
+                  : e.toString().contains("SocketException")
+                  ? "网络好像断了，检查一下连接 🌐"
+                  : "请求失败了，试试重新发送",
+            ),
+            duration: const Duration(seconds: 4),
+          ),
         );
       }
 
@@ -2167,6 +2248,14 @@ class _ChatPageState extends State<ChatPage> {
         );
         // 暂时不自动登出，先看报错
         setState(() => isGenerating = false);
+        return;
+      }
+
+      if (e is UsageLimitException) {
+        setState(() => isGenerating = false);
+        if (mounted) {
+          _showLimitSheet();
+        }
         return;
       }
 
