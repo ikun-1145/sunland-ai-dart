@@ -40,6 +40,7 @@ class _SettingsPageState extends State<SettingsPage> {
   String? _nickname;
   bool _openedInitialActivation = false;
   String _version = '';
+  Timer? _avatarStatusTimer;
 
   @override
   void initState() {
@@ -101,10 +102,11 @@ class _SettingsPageState extends State<SettingsPage> {
         _isActivated = isActivated;
         _usageCount = usage;
         _loading = false;
-        _nickname = nickname ?? _nickname;
+        _nickname = nickname;
       });
       _openInitialActivationIfNeeded();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Settings load error: $e');
       if (!mounted) return;
       setState(() => _loading = false);
       _openInitialActivationIfNeeded();
@@ -212,9 +214,8 @@ class _SettingsPageState extends State<SettingsPage> {
                                   newName,
                                 );
                                 if (!mounted) return;
-                                setState(() => _nickname = newName);
-                                await _load();
                                 Navigator.pop(context);
+                                await _load();
                                 _showSnack('昵称已更新');
                               } catch (e) {
                                 debugPrint('昵称保存错误: $e');
@@ -325,9 +326,16 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) setState(() => _uploadingAvatar = false);
     }
 
-    Future<void>.delayed(const Duration(seconds: 2), () {
+    _avatarStatusTimer?.cancel();
+    _avatarStatusTimer = Timer(const Duration(seconds: 2), () {
       if (mounted) setState(() => _avatarStatus = null);
     });
+  }
+
+  @override
+  void dispose() {
+    _avatarStatusTimer?.cancel();
+    super.dispose();
   }
 
   User _userFromSunland(SunlandUser user) {
@@ -429,7 +437,16 @@ class _SettingsPageState extends State<SettingsPage> {
                           }
                         },
                   child: submitting
-                      ? Image.asset('assets/loading.gif', width: 18, height: 18)
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Colors.white,
+                            ),
+                          ),
+                        )
                       : const Text('激活'),
                 ),
               ],

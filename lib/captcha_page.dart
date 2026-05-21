@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 const String _captchaHtml = '''
 <!DOCTYPE html>
@@ -98,6 +99,15 @@ class CaptchaPage extends StatefulWidget {
 }
 
 class _CaptchaPageState extends State<CaptchaPage> {
+  Future<void> _openExternalCaptcha() async {
+    final url = Uri.parse(
+      "https://challenges.cloudflare.com/turnstile/v0/demo",
+    );
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
   bool _handled = false;
   bool _pageLoaded = false;
   late final WebViewController controller;
@@ -108,15 +118,28 @@ class _CaptchaPageState extends State<CaptchaPage> {
 
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setUserAgent(
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
+      )
+      ..setOnConsoleMessage((JavaScriptConsoleMessage message) {
+        debugPrint("JS Console [${message.level}]: ${message.message}");
+      })
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (url) => print("Page started: $url"),
+          onPageStarted: (url) => debugPrint("Page started: $url"),
           onPageFinished: (url) {
-            print("Page finished: $url");
-            setState(() => _pageLoaded = true);
+            debugPrint("Page finished: $url");
+            if (mounted) {
+              setState(() => _pageLoaded = true);
+            }
+          },
+          onWebResourceError: (error) {
+            debugPrint(
+              'WebView error ${error.errorCode}: ${error.description}',
+            );
           },
           onNavigationRequest: (request) {
-            print("WebView URL: ${request.url}");
+            debugPrint("WebView URL: ${request.url}");
 
             if (request.url.startsWith("sunland://captcha")) {
               if (_handled) return NavigationDecision.prevent;
@@ -125,9 +148,7 @@ class _CaptchaPageState extends State<CaptchaPage> {
               final uri = Uri.parse(request.url);
               final token = uri.queryParameters['token'];
 
-              print("Captcha token received: $token");
-
-              controller.loadRequest(Uri.parse("about:blank"));
+              debugPrint("Captcha token received: $token");
 
               if (mounted) Navigator.pop(context, token);
 
@@ -138,7 +159,13 @@ class _CaptchaPageState extends State<CaptchaPage> {
           },
         ),
       )
-      ..loadHtmlString(_captchaHtml, baseUrl: 'about:blank');
+      ..loadHtmlString(_captchaHtml, baseUrl: 'https://sunland.dev');
+  }
+
+  @override
+  void dispose() {
+    controller.clearCache();
+    super.dispose();
   }
 
   @override
@@ -164,8 +191,8 @@ class _CaptchaPageState extends State<CaptchaPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Image.asset('assets/loading.gif', width: 40, height: 40),
-                      const SizedBox(height: 16),
+                      Image.asset('assets/loading.gif', width: 80, height: 80),
+                      const SizedBox(height: 20),
                       const Text(
                         "正在进行安全验证...",
                         style: TextStyle(color: Colors.white70, fontSize: 14),
@@ -175,6 +202,21 @@ class _CaptchaPageState extends State<CaptchaPage> {
                 ),
               ),
             ),
+
+          Positioned(
+            bottom: 40,
+            left: 0,
+            right: 0,
+            child: Center(
+              child: TextButton(
+                onPressed: _openExternalCaptcha,
+                child: const Text(
+                  "验证加载失败？点此在浏览器打开",
+                  style: TextStyle(color: Colors.white54),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );

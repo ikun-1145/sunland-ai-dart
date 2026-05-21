@@ -299,7 +299,8 @@ class SunlandSessionStore {
           decoded.map((k, v) => MapEntry(k.toString(), v)),
         ),
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Read user error: $e');
       return null;
     }
   }
@@ -363,7 +364,8 @@ class SunlandSessionStore {
             ),
           )
           .toList();
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Read conversations error: $e');
       return [];
     }
   }
@@ -392,7 +394,8 @@ class SunlandSessionStore {
           decoded.map((k, v) => MapEntry(k.toString(), v)),
         ),
       );
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Read profile error: $e');
       return null;
     }
   }
@@ -413,6 +416,12 @@ class SunlandAuthApi {
   static http.Client? _cachedClient;
 
   http.Client get client => _client ?? (_cachedClient ??= http.Client());
+
+  void close() {
+    _client?.close();
+    _cachedClient?.close();
+    _cachedClient = null;
+  }
 
   Future<void> requestCode(String email, {required String captchaToken}) async {
     final response = await client.post(
@@ -502,13 +511,20 @@ class SunlandAuthApi {
 }
 
 class SunlandApiClient {
-  const SunlandApiClient({required this.tokenProvider, http.Client? client})
+  SunlandApiClient({required this.tokenProvider, http.Client? client})
     : _client = client;
 
   final Future<String?> Function() tokenProvider;
   final http.Client? _client;
+  static http.Client? _cachedClient;
 
-  http.Client get client => _client ?? http.Client();
+  http.Client get client => _client ?? (_cachedClient ??= http.Client());
+
+  void close() {
+    _client?.close();
+    _cachedClient?.close();
+    _cachedClient = null;
+  }
 
   Future<AiResponse> sendChat({
     required List<ChatMessage> messages,
@@ -570,7 +586,8 @@ class SunlandApiClient {
 
       // 按行切分（兼容 SSE / JSONL）
       final lines = buffer.split(RegExp(r'\r?\n'));
-      buffer = lines.removeLast(); // 保留未完整的一行，避免截断 JSON
+      buffer = lines.isNotEmpty ? lines.removeLast() : '';
+      if (lines.isEmpty) continue;
 
       for (var line in lines) {
         line = line.trim();
@@ -597,7 +614,8 @@ class SunlandApiClient {
         Map<String, dynamic>? json;
         try {
           json = _tryDecode(line);
-        } catch (_) {
+        } catch (e) {
+          debugPrint('JSON decode error: $e');
           buffer = line + buffer;
           continue;
         }
@@ -661,7 +679,8 @@ class SunlandApiClient {
       final title = lastContent.trim();
       if (title.isEmpty) return null;
       return title.length > 12 ? '${title.substring(0, 12)}…' : title;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Generate title error: $e');
       return null;
     }
   }
@@ -943,6 +962,7 @@ SunlandUser? userFromJwt(String token) {
     );
     return SunlandUser.fromJson(json);
   } catch (error) {
+    debugPrint('Decode user from JWT error: $error');
     return null;
   }
 }
@@ -962,10 +982,12 @@ bool isJwtExpired(String token, {Duration skew = Duration.zero}) {
     try {
       final expiresAt = DateTime.fromMillisecondsSinceEpoch(seconds * 1000);
       return expiresAt.isBefore(DateTime.now().add(skew));
-    } catch (_) {
+    } catch (e) {
+      debugPrint('JWT expiration parse error: $e');
       return true;
     }
-  } catch (_) {
+  } catch (e) {
+    debugPrint('JWT validation error: $e');
     return true;
   }
 }
@@ -1140,38 +1162,30 @@ Stream<AiResponse> sendSmartChatStream({
   return client.sendChatStream(messages: history, model: model, deep: deep);
 }
 
-// 全局 OCR 实例（懒加载，避免重复创建，可回收）
-TextRecognizer? __textRecognizer;
-TextRecognizer get _textRecognizer {
-  __textRecognizer ??= TextRecognizer(script: TextRecognitionScript.chinese);
-  return __textRecognizer!;
-}
-
-/// 释放 TextRecognizer 占用的原生资源，建议在应用退出时调用
-void disposeTextRecognizer() {
-  __textRecognizer?.close();
-  __textRecognizer = null;
-}
-
 // ====== 新增：本地OCR提取 ======
 Future<String> extractTextFromImages(List<String> imagePaths) async {
   final buffer = StringBuffer();
+  final recognizer = TextRecognizer(script: TextRecognitionScript.chinese);
 
-  for (final path in imagePaths) {
-    try {
+  try {
+    for (final path in imagePaths) {
       final inputImage = InputImage.fromFilePath(path);
-      final recognizedText = await _textRecognizer.processImage(inputImage);
+      try {
+        final recognizedText = await recognizer.processImage(inputImage);
 
-      final text = recognizedText.text.trim();
-      if (text.isNotEmpty) {
-        final limited = text.length > 1000 ? text.substring(0, 1000) : text;
-        buffer.writeln('【图片识别内容】');
-        buffer.writeln(limited);
-        buffer.writeln();
+        final text = recognizedText.text.trim();
+        if (text.isNotEmpty) {
+          final limited = text.length > 1000 ? text.substring(0, 1000) : text;
+          buffer.writeln('【图片识别内容】');
+          buffer.writeln(limited);
+          buffer.writeln();
+        }
+      } catch (e) {
+        debugPrint('OCR error on $path: $e');
       }
-    } catch (_) {
-      // 忽略单张图片错误
     }
+  } finally {
+    await recognizer.close();
   }
 
   return buffer.toString().trim();

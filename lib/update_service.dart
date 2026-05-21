@@ -193,33 +193,43 @@ class UpdateService {
 
     double progress = 0;
     bool done = false;
+    bool dialogOpen = true;
 
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setState) {
-          // 使用闭包更新 UI
           void update() {
-            if (dialogContext.mounted) {
+            if (dialogOpen && dialogContext.mounted) {
               setState(() {});
             }
           }
 
-          // 将更新函数挂到外部
           _updateProgress = update;
 
-          return AlertDialog(
-            title: Text(done ? "下载完成" : "正在下载更新"),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                LinearProgressIndicator(value: done ? 1 : progress),
-                const SizedBox(height: 10),
-                Text(
-                  done ? "安装包已准备完成" : "${(progress * 100).toStringAsFixed(0)}%",
-                ),
-              ],
+          return PopScope(
+            canPop: false,
+            onPopInvokedWithResult: (didPop, result) {
+              if (!didPop) {
+                dialogOpen = false;
+                Navigator.of(dialogContext).pop();
+              }
+            },
+            child: AlertDialog(
+              title: Text(done ? "下载完成" : "正在下载更新"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  LinearProgressIndicator(value: done ? 1 : progress),
+                  const SizedBox(height: 10),
+                  Text(
+                    done
+                        ? "安装包已准备完成"
+                        : "${(progress * 100).toStringAsFixed(0)}%",
+                  ),
+                ],
+              ),
             ),
           );
         },
@@ -240,17 +250,21 @@ class UpdateService {
 
       done = true;
 
-      navigator.pop();
-      _updateProgress = null; // 防止泄露
+      if (navigator.canPop()) navigator.pop();
+      dialogOpen = false;
+      _updateProgress = null;
 
       await OpenFile.open(path);
     } catch (e) {
       print("❌ 下载失败: $e");
-      navigator.pop();
-      _updateProgress = null; // 防止泄露
+      if (navigator.canPop()) navigator.pop();
+      dialogOpen = false;
+      _updateProgress = null;
       scaffoldMessenger.showSnackBar(
         const SnackBar(content: Text("下载失败，请检查网络或稍后重试")),
       );
+    } finally {
+      dio.close();
     }
   }
 }

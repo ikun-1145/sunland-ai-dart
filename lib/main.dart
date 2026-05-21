@@ -62,8 +62,9 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
       }
       token = refreshed.token;
       await _sessionStore.saveSession(token: token, user: refreshed.user);
-      if (notify)
+      if (notify) {
         currentUserNotifier.value = _buildSupabaseUser(refreshed.user);
+      }
       _authToken = token;
       _tokenRefreshInProgress!.complete(token);
       return token;
@@ -234,18 +235,43 @@ class _RootPageState extends State<RootPage> {
     final token = await _readFreshAuthToken(notify: false);
     final user = await _sessionStore.readUser();
 
+    SunlandUser? updatedUser = user;
     if (token != null && user != null) {
       _authToken = token;
-      currentUserNotifier.value = _buildSupabaseUser(user);
 
-      final prefs = await SharedPreferences.getInstance();
-      final chosen = prefs.getBool('theme_chosen') ?? false;
+      // ⭐ 每次启动重新拉取头像/用户信息
+      try {
+        final repo = SupabaseAiRepository();
+        final profile = await repo.loadProfile(user.id);
 
-      if (!chosen) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showThemeDialog();
-        });
+        if (profile != null) {
+          final updated = SunlandUser(
+            id: user.id,
+            email: user.email,
+            avatarUrl: profile.avatarUrl ?? user.avatarUrl,
+            avatarPath: user.avatarPath,
+          );
+          updatedUser = updated;
+        }
+      } catch (e) {
+        debugPrint('fetch profile failed: $e');
       }
+
+      if (updatedUser != null) {
+        currentUserNotifier.value = _buildSupabaseUser(updatedUser);
+      }
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final chosen = prefs.getBool('theme_chosen') ?? false;
+
+    // ⭐ 确保 UI 刷新
+    currentUserNotifier.notifyListeners();
+
+    if (!chosen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _showThemeDialog();
+      });
     }
   }
 
@@ -396,11 +422,12 @@ class _LoginPageState extends State<LoginPage>
     }
 
     // ===== 🚨 先做人机验证 =====
-    final token = await Navigator.push(
+    final token = await Navigator.push<String>(
       context,
       MaterialPageRoute(builder: (_) => const CaptchaPage()),
     );
 
+    if (!mounted) return;
     if (token == null) {
       ScaffoldMessenger.of(
         context,
@@ -422,6 +449,7 @@ class _LoginPageState extends State<LoginPage>
 
       FocusScope.of(context).nextFocus();
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text("发送失败: $e")));
@@ -467,13 +495,26 @@ class _LoginPageState extends State<LoginPage>
       return;
     }
 
+    final captchaToken = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (_) => const CaptchaPage()),
+    );
+
+    if (!mounted) return;
+    if (captchaToken == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("验证失败")));
+      return;
+    }
+
     setState(() => verifying = true);
 
     try {
       final result = await api.verifyCode(
         email: email,
         code: code,
-        captchaToken: '',
+        captchaToken: captchaToken,
       );
 
       _authToken = result.token;
@@ -538,6 +579,7 @@ class _LoginPageState extends State<LoginPage>
   @override
   void dispose() {
     countdownTimer?.cancel();
+    api.close();
     emailController.dispose();
     codeController.dispose();
     emailFocus.dispose();
@@ -1031,7 +1073,7 @@ class ChatPage extends StatefulWidget {
 
 class _ChatPageState extends State<ChatPage> {
   // Prevent duplicate profile dialog
-  bool _profileDialogShown = false;
+  final bool _profileDialogShown = false;
   // Normalize messages: combine "reasoning" + next assistant message into one
   List<Map<String, dynamic>> normalizeMessages(
     List<Map<String, dynamic>> msgs,
@@ -1129,7 +1171,6 @@ class _ChatPageState extends State<ChatPage> {
 
     if (msg["text"] == "思考中..." || msg["text"] == "深度思考中...") {
       final isDeep = msg["text"] == "深度思考中...";
-
       return Align(
         alignment: Alignment.centerLeft,
         child: Container(
@@ -1146,36 +1187,63 @@ class _ChatPageState extends State<ChatPage> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // 🌟 呼吸动画 Logo（去掉旋转，只保留呼吸效果）
               TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0.9, end: 1.1),
-                duration: const Duration(milliseconds: 900),
+                tween: Tween(begin: 0.8, end: 1.2),
+                duration: const Duration(milliseconds: 1200),
                 curve: Curves.easeInOut,
                 builder: (context, value, child) {
                   return Transform.scale(
                     scale: value,
-                    child: Opacity(opacity: 0.7 + (value - 0.9), child: child),
+                    child: Opacity(opacity: 0.7 + (value - 0.8), child: child),
                   );
                 },
                 onEnd: () {
                   if (mounted) setState(() {});
                 },
-                child: Image.asset('assets/ailogo.png', width: 22, height: 22),
+                child: Image.asset('assets/ailogo.png', width: 40, height: 40),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 10),
+              // ✨ 动态思考文字（波浪感）
               TweenAnimationBuilder<int>(
                 tween: IntTween(begin: 0, end: 3),
                 duration: const Duration(milliseconds: 900),
                 builder: (context, value, child) {
                   final dots = '.' * value;
-                  return Text(
-                    "${isDeep ? "深度思考$dots" : "思考$dots"} 加载中...",
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: isDeep ? FontWeight.w500 : FontWeight.normal,
-                      color: isDeep
-                          ? const Color(0xFF22D3EE)
-                          : (isDark ? Colors.white70 : Colors.black54),
-                    ),
+                  return Row(
+                    children: [
+                      Text(
+                        isDeep ? "深度思考中" : "思考中",
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: isDeep
+                              ? FontWeight.w500
+                              : FontWeight.normal,
+                          color: isDeep
+                              ? const Color(0xFF22D3EE)
+                              : (isDark ? Colors.white70 : Colors.black54),
+                        ),
+                      ),
+                      AnimatedOpacity(
+                        opacity: value == 0 ? 0.2 : 1,
+                        duration: const Duration(milliseconds: 300),
+                        child: Text(
+                          dots,
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark ? Colors.white70 : Colors.black54,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        "加载中",
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white38 : Colors.black38,
+                        ),
+                      ),
+                    ],
                   );
                 },
                 onEnd: () {
@@ -1565,205 +1633,6 @@ class _ChatPageState extends State<ChatPage> {
     _initData();
   }
 
-  void showProfileSetupDialog() {
-    final nameController = TextEditingController();
-    String? avatarPath;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setStateDialog) {
-            final isDark = Theme.of(context).brightness == Brightness.dark;
-            return Scaffold(
-              backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.white,
-              body: Stack(
-                children: [
-                  // 🌈 背景渐变
-                  Container(
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: isDark
-                            ? const [Color(0xFF0B0F1A), Color(0xFF020617)]
-                            : const [Color(0xFFF0F9FF), Color(0xFFE0F2FE)],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                    ),
-                  ),
-                  // 🌟 装饰光斑
-                  Positioned(
-                    top: -100,
-                    left: -80,
-                    child: Container(
-                      width: 200,
-                      height: 200,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: const Color(0xFF22D3EE).withOpacity(0.2),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    bottom: -120,
-                    right: -80,
-                    child: Container(
-                      width: 240,
-                      height: 240,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: const Color(0xFF6366F1).withOpacity(0.2),
-                      ),
-                    ),
-                  ),
-                  // 主内容
-                  SafeArea(
-                    child: Center(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Text(
-                              "完善资料",
-                              style: TextStyle(
-                                fontSize: 22,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-                            GestureDetector(
-                              onTap: () async {
-                                final picker = ImagePicker();
-                                final picked = await picker.pickImage(
-                                  source: ImageSource.gallery,
-                                );
-                                if (picked != null) {
-                                  setStateDialog(() {
-                                    avatarPath = picked.path;
-                                  });
-                                }
-                              },
-                              child: CircleAvatar(
-                                radius: 40,
-                                backgroundColor: const Color(0xFF22D3EE),
-                                backgroundImage: avatarPath != null
-                                    ? FileImage(File(avatarPath!))
-                                    : null,
-                                child: avatarPath == null
-                                    ? const Icon(
-                                        Icons.camera_alt,
-                                        color: Colors.white,
-                                      )
-                                    : null,
-                              ),
-                            ),
-                            const SizedBox(height: 16),
-                            TextField(
-                              controller: nameController,
-                              textAlign: TextAlign.center,
-                              decoration: InputDecoration(
-                                hintText: "输入昵称",
-                                filled: true,
-                                fillColor: isDark
-                                    ? Colors.white.withOpacity(0.05)
-                                    : Colors.white,
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(12),
-                                  borderSide: BorderSide.none,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 24),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: TextButton(
-                                    onPressed: () async {
-                                      final user = currentUserNotifier.value;
-                                      if (user == null) return;
-
-                                      final defaultName =
-                                          "用户${user.id.substring(0, 6)}";
-
-                                      await supabase
-                                          .from('user_profiles')
-                                          .upsert({
-                                            'user_id': user.id,
-                                            'name': defaultName,
-                                            'updated_at': DateTime.now()
-                                                .toIso8601String(),
-                                          }, onConflict: 'user_id');
-
-                                      final prefs =
-                                          await SharedPreferences.getInstance();
-                                      await prefs.setBool(
-                                        'profile_done_${user.id}',
-                                        true,
-                                      );
-
-                                      if (!context.mounted) return;
-                                      Navigator.pop(context);
-                                    },
-                                    child: const Text("跳过"),
-                                  ),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: const Color(0xFF22D3EE),
-                                      foregroundColor: Colors.white,
-                                    ),
-                                    onPressed: () async {
-                                      final user = currentUserNotifier.value;
-                                      if (user == null) return;
-
-                                      String name = nameController.text.trim();
-
-                                      if (name.isEmpty) {
-                                        name = "用户${user.id.substring(0, 6)}";
-                                      }
-
-                                      await supabase
-                                          .from('user_profiles')
-                                          .upsert({
-                                            'user_id': user.id,
-                                            'name': name,
-                                            'updated_at': DateTime.now()
-                                                .toIso8601String(),
-                                          }, onConflict: 'user_id');
-
-                                      final prefs =
-                                          await SharedPreferences.getInstance();
-                                      await prefs.setBool(
-                                        'profile_done_${user.id}',
-                                        true,
-                                      );
-
-                                      if (!context.mounted) return;
-                                      Navigator.pop(context);
-                                    },
-                                    child: const Text("保存"),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
   Future<void> _initData() async {
     final user = currentUserNotifier.value;
     if (user == null) return;
@@ -1784,23 +1653,7 @@ class _ChatPageState extends State<ChatPage> {
     }
     await _loadModelPrefs();
     await UpdateService.check(context);
-
-    // ⭐ 在页面稳定后判断是否新用户（唯一正确位置）
-    Future.delayed(const Duration(milliseconds: 400), () async {
-      final user = currentUserNotifier.value;
-      if (user == null || !mounted) return;
-
-      final prefs = await SharedPreferences.getInstance();
-      final shown = prefs.getBool('profile_done_${user.id}') ?? false;
-
-      final profile = await repo.loadProfile(user.id);
-      final isNewUser = (profile?.name == null || profile!.name!.isEmpty);
-
-      if (!shown && isNewUser && mounted && !_profileDialogShown) {
-        _profileDialogShown = true;
-        showProfileSetupDialog();
-      }
-    });
+    // (profile setup dialog auto-popup removed)
   }
 
   Future<void> _loadModelPrefs() async {
@@ -2288,6 +2141,8 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    _currentStreamSubscription?.cancel();
+    apiClient.close();
     controller.dispose();
     scrollController.dispose();
     super.dispose();
@@ -2465,129 +2320,6 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  void showUserMenu() {
-    final user = currentUserNotifier.value;
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (_) {
-        final isDark = Theme.of(context).brightness == Brightness.dark;
-
-        return Container(
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF1A1A1A) : Colors.white,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          ),
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-              child: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // 顶部拖拽条
-                    Container(
-                      width: 40,
-                      height: 4,
-                      margin: const EdgeInsets.only(bottom: 12),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.3),
-                        borderRadius: BorderRadius.circular(2),
-                      ),
-                    ),
-
-                    // 用户信息卡片
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: isDark
-                            ? Colors.white.withOpacity(0.05)
-                            : Colors.grey.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 22,
-                            backgroundColor: const Color(0xFF22D3EE),
-                            backgroundImage:
-                                (user?.userMetadata?['avatar_url'] != null)
-                                ? NetworkImage(
-                                    user!.userMetadata!['avatar_url'],
-                                  )
-                                : null,
-                            child: (user?.userMetadata?['avatar_url'] == null)
-                                ? const Icon(Icons.person, color: Colors.white)
-                                : null,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              user?.email ?? "开发模式（免登录）",
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w500,
-                                color: isDark ? Colors.white : Colors.black87,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // 功能按钮（卡片风）
-                    _menuItem(
-                      icon: Icons.refresh,
-                      text: user == null ? "保留本地对话" : "重新加载对话",
-                      onTap: () {
-                        Navigator.pop(context);
-                        if (user != null) loadConversations();
-                      },
-                    ),
-
-                    _menuItem(
-                      icon: Icons.palette,
-                      text: "主题设置",
-                      onTap: () {
-                        Navigator.pop(context);
-                        _showThemeDialogInChat();
-                      },
-                    ),
-                    _menuItem(
-                      icon: Icons.settings,
-                      text: "设置",
-                      onTap: () async {
-                        Navigator.pop(context);
-                        await _openSettings();
-                      },
-                    ),
-
-                    if (user != null)
-                      _menuItem(
-                        icon: Icons.image,
-                        text: "更换头像",
-                        onTap: () async {
-                          Navigator.pop(context);
-                          if (isUploadingAvatar) return;
-                          await pickAndUploadAvatar();
-                        },
-                      ),
-
-                    const SizedBox(height: 8),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
   Future<void> _openSettings({bool openActivation = false}) async {
     final result = await Navigator.push<SettingsResult>(
       context,
@@ -2683,7 +2415,7 @@ class _ChatPageState extends State<ChatPage> {
                         child: const Text("输入激活码"),
                       ),
                     ),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: 14),
                     Expanded(
                       child: FilledButton(
                         onPressed: () {
@@ -2700,46 +2432,6 @@ class _ChatPageState extends State<ChatPage> {
           ),
         );
       },
-    );
-  }
-
-  Widget _menuItem({
-    required IconData icon,
-    required String text,
-    required VoidCallback onTap,
-    Color? color,
-  }) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: isDark ? const Color(0xFF111827) : Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(14),
-          onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            child: Row(
-              children: [
-                Icon(
-                  icon,
-                  color: color ?? (isDark ? Colors.white70 : Colors.black87),
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  text,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: color ?? (isDark ? Colors.white : Colors.black87),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
     );
   }
 
@@ -3167,7 +2859,7 @@ class _ChatPageState extends State<ChatPage> {
                   builder: (_) {
                     final user = currentUserNotifier.value;
                     return GestureDetector(
-                      onTap: showUserMenu,
+                      onTap: _openSettings,
                       child: CircleAvatar(
                         radius: 17,
                         backgroundColor: const Color(0xFF22D3EE),
