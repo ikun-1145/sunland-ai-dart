@@ -35,6 +35,7 @@ class UpdateService {
       final data = jsonDecode(res.body);
 
       final latest = data["version"]?.toString();
+      final latestBuild = int.tryParse(data["build"]?.toString() ?? "0") ?? 0;
       final apkUrl = (data["apk_url"] ?? data["url"])?.toString();
       final force = data["force"] ?? false;
       final desc = data["desc"]?.toString() ?? "";
@@ -47,11 +48,12 @@ class UpdateService {
 
       final packageInfo = await PackageInfo.fromPlatform();
       final current = "${packageInfo.version}+${packageInfo.buildNumber}";
+      final currentBuild = int.tryParse(packageInfo.buildNumber) ?? 0;
 
-      print("📱 当前版本: $current, 最新版本: $latest");
+      print("📱 当前 build: $currentBuild, 最新 build: $latestBuild");
 
       if (Platform.isIOS) {
-        if (appStoreUrl != null && _isNewVersion(current, latest)) {
+        if (appStoreUrl != null && latestBuild > currentBuild) {
           _showIOSDialog(context, appStoreUrl, force, desc);
         }
         return;
@@ -62,7 +64,7 @@ class UpdateService {
         return;
       }
 
-      if (_isNewVersion(current, latest)) {
+      if (latestBuild > currentBuild) {
         _showDialog(context, apkUrl, force, desc);
       }
     } catch (e) {
@@ -124,23 +126,65 @@ class UpdateService {
     showDialog(
       context: context,
       barrierDismissible: !force,
-      builder: (_) => AlertDialog(
-        title: const Text("发现新版本 🚀"),
-        content: Text(desc.isEmpty ? "建议更新以获得更好体验" : desc),
-        actions: [
-          if (!force)
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text("稍后"),
-            ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              _downloadAndInstall(context, url);
-            },
-            child: const Text("立即更新"),
+      builder: (_) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 20,
+                offset: Offset(0, 10),
+              ),
+            ],
           ),
-        ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                "发现新版本 🚀",
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                desc.isEmpty ? "建议更新以获得更好体验" : desc,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, color: Colors.black87),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  if (!force)
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("稍后"),
+                      ),
+                    ),
+                  Expanded(
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _downloadAndInstall(context, url);
+                      },
+                      child: const Text("立即更新"),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
