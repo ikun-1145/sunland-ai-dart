@@ -495,26 +495,13 @@ class _LoginPageState extends State<LoginPage>
       return;
     }
 
-    final captchaToken = await Navigator.push<String>(
-      context,
-      MaterialPageRoute(builder: (_) => const CaptchaPage()),
-    );
-
-    if (!mounted) return;
-    if (captchaToken == null) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text("验证失败")));
-      return;
-    }
-
     setState(() => verifying = true);
 
     try {
       final result = await api.verifyCode(
         email: email,
         code: code,
-        captchaToken: captchaToken,
+        captchaToken: '',
       );
 
       _authToken = result.token;

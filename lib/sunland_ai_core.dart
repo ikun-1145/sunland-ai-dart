@@ -424,11 +424,13 @@ class SunlandAuthApi {
   }
 
   Future<void> requestCode(String email, {required String captchaToken}) async {
-    final response = await client.post(
-      Uri.parse('$sunlandApiBase/send-code'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'cfToken': captchaToken}),
-    );
+    final response = await client
+        .post(
+          Uri.parse('$sunlandApiBase/send-code'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({'email': email, 'cfToken': captchaToken}),
+        )
+        .timeout(const Duration(seconds: 15));
 
     final body = _decodeJson(response.body);
     if (response.statusCode < 200 ||
@@ -443,11 +445,17 @@ class SunlandAuthApi {
     required String code,
     required String captchaToken,
   }) async {
-    final response = await client.post(
-      Uri.parse('$sunlandApiBase/verify-code'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({'email': email, 'code': code, 'cfToken': captchaToken}),
-    );
+    final response = await client
+        .post(
+          Uri.parse('$sunlandApiBase/verify-code'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({
+            'email': email,
+            'code': code,
+            'cfToken': captchaToken,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
 
     final body = _decodeJson(response.body);
     final token = body['token']?.toString();
