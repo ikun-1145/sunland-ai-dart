@@ -10,12 +10,9 @@ exec > >(tee -a $LOG_FILE) 2>&1
 trap 'echo "\n❌ 脚本执行失败，日志如下："; tail -n 50 $LOG_FILE' ERR
 
 # ===== 配置区（按需修改） =====
-PROJECT_DIR="~/Documents/xixi"
+PROJECT_DIR="/Users/liuxize/Documents/xixi"
 UPDATE_FILE="$PROJECT_DIR/update.json"
 APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
-SERVER_USER="your-user"
-SERVER_HOST="your.server.com"
-SERVER_PATH="/path/to/upload/"
 
 file="pubspec.yaml"
 
@@ -87,9 +84,6 @@ cp $APK_PATH $VERSIONED_APK
 
 echo "📦 已生成: $VERSIONED_APK"
 
-# ===== 上传 APK（可选） =====
-echo "☁️ 正在上传 APK..."
-scp $VERSIONED_APK ${SERVER_USER}@${SERVER_HOST}:${SERVER_PATH} || echo "⚠️ 上传失败（可忽略）"
 
 # ===== 可选：GitHub Release（需 gh CLI） =====
 echo "🚀 发布 GitHub Release..."
@@ -97,9 +91,16 @@ echo "🚀 发布 GitHub Release..."
 if ! command -v gh >/dev/null 2>&1; then
   echo "❌ 未安装 gh CLI，请先安装: brew install gh"
 else
-  gh release create v$new_version $VERSIONED_APK \
+  if gh release create v$new_version $VERSIONED_APK \
     --title "v$new_version" \
-    --notes "$notes" || echo "⚠️ GitHub Release 失败"
+    --notes "$notes"; then
+
+    echo "🌐 打开 GitHub Release 页面..."
+    gh release view v$new_version --web
+
+  else
+    echo "⚠️ GitHub Release 失败"
+  fi
 fi
 
 
