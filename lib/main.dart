@@ -1448,6 +1448,7 @@ class _ChatPageState extends State<ChatPage> {
             updatedAt:
                 int.tryParse((convo['updatedAt'] ?? '').toString()) ??
                 DateTime.now().millisecondsSinceEpoch,
+            autoTitle: convo['titleGenerated'] ?? false,
           );
         })
         .where((convo) => convo.id.isNotEmpty)
@@ -1463,6 +1464,7 @@ class _ChatPageState extends State<ChatPage> {
         'id': item.id,
         'title': item.title,
         'updatedAt': item.updatedAt,
+        'titleGenerated': item.autoTitle ?? false,
       });
       localConversationMessages[item.id] = item.history
           .where((message) => !message.isSystem)
@@ -1783,6 +1785,7 @@ class _ChatPageState extends State<ChatPage> {
         'id': newId,
         'title': buildConversationTitle(text),
         'updatedAt': DateTime.now().millisecondsSinceEpoch,
+        'titleGenerated': false,
       });
       localConversationMessages[newId] = [];
     }
@@ -2023,14 +2026,12 @@ class _ChatPageState extends State<ChatPage> {
         if (convoId != null) {
           final index = conversations.indexWhere((c) => c['id'] == convoId);
           if (index != -1) {
-            final currentTitle = conversations[index]['title'] ?? '';
-            final fallbackTitle = buildConversationTitle(text);
-            // 只在默认标题时更新
+            final titleGenerated =
+                conversations[index]['titleGenerated'] ?? false;
             final userMsgCount = messages
                 .where((m) => m["isUser"] == true)
                 .length;
-            if (userMsgCount == 1 &&
-                (currentTitle == '新对话' || currentTitle == fallbackTitle)) {
+            if (userMsgCount == 1 && !titleGenerated) {
               // ⭐ 异步生成标题，不阻塞 UI
               Future(() async {
                 String? aiTitle;
@@ -2050,6 +2051,7 @@ class _ChatPageState extends State<ChatPage> {
                 if (mounted) {
                   setState(() {
                     conversations[index]['title'] = newTitle;
+                    conversations[index]['titleGenerated'] = true;
                   });
                 }
 
