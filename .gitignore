@@ -24,12 +24,10 @@ android/app/build/
 # ===== iOS =====
 ios/Pods/
 ios/.symlinks/
-# temp files
+
+# ===== Temp/Build files =====
 *.tmp
 *.tmp.*
 *.driveupload
 .tmp.driveupload/
-
-# mac
-
-# flutter
+deploy.log
