@@ -25,6 +25,7 @@ dependencies:
   package_info_plus: ^8.0.0
   webview_flutter: ^4.4.2
   app_links: ^7.0.0
+  characters: ^1.4.0
 
 dev_dependencies:
   flutter_test:

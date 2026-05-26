@@ -83,7 +83,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
     try {
       final isActivated = await _repository.isActivated(user.id);
-      final usage = await _repository.usageCount(user.id);
+      final remaining = await _store.readRemainingCount(user.id);
       final cloudProfile = await _repository.loadProfile(user.id);
       final nickname = await _repository.loadNickname(user.id);
       final updatedUser = _user ?? user;
@@ -100,7 +100,7 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() {
         _user = finalUser;
         _isActivated = isActivated;
-        _usageCount = usage;
+        _usageCount = isActivated ? 0 : freeDailyLimit - remaining;
         _loading = false;
         _nickname = nickname;
       });

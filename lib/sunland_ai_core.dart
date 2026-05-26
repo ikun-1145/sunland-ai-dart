@@ -262,10 +262,13 @@ class AuthExpiredException implements Exception {
 }
 
 class UsageLimitException implements Exception {
-  const UsageLimitException();
+  const UsageLimitException({this.message = '今日次数已用完', this.remain = 0});
+
+  final String message;
+  final int remain;
 
   @override
-  String toString() => '今日次数已用完';
+  String toString() => message;
 }
 
 class ApiException implements Exception {
@@ -280,6 +283,8 @@ class ApiException implements Exception {
 class SunlandSessionStore {
   static const String _tokenKey = 'token';
   static const String _userKey = 'user';
+  static const String _usageRemainPrefix = 'usage_remain_';
+  static const String _usageRemainDatePrefix = 'usage_remain_date_';
 
   Future<String?> readToken() async {
     final prefs = await SharedPreferences.getInstance();
@@ -345,6 +350,33 @@ class SunlandSessionStore {
         await prefs.remove(key);
       }
     }
+
+    // 4. 删除本地额度缓存
+    for (final key in keys) {
+      if (key.startsWith(_usageRemainPrefix) ||
+          key.startsWith(_usageRemainDatePrefix)) {
+        await prefs.remove(key);
+      }
+    }
+  }
+
+  Future<int> readRemainingCount(String userId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = _todayDateCN();
+    final dateKey = '$_usageRemainDatePrefix$userId';
+    final countKey = '$_usageRemainPrefix$userId';
+    if (prefs.getString(dateKey) != today) return freeDailyLimit;
+
+    final value = prefs.getInt(countKey);
+    if (value == null) return freeDailyLimit;
+    return value.clamp(0, freeDailyLimit).toInt();
+  }
+
+  Future<void> saveRemainingCount(String userId, int remain) async {
+    final prefs = await SharedPreferences.getInstance();
+    final normalized = remain.clamp(0, freeDailyLimit).toInt();
+    await prefs.setString('$_usageRemainDatePrefix$userId', _todayDateCN());
+    await prefs.setInt('$_usageRemainPrefix$userId', normalized);
   }
 
   Future<List<Conversation>> readConversations(String userId) async {
@@ -492,6 +524,7 @@ class SunlandAuthApi {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer $oldToken',
       },
+      body: jsonEncode(<String, dynamic>{}),
     );
 
     if (response.statusCode < 200 || response.statusCode >= 300) {
@@ -538,14 +571,22 @@ class SunlandApiClient {
     required List<ChatMessage> messages,
     required String model,
     required bool deep,
+    void Function(int remain)? onRemainUpdated,
   }) async {
-    final body = {
-      'messages': messages.map((message) => message.toApiJson()).toList(),
-      'model': model,
-      'deep': deep,
-    };
-    final data = await _post(body);
-    return _parseAiResponse(data);
+    AiResponse? latest;
+    await for (final response in sendChatStream(
+      messages: messages,
+      model: model,
+      deep: deep,
+      onRemainUpdated: onRemainUpdated,
+    )) {
+      latest = response;
+    }
+
+    if (latest == null || latest.content.trim().isEmpty) {
+      throw const ApiException('AI返回空内容');
+    }
+    return latest;
   }
 
   /// 新增：流式聊天 API
@@ -553,6 +594,7 @@ class SunlandApiClient {
     required List<ChatMessage> messages,
     required String model,
     required bool deep,
+    void Function(int remain)? onRemainUpdated,
   }) async* {
     final token = await tokenProvider();
     if (token == null || token.isEmpty) throw const AuthExpiredException();
@@ -579,9 +621,14 @@ class SunlandApiClient {
     }
 
     if (streamed.statusCode == 401) throw const AuthExpiredException();
-    if (streamed.statusCode == 429) throw const UsageLimitException();
     if (streamed.statusCode < 200 || streamed.statusCode >= 300) {
-      throw ApiException('流式请求失败：${streamed.statusCode}');
+      final errorText = await streamed.stream.bytesToString();
+      throw _exceptionForApiError(streamed.statusCode, errorText);
+    }
+
+    final remain = int.tryParse(streamed.headers['x-remain'] ?? '');
+    if (remain != null) {
+      onRemainUpdated?.call(remain);
     }
 
     final decoder = utf8.decoder;
@@ -668,100 +715,11 @@ class SunlandApiClient {
     required String userMessage,
     required String aiMessage,
   }) async {
-    if (userMessage.trim().length < 3) return null;
-    final prompt =
-        '请根据下面的对话生成一个简短标题（不超过12个字，不要标点结尾）：\n用户：$userMessage\n助手：$aiMessage';
+    final title = userMessage.trim().replaceAll('\n', ' ');
+    if (title.length < 3) return null;
 
-    try {
-      String lastContent = '';
-      await for (final resp in sendChatStream(
-        messages: [
-          const ChatMessage(role: 'system', content: '你是一个标题生成器，只返回标题本身。'),
-          ChatMessage(role: 'user', content: prompt),
-        ],
-        model: 'flash',
-        deep: false,
-      )) {
-        lastContent = resp.content;
-      }
-      final title = lastContent.trim();
-      if (title.isEmpty) return null;
-      return title.length > 12 ? '${title.substring(0, 12)}…' : title;
-    } catch (e) {
-      debugPrint('Generate title error: $e');
-      return null;
-    }
-  }
-
-  Future<Map<String, dynamic>> _post(Map<String, dynamic> body) async {
-    final token = await tokenProvider();
-    if (token == null || token.isEmpty) throw const AuthExpiredException();
-
-    int retry = 0;
-
-    while (true) {
-      try {
-        final response = await client
-            .post(
-              Uri.parse('$sunlandApiBase/'),
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $token',
-              },
-              body: jsonEncode(body),
-            )
-            .timeout(const Duration(seconds: 45));
-
-        if (response.statusCode == 401) {
-          throw const AuthExpiredException();
-        }
-        if (response.statusCode == 429) throw const UsageLimitException();
-
-        final decoded = _decodeJson(response.body);
-
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw ApiException(
-            decoded['error']?.toString() ??
-                decoded['message']?.toString() ??
-                '请求失败：${response.statusCode}',
-          );
-        }
-
-        return decoded;
-      } on TimeoutException {
-        if (retry < 2) {
-          retry++;
-          await Future.delayed(Duration(milliseconds: 800 * (retry + 1)));
-          continue;
-        }
-        throw const ApiException('请求超时，请检查网络');
-      } on SocketException {
-        if (retry < 2) {
-          retry++;
-          await Future.delayed(Duration(milliseconds: 800 * (retry + 1)));
-          continue;
-        }
-        throw const ApiException('网络连接失败');
-      }
-    }
-  }
-
-  AiResponse _parseAiResponse(Map<String, dynamic> data) {
-    final choices = data['choices'];
-    if (choices is! List || choices.isEmpty) {
-      throw const ApiException('返回数据异常');
-    }
-    final first = choices.first;
-    if (first is! Map) throw const ApiException('返回数据异常');
-    final message = first['message'];
-    if (message is! Map) throw const ApiException('返回数据异常');
-    final content = (message['content'] ?? '').toString().trim();
-    if (content.isEmpty) {
-      throw const ApiException('AI返回空内容');
-    }
-    final reasoning = (message['reasoning_content'] ?? message['reasoning'])
-        ?.toString();
-    return AiResponse(content: content, reasoning: reasoning);
+    final chars = title.characters;
+    return chars.length > 12 ? '${chars.take(12)}…' : title;
   }
 
   /// 新增：尝试解析 JSON 行
@@ -782,6 +740,41 @@ class SunlandApiClient {
       return null;
     }
   }
+}
+
+Exception _exceptionForApiError(int statusCode, String bodyText) {
+  final body = _tryDecodeJsonObject(bodyText);
+  final error = (body['error'] ?? body['message'])?.toString();
+
+  if (statusCode == 429 && error == 'LIMIT') {
+    final remain = int.tryParse((body['remain'] ?? '0').toString()) ?? 0;
+    return UsageLimitException(remain: remain);
+  }
+
+  if (statusCode == 403 && error == 'PRO_REQUIRED') {
+    return const ApiException('Pro 功能需要激活后才能使用');
+  }
+
+  if (statusCode == 429) {
+    return ApiException(error ?? '请求过快，请稍后再试');
+  }
+
+  return ApiException(error ?? '请求失败：$statusCode');
+}
+
+Map<String, dynamic> _tryDecodeJsonObject(String text) {
+  if (text.trim().isEmpty) return <String, dynamic>{};
+
+  try {
+    final decoded = jsonDecode(text);
+    if (decoded is Map) {
+      return Map<String, dynamic>.from(
+        decoded.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+  } catch (_) {}
+
+  return <String, dynamic>{};
 }
 
 class SupabaseAiRepository {
@@ -1000,6 +993,13 @@ bool isJwtExpired(String token, {Duration skew = Duration.zero}) {
   }
 }
 
+String _todayDateCN() {
+  final cst = DateTime.now().toUtc().add(const Duration(hours: 8));
+  final month = cst.month.toString().padLeft(2, '0');
+  final day = cst.day.toString().padLeft(2, '0');
+  return '${cst.year}-$month-$day';
+}
+
 Map<String, dynamic> _decodeJson(String text) {
   if (text.isEmpty) return <String, dynamic>{};
 
@@ -1160,6 +1160,7 @@ Stream<AiResponse> sendSmartChatStream({
   String? ocrText,
   required String model,
   required bool deep,
+  void Function(int remain)? onRemainUpdated,
 }) {
   final history = buildChatHistory(
     rawMessages: rawMessages,
@@ -1167,25 +1168,54 @@ Stream<AiResponse> sendSmartChatStream({
     maxHistory: 20,
     ocrText: ocrText,
   );
-  return client.sendChatStream(messages: history, model: model, deep: deep);
+  return client.sendChatStream(
+    messages: history,
+    model: model,
+    deep: deep,
+    onRemainUpdated: onRemainUpdated,
+  );
 }
 
 // ====== 新增：本地OCR提取 ======
 Future<String> extractTextFromImages(List<String> imagePaths) async {
+  if (!Platform.isAndroid && !Platform.isIOS) {
+    return '';
+  }
+
+  const perImageLimit = 1000;
+  const totalLimit = 3000;
   final buffer = StringBuffer();
   final recognizer = TextRecognizer(script: TextRecognitionScript.chinese);
 
   try {
-    for (final path in imagePaths) {
+    for (var i = 0; i < imagePaths.length; i++) {
+      final path = imagePaths[i];
+      if (buffer.length >= totalLimit) break;
+
+      final file = File(path);
+      if (!await file.exists()) continue;
+
       final inputImage = InputImage.fromFilePath(path);
       try {
         final recognizedText = await recognizer.processImage(inputImage);
 
         final text = recognizedText.text.trim();
         if (text.isNotEmpty) {
-          final limited = text.length > 1000 ? text.substring(0, 1000) : text;
-          buffer.writeln('【图片识别内容】');
-          buffer.writeln(limited);
+          final remaining = totalLimit - buffer.length;
+          if (remaining <= 0) break;
+
+          final limited = text.characters.length > perImageLimit
+              ? text.characters.take(perImageLimit).toString()
+              : text;
+          final clipped = limited.characters.length > remaining
+              ? limited.characters.take(remaining).toString()
+              : limited;
+
+          buffer.writeln('【图片${i + 1}识别内容】');
+          buffer.writeln(clipped);
+          if (limited.characters.length > clipped.characters.length) {
+            buffer.writeln('（后续文字因长度限制已省略）');
+          }
           buffer.writeln();
         }
       } catch (e) {

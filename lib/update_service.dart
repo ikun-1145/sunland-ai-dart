@@ -14,10 +14,15 @@ class UpdateService {
   /// 检查更新
   static Future<void> check(BuildContext context) async {
     try {
+      final endpoint = "https://sunland.dev/update.json";
+      final url = Uri.parse(
+        "$endpoint?t=${DateTime.now().millisecondsSinceEpoch}",
+      );
+      print("🌐 请求地址: $url");
+
       final res = await http.get(
-        Uri.parse(
-          "https://sunland.dev/update.json?t=${DateTime.now().millisecondsSinceEpoch}",
-        ),
+        url,
+        headers: {"Cache-Control": "no-cache", "Pragma": "no-cache"},
       );
 
       if (res.statusCode != 200) {
@@ -26,6 +31,7 @@ class UpdateService {
       }
 
       print("📦 更新接口返回: ${res.body}");
+      print("🧪 原始 JSON: ${res.body}");
 
       if (!res.body.trim().startsWith("{")) {
         print("❌ 更新接口返回异常: ${res.body}");
@@ -52,6 +58,14 @@ class UpdateService {
 
       print("📱 当前 build: $currentBuild, 最新 build: $latestBuild");
 
+      bool needUpdate = false;
+
+      if (latestBuild > currentBuild) {
+        needUpdate = true;
+      } else if (_isNewVersion(current, latest!)) {
+        needUpdate = true;
+      }
+
       if (Platform.isIOS) {
         if (appStoreUrl != null && latestBuild > currentBuild) {
           _showIOSDialog(context, appStoreUrl, force, desc);
@@ -64,8 +78,11 @@ class UpdateService {
         return;
       }
 
-      if (latestBuild > currentBuild) {
+      if (force || needUpdate) {
+        print("🚀 触发更新: needUpdate=$needUpdate, force=$force");
         _showDialog(context, apkUrl, force, desc);
+      } else {
+        print("🟡 不更新: 当前已是最新版本");
       }
     } catch (e) {
       print("❌ 更新检查失败: $e");

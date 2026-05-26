@@ -1687,10 +1687,11 @@ class _ChatPageState extends State<ChatPage> {
 
     try {
       final activated = await repo.isActivated(user.id);
+      final remainingCount = await store.readRemainingCount(user.id);
       if (mounted) {
         setState(() {
           isActivated = activated;
-          _remainingCount = freeDailyLimit;
+          _remainingCount = activated ? freeDailyLimit : remainingCount;
           if (!activated) {
             currentModel = 'deepseek-v4-flash';
             useDeep = false;
@@ -1739,14 +1740,15 @@ class _ChatPageState extends State<ChatPage> {
 
     final user = currentUserNotifier.value;
     final text = controller.text.trim();
-    if (text.isEmpty) {
+    final hasImages = pickedImages.isNotEmpty;
+    if (text.isEmpty && !hasImages) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("请输入内容")));
       setState(() => isGenerating = false);
       return;
     }
-    final isRegenerate = (text == _lastUserText);
+    final isRegenerate = text.isNotEmpty && text == _lastUserText;
     // ✅ 内容审核
     final modResult = InputModerator.check(text);
     if (modResult != null) {
@@ -1761,14 +1763,19 @@ class _ChatPageState extends State<ChatPage> {
 
     // ✅ 记录最后一条用户消息（用于重新生成）
     _lastUserText = text;
+    final displayedUserText = text.isNotEmpty
+        ? text
+        : '我上传了${pickedImages.length}张图片，请读取图片中的文字并回答。';
 
     setState(() {
       if (!isRegenerate) {
-        messages.add({"text": text, "isUser": true});
+        messages.add({"text": displayedUserText, "isUser": true});
       }
       final isDeepMode = isActivated && useDeep;
       messages.add({
-        "text": isDeepMode ? "深度思考中..." : "思考中...",
+        "text": hasImages
+            ? "正在识别图片文字..."
+            : (isDeepMode ? "深度思考中..." : "思考中..."),
         "isUser": false,
         "isStreaming": true,
         "expanded": false,
@@ -1783,7 +1790,7 @@ class _ChatPageState extends State<ChatPage> {
       currentConversationId = newId;
       conversations.insert(0, {
         'id': newId,
-        'title': buildConversationTitle(text),
+        'title': buildConversationTitle(displayedUserText),
         'updatedAt': DateTime.now().millisecondsSinceEpoch,
         'titleGenerated': false,
       });
@@ -1809,7 +1816,7 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         if (messages.isNotEmpty) messages.removeLast();
         messages.add({
-          "text": "",
+          "text": hasImages ? "正在识别图片文字..." : "",
           "reasoning": "",
           "isUser": false,
           "isStreaming": true,
@@ -1929,6 +1936,27 @@ class _ChatPageState extends State<ChatPage> {
         }
       } else if (pickedImages.isNotEmpty) {
         effectiveImages.addAll(pickedImages);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                Platform.isAndroid || Platform.isIOS
+                    ? "未识别到图片文字，将按图片说明发送"
+                    : "当前平台暂不支持本地 OCR，将按图片说明发送",
+              ),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+
+      if (hasImages && mounted && messages.isNotEmpty) {
+        setState(() {
+          final last = messages.last;
+          if (last["isUser"] != true) {
+            last["text"] = isActivated && useDeep ? "深度思考中..." : "思考中...";
+          }
+        });
       }
 
       // ====== Streaming with retry wrapper ======
@@ -1941,6 +1969,16 @@ class _ChatPageState extends State<ChatPage> {
                   pickedImages: effectiveImages,
                   model: requestModel,
                   deep: isActivated ? useDeep : false,
+                  onRemainUpdated: (remain) {
+                    final normalized = remain < 0
+                        ? freeDailyLimit
+                        : remain.clamp(0, freeDailyLimit).toInt();
+                    if (user != null) {
+                      unawaited(store.saveRemainingCount(user.id, normalized));
+                    }
+                    if (!mounted || generationId != _generationSerial) return;
+                    setState(() => _remainingCount = normalized);
+                  },
                 )
                 .timeout(
                   const Duration(seconds: 30),
@@ -1982,7 +2020,12 @@ class _ChatPageState extends State<ChatPage> {
 
       try {
         await runStream();
-      } catch (_) {
+      } catch (e) {
+        if (e is AuthExpiredException ||
+            e is UsageLimitException ||
+            e is ApiException) {
+          rethrow;
+        }
         // retry once
         if (_cancelRequested || generationId != _generationSerial) return;
         await Future.delayed(const Duration(milliseconds: 800));
@@ -2032,32 +2075,13 @@ class _ChatPageState extends State<ChatPage> {
                 .where((m) => m["isUser"] == true)
                 .length;
             if (userMsgCount == 1 && !titleGenerated) {
-              // ⭐ 异步生成标题，不阻塞 UI
-              Future(() async {
-                String? aiTitle;
-                try {
-                  aiTitle = await apiClient.generateTitle(
-                    userMessage: text,
-                    aiMessage: messages.last["text"],
-                  );
-                } catch (_) {}
-
-                final newTitle = (aiTitle != null && aiTitle.trim().isNotEmpty)
-                    ? (aiTitle.length > 15
-                          ? "${aiTitle.substring(0, 15)}..."
-                          : aiTitle)
-                    : buildConversationTitle(text);
-
-                if (mounted) {
-                  setState(() {
-                    conversations[index]['title'] = newTitle;
-                    conversations[index]['titleGenerated'] = true;
-                  });
-                }
-
-                // 云端同步
-                if (user != null) await _saveToCloud();
+              setState(() {
+                conversations[index]['title'] = buildConversationTitle(
+                  displayedUserText,
+                );
+                conversations[index]['titleGenerated'] = true;
               });
+              if (user != null) unawaited(_saveToCloud());
             }
           }
         }
@@ -2066,6 +2090,34 @@ class _ChatPageState extends State<ChatPage> {
       }
       scrollToBottom();
     } catch (e) {
+      if (e is AuthExpiredException) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Auth过期: $e"),
+              duration: const Duration(seconds: 10),
+            ),
+          );
+        }
+        setState(() => isGenerating = false);
+        return;
+      }
+
+      if (e is UsageLimitException) {
+        final normalized = e.remain.clamp(0, freeDailyLimit).toInt();
+        if (user != null) {
+          unawaited(store.saveRemainingCount(user.id, normalized));
+        }
+        setState(() {
+          _remainingCount = normalized;
+          isGenerating = false;
+        });
+        if (mounted) {
+          _showLimitSheet();
+        }
+        return;
+      }
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -2079,26 +2131,6 @@ class _ChatPageState extends State<ChatPage> {
             duration: const Duration(seconds: 4),
           ),
         );
-      }
-
-      if (e is AuthExpiredException) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text("Auth过期: $e"),
-            duration: Duration(seconds: 10),
-          ),
-        );
-        // 暂时不自动登出，先看报错
-        setState(() => isGenerating = false);
-        return;
-      }
-
-      if (e is UsageLimitException) {
-        setState(() => isGenerating = false);
-        if (mounted) {
-          _showLimitSheet();
-        }
-        return;
       }
 
       setState(() {
@@ -3319,7 +3351,8 @@ class _ChatPageState extends State<ChatPage> {
                                         : () {
                                             final text = controller.text.trim();
 
-                                            if (text.isEmpty) {
+                                            if (text.isEmpty &&
+                                                pickedImages.isEmpty) {
                                               ScaffoldMessenger.of(
                                                 context,
                                               ).showSnackBar(
