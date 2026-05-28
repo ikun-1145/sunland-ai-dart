@@ -61,13 +61,30 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
         return null;
       }
       token = refreshed.token;
-      await _sessionStore.saveSession(token: token, user: refreshed.user);
+      try {
+        await _sessionStore.saveSession(token: token, user: refreshed.user);
+      } catch (e) {
+        debugPrint('Failed to save session during token refresh: $e');
+        _tokenRefreshInProgress!.completeError(e);
+        rethrow;
+      }
+      // 只有在saveSession成功后才更新内存状态
+      _authToken = token;
       if (notify) {
         currentUserNotifier.value = _buildSupabaseUser(refreshed.user);
       }
-      _authToken = token;
       _tokenRefreshInProgress!.complete(token);
       return token;
+    } catch (e) {
+      debugPrint('Token refresh failed: $e');
+      // 对于临时错误（网络），不清除session，让下次重试
+      // 对于permanent错误（401），才登出
+      if (e.toString().contains('401') || e.toString().contains('Unauthorized')) {
+        await _sessionStore.clearSession();
+        if (notify) currentUserNotifier.value = null;
+      }
+      _tokenRefreshInProgress!.completeError(e);
+      rethrow;
     } finally {
       _tokenRefreshInProgress = null;
     }
@@ -235,6 +252,8 @@ class _RootPageState extends State<RootPage> {
     final token = await _readFreshAuthToken(notify: false);
     final user = await _sessionStore.readUser();
 
+    if (!mounted) return;
+
     SunlandUser? updatedUser = user;
     if (token != null && user != null) {
       _authToken = token;
@@ -243,6 +262,8 @@ class _RootPageState extends State<RootPage> {
       try {
         final repo = SupabaseAiRepository();
         final profile = await repo.loadProfile(user.id);
+
+        if (!mounted) return;
 
         if (profile != null) {
           final updated = SunlandUser(
@@ -263,6 +284,9 @@ class _RootPageState extends State<RootPage> {
     }
 
     final prefs = await SharedPreferences.getInstance();
+
+    if (!mounted) return;
+
     final chosen = prefs.getBool('theme_chosen') ?? false;
 
     // ⭐ 确保 UI 刷新
@@ -504,25 +528,38 @@ class _LoginPageState extends State<LoginPage>
         captchaToken: '',
       );
 
-      _authToken = result.token;
-
-      // ✅ 分开处理，任何一个失败都回滚
+      // ✅ 先保存到存储，再更新内存状态（确保原子性）
       try {
         await _sessionStore.saveSession(token: result.token, user: result.user);
       } catch (e) {
         debugPrint('Session save failed: $e');
-        _authToken = null;
         throw Exception('登录数据保存失败，请重试');
       }
 
-      // ✅ 只有存储成功才更新 UI
+      // ✅ 只有存储成功才更新内存
+      _authToken = result.token;
+
+      // ✅ 更新全局用户状态
       if (mounted) {
         currentUserNotifier.value = _buildSupabaseUser(result.user);
       }
 
       // ⭐ 自动创建 profile（关键）
-      final repo = SupabaseAiRepository();
-      await repo.ensureProfile(result.user.id);
+      if (mounted) {
+        final repo = SupabaseAiRepository();
+        try {
+          await repo.ensureProfile(result.user.id);
+        } catch (e) {
+          debugPrint('Failed to create user profile: $e');
+          // 视为关键错误，回滚登录状态
+          await _sessionStore.clearSession();
+          _authToken = null;
+          if (mounted) {
+            currentUserNotifier.value = null;
+          }
+          rethrow;  // 让UI显示登录失败
+        }
+      }
 
       // ✅ 清空输入
       emailController.clear();

@@ -501,7 +501,7 @@ class SunlandAuthApi {
 
     final rawUser = body['user'];
 
-    SunlandUser user;
+    SunlandUser? user;
 
     if (rawUser is Map) {
       user = SunlandUser.fromJson(
@@ -510,8 +510,14 @@ class SunlandAuthApi {
         ),
       );
     } else {
-      user = userFromJwt(token) ?? SunlandUser(id: email, email: email);
+      user = userFromJwt(token);
     }
+
+    // 必须从服务器返回完整的用户信息
+    if (user == null) {
+      throw ApiException('Invalid token: unable to extract user information');
+    }
+
     return (token: token, user: user);
   }
 
