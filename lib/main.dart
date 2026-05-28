@@ -1160,6 +1160,12 @@ class _ChatPageState extends State<ChatPage> {
     bool isDark,
   ) {
     if (isUser) {
+      final imagePaths = msg['imagePaths'];
+      final paths = imagePaths is List
+          ? imagePaths.map((e) => e.toString()).where((p) => p.isNotEmpty).toList()
+          : <String>[];
+      final displayText = (msg['text'] ?? '').toString();
+
       return Align(
         alignment: Alignment.centerRight,
         child: ConstrainedBox(
@@ -1184,9 +1190,45 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ],
             ),
-            child: Text(
-              msg["text"],
-              style: const TextStyle(fontSize: 14, color: Colors.white),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (paths.isNotEmpty)
+                  SizedBox(
+                    height: 64,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      shrinkWrap: true,
+                      itemCount: paths.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 6),
+                      itemBuilder: (_, index) {
+                        final path = paths[index];
+                        return ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: Image.file(
+                            File(path),
+                            width: 64,
+                            height: 64,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => const SizedBox(
+                              width: 64,
+                              height: 64,
+                              child: Icon(Icons.broken_image, size: 20),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                if (paths.isNotEmpty && displayText.isNotEmpty)
+                  const SizedBox(height: 8),
+                if (displayText.isNotEmpty)
+                  Text(
+                    displayText,
+                    style: const TextStyle(fontSize: 14, color: Colors.white),
+                  ),
+              ],
             ),
           ),
         ),
@@ -1432,12 +1474,13 @@ class _ChatPageState extends State<ChatPage> {
   int _generationSerial = 0;
   StreamSubscription<AiResponse>? _currentStreamSubscription;
   List<String> pickedImages = [];
+  bool _ocrPrivacyTipShown = false;
   bool isUploadingAvatar = false;
 
   bool isLocalConversation(String? id) => id?.startsWith('local_') ?? false;
 
   Map<String, dynamic> _messageToCloud(Map<String, dynamic> message) {
-    final rawText = (message['text'] ?? '').toString();
+    final rawText = (message['apiContent'] ?? message['text'] ?? '').toString();
     var content = rawText;
     var reasoning = (message['reasoning'] ?? '').toString().trim();
     if (rawText.startsWith('🧠 ')) {
@@ -1657,6 +1700,15 @@ class _ChatPageState extends State<ChatPage> {
     repo = SupabaseAiRepository();
     store = SunlandSessionStore();
     _initData();
+    unawaited(_loadOcrPrivacyTipFlag());
+  }
+
+  Future<void> _loadOcrPrivacyTipFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _ocrPrivacyTipShown = prefs.getBool('ocr_privacy_tip_shown') ?? false;
+    });
   }
 
   Future<void> _initData() async {
@@ -1786,8 +1838,152 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
     final isRegenerate = text.isNotEmpty && text == _lastUserText;
-    // ✅ 内容审核
-    final modResult = InputModerator.check(text);
+    final imagePaths = List<String>.from(pickedImages);
+
+    // ===== 本地 OCR（发送前完成）=====
+    ImageOcrResult? ocrResult;
+    if (hasImages && supportsLocalImageOcr) {
+      if (mounted) {
+        showDialog<void>(
+          context: context,
+          barrierDismissible: false,
+          builder: (_) => const PopScope(
+            canPop: false,
+            child: Center(
+              child: Card(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 12),
+                      Text('正在识别图片文字…'),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+      try {
+        ocrResult = await extractTextFromImages(imagePaths).timeout(
+          const Duration(seconds: 12),
+        );
+      } on TimeoutException {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('图片识别超时，请换清晰图片或补充文字说明'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+        setState(() => isGenerating = false);
+        return;
+      } catch (e) {
+        debugPrint('OCR error: $e');
+        ocrResult = const ImageOcrResult(block: '', hasUsableText: false);
+      } finally {
+        if (mounted) {
+          Navigator.of(context, rootNavigator: true).pop();
+        }
+      }
+    }
+
+    final ocrBlock =
+        ocrResult?.hasUsableText == true ? ocrResult!.block : null;
+    final apiContent = buildApiMessageWithOcr(
+      userText: text,
+      ocrBlock: ocrBlock,
+    );
+
+    if (hasImages && !supportsLocalImageOcr && text.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              '当前平台不支持本地识图，请补充文字说明，或使用移动端发送图片',
+            ),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      setState(() => isGenerating = false);
+      return;
+    }
+
+    if (hasImages &&
+        supportsLocalImageOcr &&
+        !ocrBlockHasUsableText(ocrBlock) &&
+        text.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('未识别到图片文字，请换清晰图片或输入文字说明'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+      setState(() => isGenerating = false);
+      return;
+    }
+
+    if (hasImages &&
+        supportsLocalImageOcr &&
+        ocrResult != null &&
+        ocrResult.hasUsableText &&
+        ocrBlock != null &&
+        mounted) {
+      final block = ocrBlock;
+      final preview = block.length > 120
+          ? '${block.characters.take(120)}…'
+          : block;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('确认识别内容'),
+          content: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  preview,
+                  style: const TextStyle(fontSize: 13, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  kOcrPrivacyTip,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(ctx).colorScheme.onSurface.withOpacity(0.6),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('发送'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true) {
+        setState(() => isGenerating = false);
+        return;
+      }
+    }
+
+    // ✅ 内容审核（含 OCR 合并后的全文）
+    final modResult = InputModerator.check(apiContent);
     if (modResult != null) {
       if (mounted) {
         ScaffoldMessenger.of(
@@ -1802,17 +1998,20 @@ class _ChatPageState extends State<ChatPage> {
     _lastUserText = text;
     final displayedUserText = text.isNotEmpty
         ? text
-        : '我上传了${pickedImages.length}张图片，请读取图片中的文字并回答。';
+        : '已发送 ${imagePaths.length} 张图片';
 
     setState(() {
       if (!isRegenerate) {
-        messages.add({"text": displayedUserText, "isUser": true});
+        messages.add({
+          "text": displayedUserText,
+          "isUser": true,
+          if (apiContent.isNotEmpty) "apiContent": apiContent,
+          if (imagePaths.isNotEmpty) "imagePaths": List<String>.from(imagePaths),
+        });
       }
       final isDeepMode = isActivated && useDeep;
       messages.add({
-        "text": hasImages
-            ? "正在识别图片文字..."
-            : (isDeepMode ? "深度思考中..." : "思考中..."),
+        "text": isDeepMode ? "深度思考中..." : "思考中...",
         "isUser": false,
         "isStreaming": true,
         "expanded": false,
@@ -1853,7 +2052,7 @@ class _ChatPageState extends State<ChatPage> {
       setState(() {
         if (messages.isNotEmpty) messages.removeLast();
         messages.add({
-          "text": hasImages ? "正在识别图片文字..." : "",
+          "text": "",
           "reasoning": "",
           "isUser": false,
           "isStreaming": true,
@@ -1937,65 +2136,6 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
 
-      // ===== OCR 图片识别（本地） =====
-      String? ocrText;
-      if (pickedImages.isNotEmpty) {
-        try {
-          ocrText = await extractTextFromImages(
-            pickedImages,
-          ).timeout(const Duration(seconds: 12));
-        } on TimeoutException {
-          ocrText = "用户发送了${pickedImages.length}张图片（OCR 识别超时，后端请根据上下文推断）";
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("图片识别超时，将以文字描述发送"),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        } catch (e) {
-          debugPrint('OCR error: $e');
-          ocrText = "用户发送了${pickedImages.length}张图片（OCR 识别失败，后端请根据上下文推断）";
-        }
-      }
-
-      // ===== 将 OCR 内容合并到用户消息（更自然）=====
-      final List<String> effectiveImages = <String>[];
-      if (ocrText != null && ocrText.trim().isNotEmpty) {
-        final lastUserIndex = messages.lastIndexWhere(
-          (m) => m["isUser"] == true,
-        );
-        if (lastUserIndex != -1) {
-          final original = messages[lastUserIndex]["text"] ?? "";
-          messages[lastUserIndex]["text"] =
-              "$original\n\n📸 图片内容（OCR识别，可能有误）：\n$ocrText";
-        }
-      } else if (pickedImages.isNotEmpty) {
-        effectiveImages.addAll(pickedImages);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(
-                Platform.isAndroid || Platform.isIOS
-                    ? "未识别到图片文字，将按图片说明发送"
-                    : "当前平台暂不支持本地 OCR，将按图片说明发送",
-              ),
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      }
-
-      if (hasImages && mounted && messages.isNotEmpty) {
-        setState(() {
-          final last = messages.last;
-          if (last["isUser"] != true) {
-            last["text"] = isActivated && useDeep ? "深度思考中..." : "思考中...";
-          }
-        });
-      }
-
       // ====== Streaming with retry wrapper ======
       Future<void> runStream() {
         final completer = Completer<void>();
@@ -2003,7 +2143,6 @@ class _ChatPageState extends State<ChatPage> {
             sendSmartChatStream(
                   client: apiClient,
                   rawMessages: messages,
-                  pickedImages: effectiveImages,
                   model: requestModel,
                   deep: isActivated ? useDeep : false,
                   onRemainUpdated: (remain) {
@@ -2244,7 +2383,24 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  Future<void> _markOcrPrivacyTipShown() async {
+    if (_ocrPrivacyTipShown) return;
+    _ocrPrivacyTipShown = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('ocr_privacy_tip_shown', true);
+  }
+
   Future<void> pickImage() async {
+    if (!_ocrPrivacyTipShown && mounted) {
+      await _markOcrPrivacyTipShown();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(kOcrPrivacyTip),
+          duration: Duration(seconds: 4),
+        ),
+      );
+    }
+
     // 📱 移动端：使用 image_picker
     if (Platform.isAndroid || Platform.isIOS) {
       final picker = ImagePicker();
@@ -3395,6 +3551,21 @@ class _ChatPageState extends State<ChatPage> {
                                               ).showSnackBar(
                                                 const SnackBar(
                                                   content: Text("请输入内容"),
+                                                ),
+                                              );
+                                              return;
+                                            }
+
+                                            if (text.isEmpty &&
+                                                pickedImages.isNotEmpty &&
+                                                !supportsLocalImageOcr) {
+                                              ScaffoldMessenger.of(
+                                                context,
+                                              ).showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    '当前平台不支持仅发图片，请补充文字说明',
+                                                  ),
                                                 ),
                                               );
                                               return;

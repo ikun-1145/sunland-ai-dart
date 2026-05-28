@@ -9,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
+import 'package:image/image.dart' as img;
+import 'package:path_provider/path_provider.dart';
 
 const String sunlandApiBase = 'https://api.sunland.dev';
 const String supabaseUrl = 'https://klyrasrqgxijwrxuoevj.supabase.co';
@@ -1079,11 +1081,55 @@ List<Conversation> mergeConversations(
   return merged;
 }
 
-// ====== 新增：构建带系统提示的聊天历史 ======
+/// 移动端 ML Kit OCR；桌面/Web 无本地 OCR。
+bool get supportsLocalImageOcr {
+  if (kIsWeb) return false;
+  return Platform.isAndroid || Platform.isIOS;
+}
+
+const String kOcrPrivacyTip =
+    '图片仅在本地识别文字，原图不会上传到服务器。';
+
+const String kOcrEmptyMarker = '（未识别到文字）';
+
+/// 合并用户文字与 OCR 块，供 API / 云端同步使用。
+String buildApiMessageWithOcr({
+  required String userText,
+  String? ocrBlock,
+}) {
+  final ocr = ocrBlock?.trim() ?? '';
+  final question = userText.trim();
+
+  if (ocr.isEmpty) {
+    return question;
+  }
+  if (question.isEmpty) {
+    return '【图片识别内容】\n$ocr\n\n请根据以上内容回答。';
+  }
+  return '用户问题：$question\n\n【图片识别内容】\n$ocr';
+}
+
+/// OCR 结果中是否包含可用文字（非空且非全部「未识别到文字」）。
+bool ocrBlockHasUsableText(String? ocrBlock) {
+  if (ocrBlock == null || ocrBlock.trim().isEmpty) return false;
+  final stripped = ocrBlock
+      .replaceAll(RegExp(r'【图\d+】\s*'), '')
+      .replaceAll(kOcrEmptyMarker, '')
+      .replaceAll(RegExp(r'（后续文字因长度限制已省略）'), '')
+      .trim();
+  return stripped.isNotEmpty;
+}
+
+class ImageOcrResult {
+  const ImageOcrResult({required this.block, required this.hasUsableText});
+
+  final String block;
+  final bool hasUsableText;
+}
+
+// ====== 构建带系统提示的聊天历史 ======
 List<ChatMessage> buildChatHistory({
   required List<Map<String, dynamic>> rawMessages,
-  required List<String> pickedImages,
-  String? ocrText,
   required int maxHistory,
 }) {
   final history = <ChatMessage>[
@@ -1095,6 +1141,7 @@ List<ChatMessage> buildChatHistory({
         (m) =>
             m["text"] != "思考中..." &&
             m["text"] != "深度思考中..." &&
+            m["text"] != "正在识别图片文字..." &&
             m["isReasoning"] != true &&
             !(m["isUser"] != true &&
                 (m["text"] ?? '').toString().trim().isEmpty),
@@ -1106,13 +1153,15 @@ List<ChatMessage> buildChatHistory({
       : valid;
 
   for (var msg in recent) {
-    var content = (msg["text"] ?? '').toString().trim();
+    var content = (msg["apiContent"] ?? msg["text"] ?? '').toString().trim();
     var reasoning = msg["reasoning"]?.toString().trim();
     if ((reasoning == null || reasoning.isEmpty) && content.startsWith('🧠 ')) {
       final parts = content.split('\n\n');
       reasoning = parts.first.replaceFirst('🧠 ', '').trim();
       content = parts.length > 1 ? parts.sublist(1).join('\n\n').trim() : '';
     }
+
+    if (content.isEmpty) continue;
 
     history.add(
       ChatMessage(
@@ -1123,21 +1172,6 @@ List<ChatMessage> buildChatHistory({
     );
   }
 
-  if (pickedImages.isNotEmpty) {
-    if (ocrText != null && ocrText.isNotEmpty) {
-      history.add(
-        ChatMessage(role: 'user', content: '以下是图片中识别的文字内容（可能存在误差）：\n$ocrText'),
-      );
-    } else {
-      history.add(
-        ChatMessage(
-          role: 'user',
-          content: '用户发送了${pickedImages.length}张图片（内容不可见）',
-        ),
-      );
-    }
-  }
-
   return history;
 }
 
@@ -1145,35 +1179,23 @@ List<ChatMessage> buildChatHistory({
 Future<AiResponse> sendSmartChat({
   required SunlandApiClient client,
   required List<Map<String, dynamic>> rawMessages,
-  required List<String> pickedImages,
   required String model,
   required bool deep,
 }) async {
-  final history = buildChatHistory(
-    rawMessages: rawMessages,
-    pickedImages: pickedImages,
-    maxHistory: 20,
-  );
+  final history = buildChatHistory(rawMessages: rawMessages, maxHistory: 20);
 
   return await client.sendChat(messages: history, model: model, deep: deep);
 }
 
-// ====== 新增：高阶流式聊天包装 API ======
+// ====== 高阶流式聊天包装 API ======
 Stream<AiResponse> sendSmartChatStream({
   required SunlandApiClient client,
   required List<Map<String, dynamic>> rawMessages,
-  required List<String> pickedImages,
-  String? ocrText,
   required String model,
   required bool deep,
   void Function(int remain)? onRemainUpdated,
 }) {
-  final history = buildChatHistory(
-    rawMessages: rawMessages,
-    pickedImages: pickedImages,
-    maxHistory: 20,
-    ocrText: ocrText,
-  );
+  final history = buildChatHistory(rawMessages: rawMessages, maxHistory: 20);
   return client.sendChatStream(
     messages: history,
     model: model,
@@ -1182,31 +1204,75 @@ Stream<AiResponse> sendSmartChatStream({
   );
 }
 
-// ====== 新增：本地OCR提取 ======
-Future<String> extractTextFromImages(List<String> imagePaths) async {
-  if (!Platform.isAndroid && !Platform.isIOS) {
-    return '';
+Future<String?> _preprocessImageForOcr(String path) async {
+  try {
+    final file = File(path);
+    if (!await file.exists()) return null;
+
+    final bytes = await file.readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return path;
+
+    const maxSide = 2048;
+    img.Image processed = decoded;
+    if (decoded.width > maxSide || decoded.height > maxSide) {
+      processed = img.copyResize(
+        decoded,
+        width: decoded.width >= decoded.height ? maxSide : null,
+        height: decoded.height > decoded.width ? maxSide : null,
+      );
+    }
+
+    final jpeg = img.encodeJpg(processed, quality: 85);
+    final tempDir = await getTemporaryDirectory();
+    final outPath =
+        '${tempDir.path}/ocr_${DateTime.now().microsecondsSinceEpoch}.jpg';
+    await File(outPath).writeAsBytes(jpeg, flush: true);
+    return outPath;
+  } catch (e) {
+    debugPrint('Image preprocess failed for $path: $e');
+    return path;
+  }
+}
+
+// ====== 本地 OCR 提取（仅 Android / iOS）======
+Future<ImageOcrResult> extractTextFromImages(List<String> imagePaths) async {
+  if (!supportsLocalImageOcr || imagePaths.isEmpty) {
+    return const ImageOcrResult(block: '', hasUsableText: false);
   }
 
   const perImageLimit = 1000;
   const totalLimit = 3000;
   final buffer = StringBuffer();
   final recognizer = TextRecognizer(script: TextRecognitionScript.chinese);
+  var anyUsable = false;
 
   try {
     for (var i = 0; i < imagePaths.length; i++) {
-      final path = imagePaths[i];
       if (buffer.length >= totalLimit) break;
 
-      final file = File(path);
+      final path = imagePaths[i];
+      final ocrPath = await _preprocessImageForOcr(path);
+      if (ocrPath == null) {
+        buffer.writeln('【图${i + 1}】');
+        buffer.writeln(kOcrEmptyMarker);
+        buffer.writeln();
+        continue;
+      }
+
+      final file = File(ocrPath);
       if (!await file.exists()) continue;
 
-      final inputImage = InputImage.fromFilePath(path);
       try {
-        final recognizedText = await recognizer.processImage(inputImage);
+        final recognizedText =
+            await recognizer.processImage(InputImage.fromFilePath(ocrPath));
 
         final text = recognizedText.text.trim();
-        if (text.isNotEmpty) {
+        buffer.writeln('【图${i + 1}】');
+        if (text.isEmpty) {
+          buffer.writeln(kOcrEmptyMarker);
+        } else {
+          anyUsable = true;
           final remaining = totalLimit - buffer.length;
           if (remaining <= 0) break;
 
@@ -1217,22 +1283,28 @@ Future<String> extractTextFromImages(List<String> imagePaths) async {
               ? limited.characters.take(remaining).toString()
               : limited;
 
-          buffer.writeln('【图片${i + 1}识别内容】');
           buffer.writeln(clipped);
           if (limited.characters.length > clipped.characters.length) {
             buffer.writeln('（后续文字因长度限制已省略）');
           }
-          buffer.writeln();
         }
+        buffer.writeln();
       } catch (e) {
         debugPrint('OCR error on $path: $e');
+        buffer.writeln('【图${i + 1}】');
+        buffer.writeln(kOcrEmptyMarker);
+        buffer.writeln();
       }
     }
   } finally {
     await recognizer.close();
   }
 
-  return buffer.toString().trim();
+  final block = buffer.toString().trim();
+  return ImageOcrResult(
+    block: block,
+    hasUsableText: anyUsable && ocrBlockHasUsableText(block),
+  );
 }
 
 String buildConversationTitle(String text) {

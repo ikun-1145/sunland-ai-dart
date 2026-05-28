@@ -62,7 +62,7 @@ class UpdateService {
 
       if (latestBuild > currentBuild) {
         needUpdate = true;
-      } else if (_isNewVersion(current, latest!)) {
+      } else if (_isNewVersion(current, latest)) {
         needUpdate = true;
       }
 
