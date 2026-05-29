@@ -1128,6 +1128,28 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _searchKeyword = "";
+
+  bool _isThinkingPhase(Map<String, dynamic> msg) {
+    final text = (msg['text'] ?? '').toString();
+    if (text == '思考中...' || text == '深度思考中...') return true;
+    return text.trim().isEmpty;
+  }
+
+  Widget _stoppedHintWidget(Map<String, dynamic> msg, bool isDark) {
+    final hint = (msg['stoppedHint'] ?? '').toString();
+    if (hint.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Text(
+        hint,
+        style: TextStyle(
+          fontSize: 12,
+          color: isDark ? Colors.white38 : Colors.grey,
+        ),
+      ),
+    );
+  }
+
   void cancelGeneration() {
     if (!isGenerating) return;
 
@@ -1140,14 +1162,17 @@ class _ChatPageState extends State<ChatPage> {
 
     setState(() {
       isGenerating = false;
-      // 👇 防止残留“思考中...”
-      if (messages.isNotEmpty &&
-          (messages.last["text"] == "思考中..." ||
-              messages.last["text"] == "深度思考中...")) {
-        messages.removeLast();
+      if (messages.isNotEmpty && messages.last['isUser'] != true) {
+        final last = messages.last;
+        final isThinking = _isThinkingPhase(last);
+        if (last['text'] == '思考中...' || last['text'] == '深度思考中...') {
+          last['text'] = '';
+        }
+        last['isStreaming'] = false;
+        last['stoppedHint'] = isThinking ? '已停止思考' : '已停止回答';
       }
-      messages.add({"text": "已停止生成", "isUser": false});
     });
+    rememberLocalMessages();
   }
 
   void _showThemeDialogInChat() {
@@ -1201,7 +1226,7 @@ class _ChatPageState extends State<ChatPage> {
                       scrollDirection: Axis.horizontal,
                       shrinkWrap: true,
                       itemCount: paths.length,
-                      separatorBuilder: (_, __) => const SizedBox(width: 6),
+                      separatorBuilder: (_, _) => const SizedBox(width: 6),
                       itemBuilder: (_, index) {
                         final path = paths[index];
                         return ClipRRect(
@@ -1211,7 +1236,7 @@ class _ChatPageState extends State<ChatPage> {
                             width: 64,
                             height: 64,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => const SizedBox(
+                            errorBuilder: (_, _, _) => const SizedBox(
                               width: 64,
                               height: 64,
                               child: Icon(Icons.broken_image, size: 20),
@@ -1440,11 +1465,18 @@ class _ChatPageState extends State<ChatPage> {
                       const SizedBox(height: 8),
                       MarkdownBody(data: content),
                     ],
+                    _stoppedHintWidget(msg, isDark),
                   ],
                 );
               }
 
-              return MarkdownBody(data: text);
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (text.isNotEmpty) MarkdownBody(data: text),
+                  _stoppedHintWidget(msg, isDark),
+                ],
+              );
             },
           ),
         ),
@@ -1892,6 +1924,11 @@ class _ChatPageState extends State<ChatPage> {
       }
     }
 
+    if (generationId != _generationSerial) {
+      if (mounted) setState(() => isGenerating = false);
+      return;
+    }
+
     final ocrBlock =
         ocrResult?.hasUsableText == true ? ocrResult!.block : null;
     final apiContent = buildApiMessageWithOcr(
@@ -1980,6 +2017,11 @@ class _ChatPageState extends State<ChatPage> {
         setState(() => isGenerating = false);
         return;
       }
+    }
+
+    if (generationId != _generationSerial) {
+      if (mounted) setState(() => isGenerating = false);
+      return;
     }
 
     // ✅ 内容审核（含 OCR 合并后的全文）
@@ -2321,8 +2363,8 @@ class _ChatPageState extends State<ChatPage> {
     } finally {
       if (mounted) {
         setState(() {
-          // 防止"思考中..."卡住（先检查，再清零）
-          if (_cancelRequested &&
+          // 防止"思考中..."卡住（用户主动停止时跳过）
+          if (!_cancelRequested &&
               messages.isNotEmpty &&
               (messages.last["text"] == "思考中..." ||
                   messages.last["text"] == "深度思考中...")) {
@@ -3538,9 +3580,13 @@ class _ChatPageState extends State<ChatPage> {
                                   const SizedBox(width: 8),
 
                                   IconButton(
-                                    icon: const Icon(Icons.send),
+                                    icon: Icon(
+                                      isGenerating
+                                          ? Icons.stop_circle
+                                          : Icons.send,
+                                    ),
                                     onPressed: isGenerating
-                                        ? null
+                                        ? cancelGeneration
                                         : () {
                                             final text = controller.text.trim();
 
