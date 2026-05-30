@@ -253,7 +253,15 @@ Avoid:
 
 ---
 
+
 # OUTPUT RULES
+
+## LANGUAGE RULES
+
+- All user-facing responses MUST be written in Chinese.
+- Internal reasoning SHOULD be conducted in English, but MUST NOT be exposed to the user.
+- Keep Chinese responses clear, concise, and professional.
+- Do NOT mix languages in the final answer unless explicitly required (e.g., code, logs, or technical terms).
 
 Before outputting code:
 - Briefly explain the plan (1-3 sentences)
