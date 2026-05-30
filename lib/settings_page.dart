@@ -65,6 +65,7 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _load() async {
+    if (mounted && !_loading) setState(() => _loading = true);
     final user = _user;
     if (user == null) {
       setState(() => _loading = false);
@@ -214,7 +215,7 @@ class _SettingsPageState extends State<SettingsPage> {
                                   newName,
                                 );
                                 if (!mounted) return;
-                                Navigator.pop(context);
+                                if (context.mounted) Navigator.pop(context);
                                 await _load();
                                 _showSnack('昵称已更新');
                               } catch (e) {
@@ -240,6 +241,7 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       },
     );
+    controller.dispose();
   }
 
   void _openInitialActivationIfNeeded() {
@@ -455,6 +457,7 @@ class _SettingsPageState extends State<SettingsPage> {
         );
       },
     );
+    controller.dispose();
   }
 
   void _showPaySheet() {
@@ -560,8 +563,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
       if (!mounted) return;
 
-      // 4. 跳转到登录页（清空返回栈）
-      Navigator.of(context).pushNamedAndRemoveUntil('/login', (route) => false);
+      // 4. 返回 ChatPage，由其处理跳转到登录页
+      Navigator.of(context).pop(const SettingsResult(loggedOut: true));
     } catch (e) {
       _showSnack('退出失败，请重试');
     }
