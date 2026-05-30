@@ -674,14 +674,7 @@ class SunlandApiClient {
           return;
         }
 
-        Map<String, dynamic>? json;
-        try {
-          json = _tryDecode(line);
-        } catch (e) {
-          debugPrint('JSON decode error: $e');
-          buffer = line + buffer;
-          continue;
-        }
+        final json = _tryDecode(line);
         if (json == null) continue;
 
         // 兼容 OpenAI 风格 delta
@@ -1165,7 +1158,7 @@ List<ChatMessage> buildChatHistory({
 
     history.add(
       ChatMessage(
-        role: msg["isUser"] ? "user" : "assistant",
+        role: msg["isUser"] == true ? "user" : "assistant",
         content: content,
         reasoning: reasoning,
       ),
@@ -1294,6 +1287,10 @@ Future<ImageOcrResult> extractTextFromImages(List<String> imagePaths) async {
         buffer.writeln('【图${i + 1}】');
         buffer.writeln(kOcrEmptyMarker);
         buffer.writeln();
+      } finally {
+        if (ocrPath != path) {
+          try { await File(ocrPath).delete(); } catch (_) {}
+        }
       }
     }
   } finally {
