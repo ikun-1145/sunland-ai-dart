@@ -14,8 +14,6 @@ import 'captcha_page.dart';
 import 'settings_page.dart';
 import 'update_service.dart';
 
-const bool debugMode = true;
-
 // ⭐ 全局 token 存储
 String? _authToken;
 Completer<String?>? _tokenRefreshInProgress;
@@ -1096,8 +1094,6 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
-  // Prevent duplicate profile dialog
-  final bool _profileDialogShown = false;
   // Normalize messages: combine "reasoning" + next assistant message into one
   List<Map<String, dynamic>> normalizeMessages(
     List<Map<String, dynamic>> msgs,
@@ -1386,7 +1382,6 @@ class _ChatPageState extends State<ChatPage> {
               if (reasoning.trim().isNotEmpty) {
                 final content = text;
 
-                msg["expanded"] ??= false;
                 bool expanded = msg["expanded"] == true;
 
                 return Column(
