@@ -65,7 +65,6 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
         await _sessionStore.saveSession(token: token, user: refreshed.user);
       } catch (e) {
         debugPrint('Failed to save session during token refresh: $e');
-        _tokenRefreshInProgress!.completeError(e);
         rethrow;
       }
       // 只有在saveSession成功后才更新内存状态
@@ -97,6 +96,7 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
 /// 全局主题选择弹框，避免三处重复定义
 Future<void> showThemeSelectionDialog(BuildContext context) async {
   final prefs = await SharedPreferences.getInstance();
+  if (!context.mounted) return;
   showDialog(
     context: context,
     barrierDismissible: false,
@@ -1680,7 +1680,12 @@ class _ChatPageState extends State<ChatPage> {
       for (final model in models) {
         final cloudVersion = merged[model.id];
         if (cloudVersion == null ||
-            model.updatedAt > (cloudVersion['updatedAt'] as int? ?? 0)) {
+            model.updatedAt > (switch (cloudVersion['updatedAt']) {
+              final int v => v,
+              final double v => v.toInt(),
+              final String v => int.tryParse(v) ?? 0,
+              _ => 0,
+            })) {
           merged[model.id] = {
             'id': model.id,
             'title': model.title,
@@ -1750,6 +1755,8 @@ class _ChatPageState extends State<ChatPage> {
     await loadConversations();
     await _checkActivation();
 
+    if (!mounted) return;
+
     if (conversations.isNotEmpty) {
       final convo = conversations.first;
       currentConversationId = convo["id"];
@@ -1762,6 +1769,7 @@ class _ChatPageState extends State<ChatPage> {
       });
     }
     await _loadModelPrefs();
+    if (!mounted) return;
     await UpdateService.check(context);
     // (profile setup dialog auto-popup removed)
   }
@@ -1826,7 +1834,18 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> sendMessage() async {
     if (isGenerating) return; // prevent concurrent triggers early
-    if (_cancelRequested) return;
+    if (_cancelRequested) {
+      // Still cleaning up from a cancel; give brief feedback rather than silently swallowing the tap
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('请稍等…'),
+            duration: Duration(milliseconds: 600),
+          ),
+        );
+      }
+      return;
+    }
     // ⭐ 优先拦截 Pro 权限（避免被当成免费额度用尽）
     if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
       if (mounted) {
@@ -2180,6 +2199,8 @@ class _ChatPageState extends State<ChatPage> {
 
       // ====== Streaming with retry wrapper ======
       Future<void> runStream() {
+        responseContent = '';
+        responseReasoning = '';
         final completer = Completer<void>();
         _currentStreamSubscription =
             sendSmartChatStream(
@@ -2224,6 +2245,7 @@ class _ChatPageState extends State<ChatPage> {
                     scrollToBottom();
                   },
                   onError: (e) {
+                    _currentStreamSubscription?.cancel();
                     _currentStreamSubscription = null;
                     if (!completer.isCompleted) completer.completeError(e);
                   },
@@ -2231,7 +2253,7 @@ class _ChatPageState extends State<ChatPage> {
                     _currentStreamSubscription = null;
                     if (!completer.isCompleted) completer.complete();
                   },
-                  cancelOnError: false,
+                  cancelOnError: true,
                 );
         return completer.future;
       }
@@ -2521,6 +2543,7 @@ class _ChatPageState extends State<ChatPage> {
     );
 
     if (confirm != true) return;
+    if (!mounted) return;
 
     setState(() {
       isUploadingAvatar = true;
@@ -3252,7 +3275,7 @@ class _ChatPageState extends State<ChatPage> {
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final msg = messages[i];
-                        final isUser = msg["isUser"];
+                        final isUser = msg["isUser"] == true;
                         return KeyedSubtree(
                           key: ValueKey(
                             i.toString() +
