@@ -1,5 +1,11 @@
 # CLAUDE.md
+# ⚠️ MUST READ FIRST
 
+You MUST read this file before doing anything.
+
+Always follow the rules and context in this file.
+
+Do NOT proceed without applying these rules.
 ## ROLE
 
 You are an AI coding assistant working inside an existing production project.
