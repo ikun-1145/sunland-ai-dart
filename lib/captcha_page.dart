@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 const String _captchaHtml = '''
 <!DOCTYPE html>
@@ -99,13 +98,12 @@ class CaptchaPage extends StatefulWidget {
 }
 
 class _CaptchaPageState extends State<CaptchaPage> {
-  Future<void> _openExternalCaptcha() async {
-    final url = Uri.parse(
-      "https://challenges.cloudflare.com/turnstile/v0/demo",
-    );
-    if (await canLaunchUrl(url)) {
-      await launchUrl(url, mode: LaunchMode.externalApplication);
-    }
+  void _reloadCaptcha() {
+    setState(() {
+      _pageLoaded = false;
+      _handled = false;
+    });
+    controller.reload();
   }
 
   bool _handled = false;
@@ -209,9 +207,9 @@ class _CaptchaPageState extends State<CaptchaPage> {
             right: 0,
             child: Center(
               child: TextButton(
-                onPressed: _openExternalCaptcha,
+                onPressed: _reloadCaptcha,
                 child: const Text(
-                  "验证加载失败？点此在浏览器打开",
+                  "验证加载失败？点击重试",
                   style: TextStyle(color: Colors.white54),
                 ),
               ),

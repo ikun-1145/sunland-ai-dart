@@ -18,23 +18,21 @@ class UpdateService {
       final url = Uri.parse(
         "$endpoint?t=${DateTime.now().millisecondsSinceEpoch}",
       );
-      print("🌐 请求地址: $url");
+      debugPrint("🌐 请求地址: $url");
 
-      final res = await http.get(
-        url,
-        headers: {"Cache-Control": "no-cache", "Pragma": "no-cache"},
-      );
+      final res = await http
+          .get(url, headers: {"Cache-Control": "no-cache", "Pragma": "no-cache"})
+          .timeout(const Duration(seconds: 10));
 
       if (res.statusCode != 200) {
-        print("❌ 更新接口状态异常: ${res.statusCode}");
+        debugPrint("❌ 更新接口状态异常: ${res.statusCode}");
         return;
       }
 
-      print("📦 更新接口返回: ${res.body}");
-      print("🧪 原始 JSON: ${res.body}");
+      debugPrint("📦 更新接口返回: ${res.body}");
 
       if (!res.body.trim().startsWith("{")) {
-        print("❌ 更新接口返回异常: ${res.body}");
+        debugPrint("❌ 更新接口返回异常: ${res.body}");
         return;
       }
 
@@ -48,7 +46,7 @@ class UpdateService {
       final appStoreUrl = data["app_store_url"]?.toString();
 
       if (latest == null) {
-        print("❌ version 字段缺失");
+        debugPrint("❌ version 字段缺失");
         return;
       }
 
@@ -56,7 +54,7 @@ class UpdateService {
       final current = "${packageInfo.version}+${packageInfo.buildNumber}";
       final currentBuild = int.tryParse(packageInfo.buildNumber) ?? 0;
 
-      print("📱 当前 build: $currentBuild, 最新 build: $latestBuild");
+      debugPrint("📱 当前 build: $currentBuild, 最新 build: $latestBuild");
 
       bool needUpdate = false;
 
@@ -74,18 +72,18 @@ class UpdateService {
       }
 
       if (apkUrl == null) {
-        print("❌ apk_url/url 字段缺失");
+        debugPrint("❌ apk_url/url 字段缺失");
         return;
       }
 
       if (force || needUpdate) {
-        print("🚀 触发更新: needUpdate=$needUpdate, force=$force");
+        debugPrint("🚀 触发更新: needUpdate=$needUpdate, force=$force");
         _showDialog(context, apkUrl, force, desc);
       } else {
-        print("🟡 不更新: 当前已是最新版本");
+        debugPrint("🟡 不更新: 当前已是最新版本");
       }
     } catch (e) {
-      print("❌ 更新检查失败: $e");
+      debugPrint("❌ 更新检查失败: $e");
     }
   }
 
@@ -317,7 +315,7 @@ class UpdateService {
 
       await OpenFile.open(path);
     } catch (e) {
-      print("❌ 下载失败: $e");
+      debugPrint("❌ 下载失败: $e");
       if (navigator.canPop()) navigator.pop();
       dialogOpen = false;
       _updateProgress = null;
