@@ -797,12 +797,19 @@ class SupabaseAiRepository {
   SupabaseClient get _client => Supabase.instance.client;
 
   Future<bool> isActivated(String userId) async {
-    final data = await _client
+    final codeData = await _client
         .from('activation_codes')
         .select('code')
         .eq('used_by', userId)
         .maybeSingle();
-    return data != null;
+    if (codeData != null) return true;
+
+    final profileData = await _client
+        .from('user_profiles')
+        .select('pro')
+        .eq('user_id', userId)
+        .maybeSingle();
+    return profileData?['pro'] == true;
   }
 
   Future<int> usageCount(String userId) async {
