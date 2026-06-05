@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'captcha_page.dart';
 import 'settings_page.dart';
 import 'update_service.dart';
+import 'furry_event_api.dart';
 
 // ⭐ 全局 token 存储
 String? _authToken;
@@ -1343,33 +1344,11 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
 
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        child: Container(
-          margin: const EdgeInsets.fromLTRB(0, 8, 0, 6),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0xFF111827) : Colors.white,
-            borderRadius: BorderRadius.circular(18),
-            border: Border.all(
-              color: isDark
-                  ? Colors.white.withOpacity(0.08)
-                  : Colors.black.withOpacity(0.06),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(isDark ? 0.2 : 0.06),
-                blurRadius: 10,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Builder(
-            builder: (_) {
+    final mdStyle = _assistantMarkdownStyle(isDark);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 8, 16, 6),
+      child: Builder(
+        builder: (_) {
               var text = (msg["text"] ?? "").toString();
               var reasoning = (msg["reasoning"] ?? "").toString();
 
@@ -1458,8 +1437,11 @@ class _ChatPageState extends State<ChatPage> {
 
                     if (content.isNotEmpty) ...[
                       const SizedBox(height: 8),
-                      MarkdownBody(data: content),
+                      MarkdownBody(data: content, styleSheet: mdStyle),
                     ],
+                    if (msg['furryEvents'] != null)
+                      _buildFurryEventCards(
+                          msg['furryEvents'] as List, isDark),
                     _stoppedHintWidget(msg, isDark),
                   ],
                 );
@@ -1468,12 +1450,339 @@ class _ChatPageState extends State<ChatPage> {
               return Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (text.isNotEmpty) MarkdownBody(data: text),
+                  if (text.isNotEmpty) MarkdownBody(data: text, styleSheet: mdStyle),
+                  if (msg['furryEvents'] != null)
+                    _buildFurryEventCards(msg['furryEvents'] as List, isDark),
                   _stoppedHintWidget(msg, isDark),
                 ],
               );
             },
           ),
+        );
+  }
+
+  // ── AI 回复 Markdown 样式（按主题缓存，避免流式期间每帧重建）─────────────
+  MarkdownStyleSheet? _mdStyleDark;
+  MarkdownStyleSheet? _mdStyleLight;
+
+  MarkdownStyleSheet _assistantMarkdownStyle(bool isDark) {
+    final cached = isDark ? _mdStyleDark : _mdStyleLight;
+    if (cached != null) return cached;
+    final sheet = MarkdownStyleSheet(
+      h1: TextStyle(
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
+          color: isDark ? Colors.white : Colors.black87,
+          height: 1.4),
+      h2: TextStyle(
+          fontSize: 19,
+          fontWeight: FontWeight.bold,
+          color: isDark ? Colors.white : Colors.black87,
+          height: 1.4),
+      h3: TextStyle(
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+          color: isDark ? Colors.white : Colors.black87,
+          height: 1.4),
+      p: TextStyle(
+          fontSize: 15,
+          height: 1.65,
+          color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87),
+      strong: const TextStyle(fontWeight: FontWeight.bold),
+      em: const TextStyle(fontStyle: FontStyle.italic),
+      tableHead: TextStyle(
+          fontWeight: FontWeight.bold,
+          fontSize: 14,
+          color: isDark ? Colors.white : Colors.black87),
+      tableBody: TextStyle(
+          fontSize: 14,
+          color: isDark ? Colors.white.withOpacity(0.85) : Colors.black87),
+      tableBorder: TableBorder.all(
+          color: isDark
+              ? Colors.white.withOpacity(0.12)
+              : Colors.black.withOpacity(0.1),
+          width: 0.8),
+      tableHeadAlign: TextAlign.left,
+      tableCellsPadding:
+          const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      codeblockDecoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1A1F2E) : const Color(0xFFF5F5F5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      code: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          color: isDark ? const Color(0xFF88DDFF) : const Color(0xFF1A56DB)),
+      blockquoteDecoration: BoxDecoration(
+        border: Border(
+            left: BorderSide(
+                color: isDark
+                    ? Colors.white.withOpacity(0.3)
+                    : Colors.black.withOpacity(0.2),
+                width: 3)),
+        color: isDark
+            ? Colors.white.withOpacity(0.04)
+            : Colors.black.withOpacity(0.03),
+      ),
+    );
+    if (isDark) {
+      _mdStyleDark = sheet;
+    } else {
+      _mdStyleLight = sheet;
+    }
+    return sheet;
+  }
+
+  // ── 兽聚查询辅助 ─────────────────────────────────────────────────────────
+
+  bool _isFurryEventQuery(String text) =>
+      text.contains('兽聚') ||
+      text.contains('毛展') ||
+      text.contains('兽展') ||
+      text.contains('furry') ||
+      text.contains('Furry') ||
+      text.contains('兽人聚会') ||
+      text.contains('兽人活动') ||
+      text.contains('兽人展');
+
+  String? _extractCity(String text) {
+    const cities = [
+      '北京', '上海', '广州', '深圳', '成都', '杭州', '武汉', '南京',
+      '西安', '重庆', '天津', '长沙', '哈尔滨', '昆明', '福州', '厦门',
+      '郑州', '苏州', '大连', '青岛',
+    ];
+    for (final city in cities) {
+      if (text.contains(city)) return city;
+    }
+    return null;
+  }
+
+  int? _extractMonth(String text) {
+    final m = RegExp(r'(\d{1,2})\s*月').firstMatch(text);
+    if (m != null) {
+      final v = int.tryParse(m.group(1)!);
+      if (v != null && v >= 1 && v <= 12) return v;
+    }
+    const cnMap = {
+      '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6,
+      '七': 7, '八': 8, '九': 9, '十': 10,
+    };
+    for (final e in cnMap.entries) {
+      if (text.contains('${e.key}月')) return e.value;
+    }
+    return null;
+  }
+
+  String _formatEventDate(String iso) {
+    if (iso.isEmpty) return '';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      return '${dt.month}月${dt.day}日';
+    } catch (_) {
+      return iso.length >= 10 ? iso.substring(0, 10) : iso;
+    }
+  }
+
+  Widget _buildFurryEventCards(List<dynamic> events, bool isDark) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 12),
+        Text(
+          '🐾 相关兽聚活动',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: isDark ? Colors.white70 : Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 8),
+        ...events.cast<Map<String, dynamic>>().map(
+          (e) => Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: _buildFurryEventCard(e, isDark),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFurryEventCard(Map<String, dynamic> event, bool isDark) {
+    final name = (event['name'] ?? '').toString();
+    final startAt = (event['startAt'] ?? '').toString();
+    final endAt = (event['endAt'] ?? '').toString();
+    final city = (event['city'] ?? '').toString();
+    final venue = (event['venue'] ?? '').toString();
+    final coverUrl = event['coverUrl']?.toString();
+    final sourceUrl = event['sourceUrl']?.toString();
+    final weather = event['weather'] as Map<String, dynamic>?;
+    final hotels = event['hotels'] as Map<String, dynamic>?;
+
+    final startStr = _formatEventDate(startAt);
+    final endStr = _formatEventDate(endAt);
+    final dateStr = (startStr == endStr || endStr.isEmpty)
+        ? startStr
+        : '$startStr - $endStr';
+
+    final cardBg = isDark ? const Color(0xFF1E2738) : const Color(0xFFF8F9FC);
+    final borderColor = isDark
+        ? Colors.white.withOpacity(0.08)
+        : Colors.black.withOpacity(0.06);
+
+    return GestureDetector(
+      onTap: (sourceUrl != null && sourceUrl.isNotEmpty)
+          ? () => launchUrl(Uri.parse(sourceUrl),
+              mode: LaunchMode.externalApplication)
+          : null,
+      child: Container(
+        decoration: BoxDecoration(
+          color: cardBg,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: borderColor),
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (coverUrl != null && coverUrl.isNotEmpty)
+              Image.network(
+                coverUrl,
+                height: 110,
+                width: double.infinity,
+                fit: BoxFit.cover,
+                errorBuilder: (_, error, stack) => const SizedBox.shrink(),
+              ),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      height: 1.3,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Icon(Icons.calendar_today_outlined,
+                          size: 12,
+                          color: isDark ? Colors.white54 : Colors.black45),
+                      const SizedBox(width: 4),
+                      Text(
+                        dateStr,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isDark ? Colors.white60 : Colors.black54,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Icon(Icons.location_on_outlined,
+                          size: 12,
+                          color: isDark ? Colors.white54 : Colors.black45),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: Text(
+                          city.isNotEmpty && venue.isNotEmpty
+                              ? '$city · $venue'
+                              : city.isNotEmpty
+                                  ? city
+                                  : venue,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.white60 : Colors.black54,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (weather != null) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Icon(Icons.wb_sunny_outlined,
+                            size: 12,
+                            color: isDark
+                                ? Colors.amber.shade300
+                                : Colors.orange),
+                        const SizedBox(width: 4),
+                        Text(
+                          '${weather['label'] ?? '未知'}  '
+                          '${(weather['tempMin'] as num?)?.toStringAsFixed(0) ?? '--'}'
+                          '~${(weather['tempMax'] as num?)?.toStringAsFixed(0) ?? '--'}°C',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: isDark ? Colors.white60 : Colors.black54,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  if (hotels != null &&
+                      (hotels['ctripUrl'] != null ||
+                          hotels['meituanUrl'] != null)) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        if (hotels['ctripUrl'] != null)
+                          _hotelButton(
+                              '携程',
+                              hotels['ctripUrl']!.toString(),
+                              isDark,
+                              const Color(0xFF0086F6)),
+                        if (hotels['ctripUrl'] != null &&
+                            hotels['meituanUrl'] != null)
+                          const SizedBox(width: 8),
+                        if (hotels['meituanUrl'] != null)
+                          _hotelButton(
+                              '美团',
+                              hotels['meituanUrl']!.toString(),
+                              isDark,
+                              const Color(0xFFF9A825)),
+                      ],
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _hotelButton(String label, String url, bool isDark, Color accent) {
+    return GestureDetector(
+      onTap: () =>
+          launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: accent.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: accent.withOpacity(0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.hotel_outlined, size: 11, color: accent),
+            const SizedBox(width: 3),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 11,
+                color: accent,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -1520,6 +1829,7 @@ class _ChatPageState extends State<ChatPage> {
       'role': message['isUser'] == true ? 'user' : 'assistant',
       'content': content.trim(),
       if (reasoning.isNotEmpty) 'reasoning': reasoning,
+      if (message['furryEvents'] != null) 'furryEvents': message['furryEvents'],
     };
   }
 
@@ -1534,6 +1844,7 @@ class _ChatPageState extends State<ChatPage> {
       if (reasoning != null && reasoning.isNotEmpty) 'reasoning': reasoning,
       'isUser': role == 'user',
       'expanded': false,
+      if (message['furryEvents'] is List) 'furryEvents': message['furryEvents'],
     };
   }
 
@@ -2052,6 +2363,22 @@ class _ChatPageState extends State<ChatPage> {
 
     // ✅ 记录最后一条用户消息（用于重新生成）
     _lastUserText = text;
+
+    // ── 兽聚查询：与 AI 并行获取活动数据 ─────────────────────────────────
+    Future<FurryEventSearchResult?>? furryFuture;
+    if (_isFurryEventQuery(text)) {
+      furryFuture = () async {
+        try {
+          return await FurryEventSearchApi.search(
+            city: _extractCity(text),
+            month: _extractMonth(text),
+          );
+        } catch (_) {
+          return null;
+        }
+      }();
+    }
+
     final displayedUserText = text.isNotEmpty
         ? text
         : '已发送 ${imagePaths.length} 张图片';
@@ -2277,6 +2604,20 @@ class _ChatPageState extends State<ChatPage> {
       flushStreamingMessage(force: true);
       await Future.delayed(const Duration(milliseconds: 30));
       flushStreamingMessage(force: true); // ensure last chunk flushed
+
+      // ── 附加兽聚卡片数据 ──────────────────────────────────────────────
+      if (furryFuture != null && mounted && messages.isNotEmpty) {
+        final furryResult = await furryFuture;
+        if (furryResult != null &&
+            furryResult.events.isNotEmpty &&
+            mounted &&
+            messages.isNotEmpty) {
+          setState(() {
+            messages.last['furryEvents'] =
+                furryResult.events.map((e) => e.toMap()).toList();
+          });
+        }
+      }
 
       // ⭐ 图片发送完成后安全清空
       if (pickedImages.isNotEmpty) {

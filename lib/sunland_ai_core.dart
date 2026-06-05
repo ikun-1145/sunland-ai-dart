@@ -154,11 +154,14 @@ class ChatMessage {
     required this.role,
     required this.content,
     this.reasoning,
+    this.furryEvents,
   });
 
   final String role;
   final String content;
   final String? reasoning;
+  // 兽聚卡片数据（仅本地/云端持久化用，不发送给模型）
+  final List<dynamic>? furryEvents;
 
   bool get isUser => role == 'user';
   bool get isSystem => role == 'system';
@@ -169,6 +172,8 @@ class ChatMessage {
       'role': role,
       'content': content,
       if (hasReasoning) 'reasoning': reasoning,
+      if (furryEvents != null && furryEvents!.isNotEmpty)
+        'furryEvents': furryEvents,
     };
   }
 
@@ -183,6 +188,9 @@ class ChatMessage {
       reasoning: (json['reasoning'] ?? json['reasoning_content'])
           ?.toString()
           .trim(),
+      furryEvents: json['furryEvents'] is List
+          ? json['furryEvents'] as List<dynamic>
+          : null,
     );
   }
 }

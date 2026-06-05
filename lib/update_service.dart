@@ -64,8 +64,10 @@ class UpdateService {
         needUpdate = true;
       }
 
+      if (!context.mounted) return;
+
       if (Platform.isIOS) {
-        if (appStoreUrl != null && latestBuild > currentBuild) {
+        if (appStoreUrl != null && (force || needUpdate)) {
           _showIOSDialog(context, appStoreUrl, force, desc);
         }
         return;
