@@ -33,8 +33,44 @@ if ! [[ "$build" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
+# ===== 解析语义版本号 =====
+IFS='.' read -r major minor patch <<< "$name"
+
+if [ -z "$major" ] || [ -z "$minor" ] || [ -z "$patch" ]; then
+  echo "❌ 版本号格式错误，应为 x.y.z"
+  exit 1
+fi
+
+echo "\n📌 当前版本: $major.$minor.$patch"
+echo "请选择升级方式："
+echo "1) Patch（修复）: $major.$minor.$((patch+1))"
+echo "2) Minor（功能）: $major.$((minor+1)).0"
+echo "3) Major（大版本）: $((major+1)).0.0"
+
+read -p "👉 输入选项 (1/2/3): " choice
+
+case $choice in
+  1)
+    patch=$((patch + 1))
+    ;;
+  2)
+    minor=$((minor + 1))
+    patch=0
+    ;;
+  3)
+    major=$((major + 1))
+    minor=0
+    patch=0
+    ;;
+  *)
+    echo "❌ 无效选择"
+    exit 1
+    ;;
+esac
+
+new_name="$major.$minor.$patch"
 new_build=$((build + 1))
-new_version="$name+$new_build"
+new_version="$new_name+$new_build"
 
 echo "🚀 升级版本: $version → $new_version"
 

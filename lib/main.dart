@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:ui';
 import 'package:image_picker/image_picker.dart';
@@ -77,7 +78,8 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
       debugPrint('Token refresh failed: $e');
       // 对于临时错误（网络），不清除session，让下次重试
       // 对于permanent错误（401），才登出
-      if (e.toString().contains('401') || e.toString().contains('Unauthorized')) {
+      if (e.toString().contains('401') ||
+          e.toString().contains('Unauthorized')) {
         await _sessionStore.clearSession();
         if (notify) currentUserNotifier.value = null;
       }
@@ -556,7 +558,7 @@ class _LoginPageState extends State<LoginPage>
           if (mounted) {
             currentUserNotifier.value = null;
           }
-          rethrow;  // 让UI显示登录失败
+          rethrow; // 让UI显示登录失败
         }
       }
 
@@ -1095,7 +1097,22 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
+  // 🧠 当前对话ID（核心）
+  String? currentConversationId = DateTime.now().millisecondsSinceEpoch
+      .toString();
+
+  // 🧠 无感上下文缓存
+  Map<String, dynamic>? _lastQueryContext;
   // Normalize messages: combine "reasoning" + next assistant message into one
+  void newConversation() {
+    setState(() {
+      currentConversationId = DateTime.now().millisecondsSinceEpoch.toString();
+
+      messages.clear(); // ⚠️ 你这里有 messages，这个是OK的
+      _lastQueryContext = null;
+    });
+  }
+
   List<Map<String, dynamic>> normalizeMessages(
     List<Map<String, dynamic>> msgs,
   ) {
@@ -1184,7 +1201,10 @@ class _ChatPageState extends State<ChatPage> {
     if (isUser) {
       final imagePaths = msg['imagePaths'];
       final paths = imagePaths is List
-          ? imagePaths.map((e) => e.toString()).where((p) => p.isNotEmpty).toList()
+          ? imagePaths
+                .map((e) => e.toString())
+                .where((p) => p.isNotEmpty)
+                .toList()
           : <String>[];
       final displayText = (msg['text'] ?? '').toString();
 
@@ -1255,6 +1275,19 @@ class _ChatPageState extends State<ChatPage> {
           ),
         ),
       );
+    }
+
+    if (msg["isFurryCard"] == true) {
+      if (msg["isLoading"] == true) return _buildFurryCardLoading(isDark);
+
+      final events = msg['furryEvents'] ?? [];
+
+      if (events is List) {
+        return _buildFurryEventCards(events, isDark);
+      }
+
+      // 👇 fallback（防止结构异常）
+      return _buildFurryEventCards([], isDark);
     }
 
     if (msg["text"] == "思考中..." || msg["text"] == "深度思考中...") {
@@ -1349,116 +1382,116 @@ class _ChatPageState extends State<ChatPage> {
       padding: const EdgeInsets.fromLTRB(0, 8, 16, 6),
       child: Builder(
         builder: (_) {
-              var text = (msg["text"] ?? "").toString();
-              var reasoning = (msg["reasoning"] ?? "").toString();
+          var text = (msg["text"] ?? "").toString();
+          var reasoning = (msg["reasoning"] ?? "").toString();
 
-              if (reasoning.isEmpty && text.startsWith("🧠 ")) {
-                final parts = text.split("\n\n");
-                reasoning = parts.first.replaceFirst("🧠 ", "");
-                text = parts.length > 1 ? parts.sublist(1).join("\n\n") : "";
-              }
+          if (reasoning.isEmpty && text.startsWith("🧠 ")) {
+            final parts = text.split("\n\n");
+            reasoning = parts.first.replaceFirst("🧠 ", "");
+            text = parts.length > 1 ? parts.sublist(1).join("\n\n") : "";
+          }
 
-              if (reasoning.trim().isNotEmpty) {
-                final content = text;
+          if (reasoning.trim().isNotEmpty) {
+            final content = text;
 
-                bool expanded = msg["expanded"] == true;
+            bool expanded = msg["expanded"] == true;
 
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // 🧠 折叠卡片（带状态持久）
-                    GestureDetector(
-                      onTap: () {
-                        setState(() {
-                          msg["expanded"] = !expanded;
-                        });
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 10,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: isDark
-                              ? Colors.white.withOpacity(0.05)
-                              : Colors.black.withOpacity(0.04),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              expanded
-                                  ? Icons.keyboard_arrow_down
-                                  : Icons.keyboard_arrow_right,
-                              size: 16,
-                              color: Colors.grey,
-                            ),
-                            const SizedBox(width: 4),
-                            Text(
-                              "思考过程",
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: Colors.grey.shade600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // 🧠 折叠卡片（带状态持久）
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      msg["expanded"] = !expanded;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
                     ),
+                    decoration: BoxDecoration(
+                      color: isDark
+                          ? Colors.white.withOpacity(0.05)
+                          : Colors.black.withOpacity(0.04),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          expanded
+                              ? Icons.keyboard_arrow_down
+                              : Icons.keyboard_arrow_right,
+                          size: 16,
+                          color: Colors.grey,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          "思考过程",
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: Colors.grey.shade600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
 
-                    AnimatedSize(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeInOut,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const SizedBox(height: 6),
-                          ConstrainedBox(
-                            constraints: const BoxConstraints(maxHeight: 150),
-                            child: SingleChildScrollView(
-                              physics: expanded
-                                  ? const BouncingScrollPhysics()
-                                  : const NeverScrollableScrollPhysics(),
-                              child: Text(
-                                reasoning,
-                                maxLines: expanded ? null : 3,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontSize: 12,
-                                  color: Colors.grey,
-                                  height: 1.4,
-                                ),
-                              ),
+                AnimatedSize(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeInOut,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 6),
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 150),
+                        child: SingleChildScrollView(
+                          physics: expanded
+                              ? const BouncingScrollPhysics()
+                              : const NeverScrollableScrollPhysics(),
+                          child: Text(
+                            reasoning,
+                            maxLines: expanded ? null : 3,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey,
+                              height: 1.4,
                             ),
                           ),
-                        ],
+                        ),
                       ),
-                    ),
-
-                    if (content.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      MarkdownBody(data: content, styleSheet: mdStyle),
                     ],
-                    if (msg['furryEvents'] != null)
-                      _buildFurryEventCards(
-                          msg['furryEvents'] as List, isDark),
-                    _stoppedHintWidget(msg, isDark),
-                  ],
-                );
-              }
+                  ),
+                ),
 
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (text.isNotEmpty) MarkdownBody(data: text, styleSheet: mdStyle),
-                  if (msg['furryEvents'] != null)
-                    _buildFurryEventCards(msg['furryEvents'] as List, isDark),
-                  _stoppedHintWidget(msg, isDark),
+                if (content.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  MarkdownBody(data: content, styleSheet: mdStyle),
                 ],
-              );
-            },
-          ),
-        );
+                if (msg['furryEvents'] != null)
+                  _buildFurryEventCards(msg['furryEvents'] as List, isDark),
+                _stoppedHintWidget(msg, isDark),
+              ],
+            );
+          }
+
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (text.isNotEmpty)
+                MarkdownBody(data: text, styleSheet: mdStyle),
+              if (msg['furryEvents'] != null)
+                _buildFurryEventCards(msg['furryEvents'] as List, isDark),
+              _stoppedHintWidget(msg, isDark),
+            ],
+          );
+        },
+      ),
+    );
   }
 
   // ── AI 回复 Markdown 样式（按主题缓存，避免流式期间每帧重建）─────────────
@@ -1470,56 +1503,65 @@ class _ChatPageState extends State<ChatPage> {
     if (cached != null) return cached;
     final sheet = MarkdownStyleSheet(
       h1: TextStyle(
-          fontSize: 22,
-          fontWeight: FontWeight.bold,
-          color: isDark ? Colors.white : Colors.black87,
-          height: 1.4),
+        fontSize: 22,
+        fontWeight: FontWeight.bold,
+        color: isDark ? Colors.white : Colors.black87,
+        height: 1.4,
+      ),
       h2: TextStyle(
-          fontSize: 19,
-          fontWeight: FontWeight.bold,
-          color: isDark ? Colors.white : Colors.black87,
-          height: 1.4),
+        fontSize: 19,
+        fontWeight: FontWeight.bold,
+        color: isDark ? Colors.white : Colors.black87,
+        height: 1.4,
+      ),
       h3: TextStyle(
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-          color: isDark ? Colors.white : Colors.black87,
-          height: 1.4),
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: isDark ? Colors.white : Colors.black87,
+        height: 1.4,
+      ),
       p: TextStyle(
-          fontSize: 15,
-          height: 1.65,
-          color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87),
+        fontSize: 15,
+        height: 1.65,
+        color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87,
+      ),
       strong: const TextStyle(fontWeight: FontWeight.bold),
       em: const TextStyle(fontStyle: FontStyle.italic),
       tableHead: TextStyle(
-          fontWeight: FontWeight.bold,
-          fontSize: 14,
-          color: isDark ? Colors.white : Colors.black87),
+        fontWeight: FontWeight.bold,
+        fontSize: 14,
+        color: isDark ? Colors.white : Colors.black87,
+      ),
       tableBody: TextStyle(
-          fontSize: 14,
-          color: isDark ? Colors.white.withOpacity(0.85) : Colors.black87),
+        fontSize: 14,
+        color: isDark ? Colors.white.withOpacity(0.85) : Colors.black87,
+      ),
       tableBorder: TableBorder.all(
-          color: isDark
-              ? Colors.white.withOpacity(0.12)
-              : Colors.black.withOpacity(0.1),
-          width: 0.8),
+        color: isDark
+            ? Colors.white.withOpacity(0.12)
+            : Colors.black.withOpacity(0.1),
+        width: 0.8,
+      ),
       tableHeadAlign: TextAlign.left,
-      tableCellsPadding:
-          const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       codeblockDecoration: BoxDecoration(
         color: isDark ? const Color(0xFF1A1F2E) : const Color(0xFFF5F5F5),
         borderRadius: BorderRadius.circular(8),
       ),
       code: TextStyle(
-          fontFamily: 'monospace',
-          fontSize: 13,
-          color: isDark ? const Color(0xFF88DDFF) : const Color(0xFF1A56DB)),
+        fontFamily: 'monospace',
+        fontSize: 13,
+        color: isDark ? const Color(0xFF88DDFF) : const Color(0xFF1A56DB),
+      ),
       blockquoteDecoration: BoxDecoration(
         border: Border(
-            left: BorderSide(
-                color: isDark
-                    ? Colors.white.withOpacity(0.3)
-                    : Colors.black.withOpacity(0.2),
-                width: 3)),
+          left: BorderSide(
+            color: isDark
+                ? Colors.white.withOpacity(0.3)
+                : Colors.black.withOpacity(0.2),
+            width: 3,
+          ),
+        ),
         color: isDark
             ? Colors.white.withOpacity(0.04)
             : Colors.black.withOpacity(0.03),
@@ -1547,9 +1589,26 @@ class _ChatPageState extends State<ChatPage> {
 
   String? _extractCity(String text) {
     const cities = [
-      '北京', '上海', '广州', '深圳', '成都', '杭州', '武汉', '南京',
-      '西安', '重庆', '天津', '长沙', '哈尔滨', '昆明', '福州', '厦门',
-      '郑州', '苏州', '大连', '青岛',
+      '北京',
+      '上海',
+      '广州',
+      '深圳',
+      '成都',
+      '杭州',
+      '武汉',
+      '南京',
+      '西安',
+      '重庆',
+      '天津',
+      '长沙',
+      '哈尔滨',
+      '昆明',
+      '福州',
+      '厦门',
+      '郑州',
+      '苏州',
+      '大连',
+      '青岛',
     ];
     for (final city in cities) {
       if (text.contains(city)) return city;
@@ -1564,13 +1623,136 @@ class _ChatPageState extends State<ChatPage> {
       if (v != null && v >= 1 && v <= 12) return v;
     }
     const cnMap = {
-      '一': 1, '二': 2, '三': 3, '四': 4, '五': 5, '六': 6,
-      '七': 7, '八': 8, '九': 9, '十': 10,
+      '一': 1,
+      '二': 2,
+      '三': 3,
+      '四': 4,
+      '五': 5,
+      '六': 6,
+      '七': 7,
+      '八': 8,
+      '九': 9,
+      '十': 10,
     };
     for (final e in cnMap.entries) {
       if (text.contains('${e.key}月')) return e.value;
     }
     return null;
+  }
+
+  int? _extractYear(String text) {
+    final now = DateTime.now();
+    if (text.contains('后年')) return now.year + 2;
+    if (text.contains('明年')) return now.year + 1;
+    if (text.contains('今年')) return now.year;
+    final m = RegExp(r'(20\d{2})\s*年?').firstMatch(text);
+    if (m != null) return int.tryParse(m.group(1)!);
+    return null;
+  }
+
+  /// 由 AI 解析兽聚查询范围：结合"上一次查询范围"+本次消息，让模型直接输出
+  /// 本次最终的 {city, year, month}（自带继承/覆盖/放宽判断）。
+  /// 使用 flash 模型（最快最省，不动 Pro）；任何失败都回退到本地正则提取
+  /// + 上下文补全，保证卡片始终可用、不退化。
+  Future<({String? city, int? month, int? year})> _resolveFurryQueryParams(
+    String text,
+  ) async {
+    final now = DateTime.now();
+    final today =
+        '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+    // 上一次查询范围（供模型做上下文继承）
+    final ctx = _lastQueryContext;
+    final String ctxDesc;
+    if (ctx == null ||
+        (ctx['city'] == null && ctx['month'] == null && ctx['year'] == null)) {
+      ctxDesc = '无（本对话首次兽聚查询）';
+    } else {
+      ctxDesc =
+          '城市=${ctx['city'] ?? '未指定'}，年=${ctx['year'] ?? '未指定'}，月=${ctx['month'] ?? '未指定'}';
+    }
+
+    try {
+      final result = await apiClient
+          .sendChat(
+            model: 'deepseek-v4-flash',
+            deep: false,
+            messages: [
+              ChatMessage(
+                role: 'system',
+                content:
+                    '你是兽聚查询范围解析器。结合"上一次查询范围"和用户这句话，'
+                    '输出用户【本次】想查询的最终范围。'
+                    '只输出一个 JSON 对象，不要任何解释、前后缀或 markdown 代码块。'
+                    '字段：city（中文城市名字符串，无则 null）、'
+                    'year（整数年份，如 2026，无则 null）、'
+                    'month（整数 1-12，无则 null）。'
+                    '今天是 $today，仅用于换算相对时间。'
+                    '规则：'
+                    '1) 用户本次未提到的维度，沿用"上一次查询范围"里的值'
+                    '（例：上次=上海，本次"明年的"→ city=上海 且 year=次年）；'
+                    '2) 用户本次明确改了某维度，用新值覆盖'
+                    '（例："那北京呢"→ city 改成北京）；'
+                    '3) 用户表达"全部/所有/不限/任意时间/任何城市/都行/再看看别的"等放宽意图时，'
+                    '把对应维度清成 null；'
+                    '4) 相对时间换算："今年"→当年 year，"明年"→次年 year，'
+                    '"下个月"→下一个自然月 month（跨年时 year 相应 +1）；'
+                    '5) 不要凭空猜测：用户没提到、也无法从上一次继承的维度，保持 null。'
+                    '示例（无上下文）："上海有什么兽聚"→{"city":"上海","year":null,"month":null}；'
+                    '"12月的兽展"→{"city":null,"year":null,"month":12}。',
+              ),
+
+              ChatMessage(role: 'system', content: '上一次查询范围：$ctxDesc'),
+
+              ChatMessage(role: 'user', content: text),
+            ],
+          )
+          .timeout(const Duration(seconds: 12));
+
+      // 容错抽取 JSON（兼容模型可能附带的代码块或多余文字）
+      final raw = result.content;
+      final match = RegExp(r'\{[\s\S]*\}').firstMatch(raw);
+      if (match == null) return _fallbackResolve(text);
+      final decoded = jsonDecode(match.group(0)!);
+      if (decoded is! Map) return _fallbackResolve(text);
+
+      String? city = decoded['city']?.toString().trim();
+      if (city == null || city.isEmpty || city.toLowerCase() == 'null') {
+        city = null;
+      }
+
+      int? toIntOrNull(dynamic v) {
+        if (v == null) return null;
+        if (v is num) return v.toInt();
+        return int.tryParse(v.toString());
+      }
+
+      int? month = toIntOrNull(decoded['month']);
+      if (month != null && (month < 1 || month > 12)) month = null;
+
+      int? year = toIntOrNull(decoded['year']);
+
+      // 模型已完成上下文合并，直接采用其输出作为本次范围并写回上下文
+      _lastQueryContext = {'city': city, 'month': month, 'year': year};
+
+      return (city: city, month: month, year: year);
+    } catch (_) {
+      // 网络错误、429 限额、解析失败等 → 回退本地正则 + 上下文补全
+      return _fallbackResolve(text);
+    }
+  }
+
+  /// AI 解析失败时的兜底：本地正则提取 + 上一次查询范围 null 补全，
+  /// 并同样写回上下文，保证后续追问仍能继承。
+  ({String? city, int? month, int? year}) _fallbackResolve(String text) {
+    final String? city =
+        _extractCity(text) ?? _lastQueryContext?['city'] as String?;
+    final int? month =
+        _extractMonth(text) ?? _lastQueryContext?['month'] as int?;
+    final int? year = _extractYear(text) ?? _lastQueryContext?['year'] as int?;
+
+    _lastQueryContext = {'city': city, 'month': month, 'year': year};
+    return (city: city, month: month, year: year);
   }
 
   String _formatEventDate(String iso) {
@@ -1583,11 +1765,110 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
+  Widget _buildFurryCardLoading(bool isDark) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.25, end: 0.65),
+          duration: const Duration(milliseconds: 900),
+          curve: Curves.easeInOut,
+          onEnd: () {
+            if (mounted) setState(() {});
+          },
+          builder: (_, opacity, _) {
+            final baseColor = (isDark ? Colors.white : Colors.black)
+                .withOpacity(opacity * 0.12);
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.pets,
+                      size: 13,
+                      color: Colors.grey.withOpacity(opacity + 0.1),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      '正在获取兽聚活动...',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey.withOpacity(opacity + 0.1),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                // 骨架卡片
+                ...List.generate(
+                  2,
+                  (i) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Container(
+                      width: 260,
+                      height: 72,
+                      decoration: BoxDecoration(
+                        color: baseColor,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          Container(
+                            width: 140,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: baseColor,
+                              borderRadius: BorderRadius.circular(5),
+                            ),
+                          ),
+                          Container(
+                            width: 100,
+                            height: 8,
+                            decoration: BoxDecoration(
+                              color: baseColor,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
   Widget _buildFurryEventCards(List<dynamic> events, bool isDark) {
+    if (events.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text(
+          "🐾 没有找到相关兽聚活动",
+          style: TextStyle(
+            fontSize: 13,
+            color: isDark ? Colors.white54 : Colors.black45,
+          ),
+        ),
+      );
+    }
+    // 使用 PageController 并保持引用
+    final PageController pageController = PageController(
+      viewportFraction: 0.9,
+      initialPage: 1000, // ⭐ 实现“无限循环”
+    );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const SizedBox(height: 12),
+        const SizedBox(height: 4),
         Text(
           '🐾 相关兽聚活动',
           style: TextStyle(
@@ -1596,11 +1877,50 @@ class _ChatPageState extends State<ChatPage> {
             color: isDark ? Colors.white70 : Colors.black54,
           ),
         ),
-        const SizedBox(height: 8),
-        ...events.cast<Map<String, dynamic>>().map(
-          (e) => Padding(
-            padding: const EdgeInsets.only(bottom: 10),
-            child: _buildFurryEventCard(e, isDark),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 280,
+          child: PageView.builder(
+            controller: pageController,
+            itemCount: events.isEmpty ? 0 : 2000, // ⭐ 假无限循环
+            itemBuilder: (context, index) {
+              final realIndex = index % events.length;
+              final e = events[realIndex] as Map<String, dynamic>;
+              // 动态焦点缩放 + 居中吸附效果
+              return AnimatedBuilder(
+                animation: pageController,
+                builder: (context, child) {
+                  double scale = 0.95;
+                  try {
+                    if (pageController.position.haveDimensions) {
+                      final page =
+                          pageController.page ??
+                          pageController.initialPage.toDouble();
+                      final diff = (page - index).abs();
+                      scale = (1 - diff * 0.12).clamp(0.85, 1.0);
+                    }
+                  } catch (_) {}
+
+                  final offset =
+                      (pageController.hasClients &&
+                          pageController.position.haveDimensions)
+                      ? (pageController.page! - index)
+                      : 0.0;
+
+                  return Transform.translate(
+                    offset: Offset(offset * 20, 0), // ⭐ 横向堆叠位移
+                    child: Transform.scale(
+                      scale: scale,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: child,
+                      ),
+                    ),
+                  );
+                },
+                child: _buildFurryEventCard(e, isDark),
+              );
+            },
           ),
         ),
       ],
@@ -1609,20 +1929,60 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _buildFurryEventCard(Map<String, dynamic> event, bool isDark) {
     final name = (event['name'] ?? '').toString();
-    final startAt = (event['startAt'] ?? '').toString();
-    final endAt = (event['endAt'] ?? '').toString();
+    // 兼容新字段名（coverUrl/startAt）和旧字段名（cover/start_at）
+    final startAt = (event['startAt'] ?? event['start_at'] ?? '').toString();
+    final endAt = (event['endAt'] ?? event['end_at'] ?? '').toString();
     final city = (event['city'] ?? '').toString();
-    final venue = (event['venue'] ?? '').toString();
-    final coverUrl = event['coverUrl']?.toString();
-    final sourceUrl = event['sourceUrl']?.toString();
-    final weather = event['weather'] as Map<String, dynamic>?;
-    final hotels = event['hotels'] as Map<String, dynamic>?;
+    final venue = (event['venue'] ?? event['address'] ?? '').toString();
 
-    final startStr = _formatEventDate(startAt);
-    final endStr = _formatEventDate(endAt);
-    final dateStr = (startStr == endStr || endStr.isEmpty)
-        ? startStr
-        : '$startStr - $endStr';
+    // 直接使用后端返回的代理图片（Worker 已处理防盗链）
+    String? coverUrl = (event['coverUrl'] ?? event['cover'])?.toString();
+
+    if (coverUrl != null) {
+      coverUrl = coverUrl.trim();
+      if (coverUrl.isEmpty) coverUrl = null;
+
+      // 如果是相对路径（/proxy?...），补全 Worker 域名，避免双斜杠 bug
+      if (coverUrl != null && coverUrl.startsWith('/proxy')) {
+        coverUrl =
+            'https://sunland-data-worker.liuxizekali.workers.dev$coverUrl';
+      }
+      print("最终图片URL = $coverUrl");
+    }
+
+    final sourceUrl = (event['sourceUrl'] ?? event['source_url'])?.toString();
+
+    final rawStatus = (event['raw_status'] ?? '').toString();
+    final daysUntil = event['days_until'];
+
+    // ✅ 调试用：看看真实返回的封面地址
+    print("coverUrl = $coverUrl");
+    final weather = (event['weather'] is Map)
+        ? Map<String, dynamic>.from(event['weather'])
+        : null;
+    // 调试天气
+    print("weather = $weather");
+
+    final hotels = (event['hotels'] is Map)
+        ? Map<String, dynamic>.from(event['hotels'])
+        : null;
+
+    String formatShort(String s) {
+      if (s.isEmpty) return '';
+      try {
+        final dt = DateTime.parse(s).toLocal();
+        return '${dt.month}月${dt.day}日';
+      } catch (_) {
+        return s;
+      }
+    }
+
+    final startShort = formatShort(startAt);
+    final endShort = formatShort(endAt);
+
+    final dateStr = (endShort.isEmpty || startShort == endShort)
+        ? startShort
+        : '$startShort-$endShort';
 
     final cardBg = isDark ? const Color(0xFF1E2738) : const Color(0xFFF8F9FC);
     final borderColor = isDark
@@ -1631,26 +1991,154 @@ class _ChatPageState extends State<ChatPage> {
 
     return GestureDetector(
       onTap: (sourceUrl != null && sourceUrl.isNotEmpty)
-          ? () => launchUrl(Uri.parse(sourceUrl),
-              mode: LaunchMode.externalApplication)
+          ? () => launchUrl(
+              Uri.parse(sourceUrl),
+              mode: LaunchMode.externalApplication,
+            )
           : null,
+      onLongPress: () {
+        showGeneralDialog(
+          context: context,
+          barrierDismissible: true,
+          barrierLabel: "event",
+          barrierColor: Colors.black.withOpacity(0.4),
+          transitionDuration: const Duration(milliseconds: 250),
+          pageBuilder: (_, _, _) {
+            return Center(
+              child: TweenAnimationBuilder<double>(
+                tween: Tween(begin: 0.9, end: 1.0),
+                duration: const Duration(milliseconds: 250),
+                curve: Curves.easeOutCubic,
+                builder: (context, scale, child) {
+                  return Transform.scale(scale: scale, child: child);
+                },
+                child: Material(
+                  color: Colors.transparent,
+                  child: Container(
+                    width: MediaQuery.of(context).size.width * 0.85,
+                    decoration: BoxDecoration(
+                      color: isDark ? const Color(0xFF1E2738) : Colors.white,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    clipBehavior: Clip.hardEdge,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (coverUrl != null)
+                          Image.network(
+                            coverUrl,
+                            height: 180,
+                            width: double.infinity,
+                            fit: BoxFit.cover,
+                          ),
+                        Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                name,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(dateStr),
+                              const SizedBox(height: 6),
+                              Text(city.isNotEmpty ? city : "未知城市"),
+                              const SizedBox(height: 6),
+                              if (venue.isNotEmpty) Text(venue),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            );
+          },
+          transitionBuilder: (_, anim, _, child) {
+            return FadeTransition(opacity: anim, child: child);
+          },
+        );
+      },
       child: Container(
         decoration: BoxDecoration(
           color: cardBg,
-          borderRadius: BorderRadius.circular(12),
+          gradient: LinearGradient(
+            colors: isDark
+                ? [const Color(0xFF1E2738), const Color(0xFF111827)]
+                : [Colors.white, const Color(0xFFF3F6FB)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(16),
           border: Border.all(color: borderColor),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(isDark ? 0.5 : 0.08),
+              blurRadius: 30,
+              offset: const Offset(0, 10),
+            ),
+          ],
         ),
         clipBehavior: Clip.hardEdge,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 封面图片区块（有图片时显示图片，没图片时显示占位符）
             if (coverUrl != null && coverUrl.isNotEmpty)
-              Image.network(
-                coverUrl,
-                height: 110,
+              Stack(
+                children: [
+                  SizedBox(
+                    height: 130,
+                    width: double.infinity,
+                    child: Image.network(
+                      coverUrl,
+                      fit: BoxFit.cover,
+                      loadingBuilder: (context, child, progress) {
+                        if (progress == null) return child;
+                        return Container(
+                          color: isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.black.withOpacity(0.05),
+                          child: const Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          ),
+                        );
+                      },
+                      errorBuilder: (_, error, stack) {
+                        print("图片加载失败: $coverUrl");
+                        return Container(
+                          height: 130,
+                          color: isDark
+                              ? Colors.white.withOpacity(0.05)
+                              : Colors.black.withOpacity(0.05),
+                          child: const Center(
+                            child: Icon(Icons.broken_image, size: 28),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              )
+            else
+              Container(
+                height: 130,
                 width: double.infinity,
-                fit: BoxFit.cover,
-                errorBuilder: (_, error, stack) => const SizedBox.shrink(),
+                color: isDark
+                    ? Colors.white.withOpacity(0.05)
+                    : Colors.black.withOpacity(0.05),
+                child: const Center(
+                  child: Icon(Icons.image_not_supported, size: 28),
+                ),
               ),
             Padding(
               padding: const EdgeInsets.all(12),
@@ -1670,9 +2158,11 @@ class _ChatPageState extends State<ChatPage> {
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      Icon(Icons.calendar_today_outlined,
-                          size: 12,
-                          color: isDark ? Colors.white54 : Colors.black45),
+                      Icon(
+                        Icons.calendar_today_outlined,
+                        size: 12,
+                        color: isDark ? Colors.white54 : Colors.black45,
+                      ),
                       const SizedBox(width: 4),
                       Text(
                         dateStr,
@@ -1682,17 +2172,19 @@ class _ChatPageState extends State<ChatPage> {
                         ),
                       ),
                       const SizedBox(width: 10),
-                      Icon(Icons.location_on_outlined,
-                          size: 12,
-                          color: isDark ? Colors.white54 : Colors.black45),
+                      Icon(
+                        Icons.location_on_outlined,
+                        size: 12,
+                        color: isDark ? Colors.white54 : Colors.black45,
+                      ),
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
                           city.isNotEmpty && venue.isNotEmpty
                               ? '$city · $venue'
                               : city.isNotEmpty
-                                  ? city
-                                  : venue,
+                              ? city
+                              : venue,
                           style: TextStyle(
                             fontSize: 12,
                             color: isDark ? Colors.white60 : Colors.black54,
@@ -1703,49 +2195,146 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ],
                   ),
-                  if (weather != null) ...[
-                    const SizedBox(height: 6),
-                    Row(
-                      children: [
-                        Icon(Icons.wb_sunny_outlined,
-                            size: 12,
-                            color: isDark
-                                ? Colors.amber.shade300
-                                : Colors.orange),
-                        const SizedBox(width: 4),
-                        Text(
-                          '${weather['label'] ?? '未知'}  '
-                          '${(weather['tempMin'] as num?)?.toStringAsFixed(0) ?? '--'}'
-                          '~${(weather['tempMax'] as num?)?.toStringAsFixed(0) ?? '--'}°C',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: isDark ? Colors.white60 : Colors.black54,
+                  // 新增：状态 + 倒计时
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      if (rawStatus.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          decoration: BoxDecoration(
+                            color: Colors.blue.withOpacity(0.12),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            rawStatus,
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.blue,
+                              fontWeight: FontWeight.w500,
+                            ),
                           ),
                         ),
-                      ],
+                      if (rawStatus.isNotEmpty && daysUntil != null)
+                        const SizedBox(width: 8),
+                      if (daysUntil != null)
+                        Text(
+                          daysUntil is int
+                              ? (daysUntil > 0 ? '还有 $daysUntil 天' : '进行中/已结束')
+                              : '',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: isDark ? Colors.white54 : Colors.black54,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  // 替换天气Row为FutureBuilder
+                  FutureBuilder<FurryEventWeather?>(
+                    future: WeatherApi.fetch(
+                      city.isEmpty ? "上海" : city,
+                      startAt,
                     ),
-                  ],
-                  if (hotels != null &&
+                    builder: (context, snapshot) {
+                      final w = snapshot.data;
+
+                      if (snapshot.connectionState == ConnectionState.waiting) {
+                        return Row(
+                          children: [
+                            Icon(
+                              Icons.wb_sunny_outlined,
+                              size: 12,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              "加载天气中...",
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        );
+                      }
+
+                      if (w == null) {
+                        return Row(
+                          children: [
+                            Icon(
+                              Icons.help_outline,
+                              size: 12,
+                              color: Colors.grey,
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              "暂无天气信息",
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        );
+                      }
+
+                      final label = (w.label ?? "").toString();
+                      final min = w.tempMin;
+                      final max = w.tempMax;
+
+                      final text = (min != null && max != null)
+                          ? "$label ${min.toStringAsFixed(0)}~${max.toStringAsFixed(0)}°C"
+                          : (label.isNotEmpty ? label : "暂无天气信息");
+
+                      return Row(
+                        children: [
+                          Icon(
+                            _weatherIcon(label),
+                            size: 12,
+                            color: _weatherColor(label, isDark),
+                          ),
+                          const SizedBox(width: 4),
+                          Text(
+                            text,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark ? Colors.white60 : Colors.black54,
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  if (venue.isNotEmpty &&
+                      hotels != null &&
                       (hotels['ctripUrl'] != null ||
-                          hotels['meituanUrl'] != null)) ...[
+                          hotels['meituanUrl'] != null ||
+                          hotels['ctrip_url'] != null ||
+                          hotels['meituan_url'] != null)) ...[
                     const SizedBox(height: 8),
                     Row(
                       children: [
-                        if (hotels['ctripUrl'] != null)
+                        if (hotels['ctripUrl'] != null ||
+                            hotels['ctrip_url'] != null)
                           _hotelButton(
-                              '携程',
-                              hotels['ctripUrl']!.toString(),
-                              isDark,
-                              const Color(0xFF0086F6)),
-                        if (hotels['ctripUrl'] != null &&
-                            hotels['meituanUrl'] != null)
+                            '携程',
+                            (hotels['ctripUrl'] ?? hotels['ctrip_url'])
+                                .toString(),
+                            isDark,
+                            const Color(0xFF0086F6),
+                          ),
+                        if ((hotels['ctripUrl'] != null ||
+                                hotels['ctrip_url'] != null) &&
+                            (hotels['meituanUrl'] != null ||
+                                hotels['meituan_url'] != null))
                           const SizedBox(width: 8),
-                        if (hotels['meituanUrl'] != null)
+                        if (hotels['meituanUrl'] != null ||
+                            hotels['meituan_url'] != null)
                           _hotelButton(
-                              '美团',
-                              hotels['meituanUrl']!.toString(),
-                              isDark,
-                              const Color(0xFFF9A825)),
+                            '美团',
+                            (hotels['meituanUrl'] ?? hotels['meituan_url'])
+                                .toString(),
+                            isDark,
+                            const Color(0xFFF9A825),
+                          ),
                       ],
                     ),
                   ],
@@ -1756,6 +2345,27 @@ class _ChatPageState extends State<ChatPage> {
         ),
       ),
     );
+  }
+
+  IconData _weatherIcon(String label) {
+    final l = label.toLowerCase();
+    if (l.contains('雨')) return Icons.umbrella_outlined;
+    if (l.contains('雪')) return Icons.ac_unit;
+    if (l.contains('阴')) return Icons.cloud_outlined;
+    if (l.contains('云')) return Icons.cloud;
+    if (l.contains('雷')) return Icons.flash_on;
+    return Icons.wb_sunny_outlined;
+  }
+
+  Color _weatherColor(String label, bool isDark) {
+    final l = label.toLowerCase();
+    if (l.contains('雨')) return Colors.blueAccent;
+    if (l.contains('雪')) return Colors.lightBlueAccent;
+    if (l.contains('阴') || l.contains('云')) {
+      return isDark ? Colors.white54 : Colors.grey;
+    }
+    if (l.contains('雷')) return Colors.deepPurpleAccent;
+    return isDark ? Colors.amber.shade300 : Colors.orange;
   }
 
   Widget _hotelButton(String label, String url, bool isDark, Color accent) {
@@ -1804,7 +2414,6 @@ class _ChatPageState extends State<ChatPage> {
   List<Map<String, dynamic>> messages = [];
   List<Map<String, dynamic>> conversations = [];
   final Map<String, List<Map<String, dynamic>>> localConversationMessages = {};
-  String? currentConversationId;
   bool isGenerating = false;
   bool _cancelRequested = false;
   int _generationSerial = 0;
@@ -1815,7 +2424,22 @@ class _ChatPageState extends State<ChatPage> {
 
   bool isLocalConversation(String? id) => id?.startsWith('local_') ?? false;
 
-  Map<String, dynamic> _messageToCloud(Map<String, dynamic> message) {
+  Map<String, dynamic>? _messageToCloud(Map<String, dynamic> message) {
+    // 加载中的兽聚卡片占位符不持久化（临时状态）
+    if (message['isFurryCard'] == true && message['isLoading'] == true) {
+      return null;
+    }
+    // 已加载的兽聚卡片独立保存
+    if (message['isFurryCard'] == true) {
+      return {
+        'role': 'assistant',
+        'content': '',
+        'isFurryCard': true,
+        if (message['furryEvents'] is List)
+          'furryEvents': message['furryEvents'],
+      };
+    }
+
     final rawText = (message['apiContent'] ?? message['text'] ?? '').toString();
     var content = rawText;
     var reasoning = (message['reasoning'] ?? '').toString().trim();
@@ -1839,6 +2463,35 @@ class _ChatPageState extends State<ChatPage> {
     final reasoning = (message['reasoning'] ?? message['reasoning_content'])
         ?.toString()
         .trim();
+    if (message['isFurryCard'] == true) {
+      // 从缓存恢复时，把旧字段名转换成新字段名
+      List<dynamic> normalizedEvents = [];
+      if (message['furryEvents'] is List) {
+        normalizedEvents = (message['furryEvents'] as List).map((e) {
+          if (e is! Map) return e;
+          final m = Map<String, dynamic>.from(
+            e.map((k, v) => MapEntry(k.toString(), v)),
+          );
+          return {
+            'name': m['name'] ?? '',
+            'startAt': m['startAt'] ?? m['start_at'] ?? '',
+            'endAt': m['endAt'] ?? m['end_at'] ?? '',
+            'city': m['city'] ?? '',
+            'venue': m['venue'] ?? m['address'] ?? '',
+            'coverUrl': (m['coverUrl'] ?? m['cover'])?.toString(),
+            'sourceUrl': m['sourceUrl'] ?? m['source_url'],
+            'weather': m['weather'],
+            'hotels': m['hotels'],
+          };
+        }).toList();
+      }
+      return {
+        'isFurryCard': true,
+        'isLoading': false,
+        'isUser': false,
+        if (normalizedEvents.isNotEmpty) 'furryEvents': normalizedEvents,
+      };
+    }
     return {
       'text': content,
       if (reasoning != null && reasoning.isNotEmpty) 'reasoning': reasoning,
@@ -1859,9 +2512,10 @@ class _ChatPageState extends State<ChatPage> {
             title: (convo['title'] ?? '新对话').toString(),
             history: [
               const ChatMessage(role: 'system', content: sunlandSystemPrompt),
-              ...msgs.map(
-                (message) => ChatMessage.fromJson(_messageToCloud(message)),
-              ),
+              ...msgs
+                  .map(_messageToCloud)
+                  .whereType<Map<String, dynamic>>()
+                  .map(ChatMessage.fromJson),
             ],
             updatedAt:
                 int.tryParse((convo['updatedAt'] ?? '').toString()) ??
@@ -1931,11 +2585,20 @@ class _ChatPageState extends State<ChatPage> {
         setState(() => _applyConversationModels(cached));
       }
 
+      // ✅ 分开拉取，避免 Future.wait 类型推断问题
       final data = await supabase
           .from('conversations')
           .select('data')
           .eq('user_id', user.id)
           .maybeSingle();
+
+      final tombstoneRows = await supabase
+          .from('deleted_conversations')
+          .select('conv_id')
+          .eq('user_id', user.id);
+      final deletedIds = <String>{
+        for (final row in tombstoneRows) (row['conv_id'] ?? '').toString(),
+      };
 
       if (data == null || data['data'] == null) {
         if (cached.isEmpty && mounted) {
@@ -1945,8 +2608,20 @@ class _ChatPageState extends State<ChatPage> {
       }
 
       final rawList = data['data'] as List;
-      final cloudModels = conversationsFromCloudRows(rawList);
-      final merged = mergeConversations(cached, cloudModels);
+      // ✅ 过滤掉已删除的对话再做合并
+      final filteredList = rawList
+          .whereType<Map>()
+          .where((item) => !deletedIds.contains(item['id']?.toString()))
+          .toList();
+
+      final cloudModels = conversationsFromCloudRows(filteredList);
+
+      // 本地缓存也过滤一次
+      final filteredCached = cached
+          .where((c) => !deletedIds.contains(c.id))
+          .toList();
+
+      final merged = mergeConversations(filteredCached, cloudModels);
       await store.saveConversations(user.id, merged);
       if (!mounted) return;
       setState(() => _applyConversationModels(merged));
@@ -1962,36 +2637,51 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final models = _buildConversationModels();
 
-      // ✅ 改为基于时间戳的CRDT合并
+      // ✅ 拉取墓碑列表（已删除的对话 ID）
+      final tombstoneRows = await supabase
+          .from('deleted_conversations')
+          .select('conv_id')
+          .eq('user_id', user.id);
+      final deletedIds = <String>{
+        for (final row in tombstoneRows) (row['conv_id'] ?? '').toString(),
+      };
+
+      // ✅ 基于时间戳的 CRDT 合并
+      final merged = <String, Map<String, dynamic>>{};
+
+      // 先加载云端数据
       final existing = await supabase
           .from('conversations')
           .select('data')
           .eq('user_id', user.id)
           .maybeSingle();
 
-      final merged = <String, Map<String, dynamic>>{};
-
-      // 先加载云端数据
       if (existing?['data'] is List) {
         for (final item in existing!['data'] as List) {
           if (item is Map && item['id'] != null) {
-            merged[item['id'].toString()] = Map<String, dynamic>.from(
+            final itemId = item['id'].toString();
+            // ✅ 跳过已删除的对话
+            if (deletedIds.contains(itemId)) continue;
+            merged[itemId] = Map<String, dynamic>.from(
               item.map((k, v) => MapEntry(k.toString(), v)),
             );
           }
         }
       }
 
-      // 再用本地数据（只有时间戳更新的才覆盖）
+      // 再用本地数据（只有时间戳更新的才覆盖，已删除的跳过）
       for (final model in models) {
+        // ✅ 跳过已删除的对话
+        if (deletedIds.contains(model.id)) continue;
         final cloudVersion = merged[model.id];
         if (cloudVersion == null ||
-            model.updatedAt > (switch (cloudVersion['updatedAt']) {
-              final int v => v,
-              final double v => v.toInt(),
-              final String v => int.tryParse(v) ?? 0,
-              _ => 0,
-            })) {
+            model.updatedAt >
+                (switch (cloudVersion['updatedAt']) {
+                  final int v => v,
+                  final double v => v.toInt(),
+                  final String v => int.tryParse(v) ?? 0,
+                  _ => 0,
+                })) {
           merged[model.id] = {
             'id': model.id,
             'title': model.title,
@@ -2001,7 +2691,7 @@ class _ChatPageState extends State<ChatPage> {
         }
       }
 
-      // ✅ 保存合并后的结果
+      // ✅ 保存合并后的结果（不含已删除对话）
       await supabase.from('conversations').upsert({
         'user_id': user.id,
         'data': merged.values.toList(),
@@ -2030,8 +2720,17 @@ class _ChatPageState extends State<ChatPage> {
       }
     });
 
-    // ⭐ 同步到云端
+    // ⭐ 先写墓碑，再同步对话列表
     if (user != null) {
+      try {
+        await supabase.from('deleted_conversations').upsert({
+          'user_id': user.id,
+          'conv_id': id,
+          'deleted_at': DateTime.now().toIso8601String(),
+        }, onConflict: 'user_id,conv_id');
+      } catch (e) {
+        debugPrint('Write tombstone error: $e');
+      }
       await _saveToCloud();
     }
   }
@@ -2225,9 +2924,9 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
       try {
-        ocrResult = await extractTextFromImages(imagePaths).timeout(
-          const Duration(seconds: 12),
-        );
+        ocrResult = await extractTextFromImages(
+          imagePaths,
+        ).timeout(const Duration(seconds: 12));
       } on TimeoutException {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2254,8 +2953,7 @@ class _ChatPageState extends State<ChatPage> {
       return;
     }
 
-    final ocrBlock =
-        ocrResult?.hasUsableText == true ? ocrResult!.block : null;
+    final ocrBlock = ocrResult?.hasUsableText == true ? ocrResult!.block : null;
     final apiContent = buildApiMessageWithOcr(
       userText: text,
       ocrBlock: ocrBlock,
@@ -2265,9 +2963,7 @@ class _ChatPageState extends State<ChatPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              '当前平台不支持本地识图，请补充文字说明，或使用移动端发送图片',
-            ),
+            content: Text('当前平台不支持本地识图，请补充文字说明，或使用移动端发送图片'),
             duration: Duration(seconds: 3),
           ),
         );
@@ -2365,13 +3061,16 @@ class _ChatPageState extends State<ChatPage> {
     _lastUserText = text;
 
     // ── 兽聚查询：与 AI 并行获取活动数据 ─────────────────────────────────
+    // 查询范围由 AI 解析（_resolveFurryQueryParams），失败自动回退本地正则。
     Future<FurryEventSearchResult?>? furryFuture;
     if (_isFurryEventQuery(text)) {
       furryFuture = () async {
         try {
+          final params = await _resolveFurryQueryParams(text);
           return await FurryEventSearchApi.search(
-            city: _extractCity(text),
-            month: _extractMonth(text),
+            city: params.city,
+            month: params.month,
+            year: params.year,
           );
         } catch (_) {
           return null;
@@ -2389,8 +3088,13 @@ class _ChatPageState extends State<ChatPage> {
           "text": displayedUserText,
           "isUser": true,
           if (apiContent.isNotEmpty) "apiContent": apiContent,
-          if (imagePaths.isNotEmpty) "imagePaths": List<String>.from(imagePaths),
+          if (imagePaths.isNotEmpty)
+            "imagePaths": List<String>.from(imagePaths),
         });
+      }
+      // 兽聚卡片占位符先于 AI 消息插入，数据到达后就地更新
+      if (furryFuture != null) {
+        messages.add({"isFurryCard": true, "isLoading": true, "isUser": false});
       }
       final isDeepMode = isActivated && useDeep;
       messages.add({
@@ -2401,6 +3105,40 @@ class _ChatPageState extends State<ChatPage> {
       });
     });
 
+    // 兽聚数据到达时立即更新占位符（与 AI 流并行，不阻塞）
+    if (furryFuture != null) {
+      unawaited(
+        furryFuture.then((result) {
+          if (!mounted) return;
+          final idx = messages.indexWhere(
+            (m) => m["isFurryCard"] == true && m["isLoading"] == true,
+          );
+          if (idx == -1) return;
+          setState(() {
+            if (result != null) {
+              final furryMaps = result.events.map((e) => e.toMap()).toList();
+              debugPrint('furry count: ${furryMaps.length}');
+              debugPrint(
+                'first coverUrl: ${furryMaps.isNotEmpty ? furryMaps.first['coverUrl'] : 'empty'}',
+              );
+              messages[idx]['furryEvents'] = furryMaps;
+
+              messages[idx]['isEmpty'] = result.events.isEmpty;
+              messages[idx]['isLoading'] = false;
+            } else {
+              messages[idx] = {
+                "isFurryCard": true,
+                "isEmpty": true,
+                "isUser": false,
+              };
+            }
+          });
+          // 卡片渲染后高度变化，滚到底部避免被输入框遮住
+          scrollToBottom();
+        }),
+      );
+    }
+
     // Insert conversation and user message if needed
     rememberLocalMessages(); // ⭐ 防止新建对话前丢失当前内容
 
@@ -2409,7 +3147,7 @@ class _ChatPageState extends State<ChatPage> {
       currentConversationId = newId;
       conversations.insert(0, {
         'id': newId,
-        'title': buildConversationTitle(displayedUserText),
+        'title': '新对话',
         'updatedAt': DateTime.now().millisecondsSinceEpoch,
         'titleGenerated': false,
       });
@@ -2583,14 +3321,34 @@ class _ChatPageState extends State<ChatPage> {
       try {
         await runStream();
       } catch (e) {
-        if (e is AuthExpiredException ||
-            e is UsageLimitException ||
-            e is ApiException) {
+        if (e is AuthExpiredException || e is UsageLimitException) {
+          rethrow;
+        }
+        // 4xx 客户端错误（含 429）不重试，直接抛出；5xx 服务端瞬时错误允许重试一次
+        if (e is ApiException &&
+            (e.statusCode == null || e.statusCode! < 500)) {
           rethrow;
         }
         // retry once
         if (_cancelRequested || generationId != _generationSerial) return;
+        // 重试等待期间恢复"思考中..."动画，避免用户看到空白
+        if (mounted && messages.isNotEmpty) {
+          setState(() {
+            final last = messages.last;
+            if (last["isUser"] != true) {
+              last["text"] = (isActivated && useDeep) ? "深度思考中..." : "思考中...";
+              last["reasoning"] = "";
+            }
+          });
+        }
         await Future.delayed(const Duration(milliseconds: 800));
+        // 重试开始前清空，准备接收流式内容
+        if (mounted && messages.isNotEmpty && !_cancelRequested) {
+          setState(() {
+            final last = messages.last;
+            if (last["isUser"] != true) last["text"] = "";
+          });
+        }
         await runStream();
       }
 
@@ -2605,20 +3363,6 @@ class _ChatPageState extends State<ChatPage> {
       await Future.delayed(const Duration(milliseconds: 30));
       flushStreamingMessage(force: true); // ensure last chunk flushed
 
-      // ── 附加兽聚卡片数据 ──────────────────────────────────────────────
-      if (furryFuture != null && mounted && messages.isNotEmpty) {
-        final furryResult = await furryFuture;
-        if (furryResult != null &&
-            furryResult.events.isNotEmpty &&
-            mounted &&
-            messages.isNotEmpty) {
-          setState(() {
-            messages.last['furryEvents'] =
-                furryResult.events.map((e) => e.toMap()).toList();
-          });
-        }
-      }
-
       // ⭐ 图片发送完成后安全清空
       if (pickedImages.isNotEmpty) {
         setState(() => pickedImages.clear());
@@ -2630,6 +3374,17 @@ class _ChatPageState extends State<ChatPage> {
       if (activeIndex != -1) {
         conversations[activeIndex]['updatedAt'] =
             DateTime.now().millisecondsSinceEpoch;
+
+        // ⭐ 自动更新对话标题（仅第一次，在保存前完成，避免 CRDT 竞争）
+        final titleGenerated =
+            conversations[activeIndex]['titleGenerated'] ?? false;
+        final userMsgCount = messages.where((m) => m["isUser"] == true).length;
+        if (userMsgCount == 1 && !titleGenerated) {
+          conversations[activeIndex]['title'] = buildConversationTitle(
+            displayedUserText,
+          );
+          conversations[activeIndex]['titleGenerated'] = true;
+        }
       }
 
       rememberLocalMessages();
@@ -2639,31 +3394,6 @@ class _ChatPageState extends State<ChatPage> {
         isGenerating = false;
       });
 
-      // ⭐ AI 自动生成对话标题（仅第一次）
-      try {
-        final convoId = currentConversationId;
-        if (convoId != null) {
-          final index = conversations.indexWhere((c) => c['id'] == convoId);
-          if (index != -1) {
-            final titleGenerated =
-                conversations[index]['titleGenerated'] ?? false;
-            final userMsgCount = messages
-                .where((m) => m["isUser"] == true)
-                .length;
-            if (userMsgCount == 1 && !titleGenerated) {
-              setState(() {
-                conversations[index]['title'] = buildConversationTitle(
-                  displayedUserText,
-                );
-                conversations[index]['titleGenerated'] = true;
-              });
-              if (user != null) unawaited(_saveToCloud());
-            }
-          }
-        }
-      } catch (_) {
-        // 忽略标题生成失败
-      }
       scrollToBottom();
     } catch (e) {
       if (e is AuthExpiredException) {
@@ -2698,7 +3428,11 @@ class _ChatPageState extends State<ChatPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              e.toString().contains("timeout")
+              (e is ApiException && e.statusCode == 429)
+                  ? "请求太频繁了，稍等片刻再试 ⏳"
+                  : (e is ApiException && (e.statusCode ?? 0) >= 500)
+                  ? "服务器开小差了，稍后再试试 🔧"
+                  : e.toString().contains("timeout")
                   ? "请求超时了，稍后再试一下 ⏳"
                   : e.toString().contains("SocketException")
                   ? "网络好像断了，检查一下连接 🌐"
@@ -2713,7 +3447,7 @@ class _ChatPageState extends State<ChatPage> {
         if (messages.isNotEmpty) {
           messages.removeLast();
         }
-        messages.add({"text": "请求失败：$e", "isUser": false});
+        messages.add({"text": e.toString(), "isUser": false});
         isGenerating = false;
       });
 
@@ -3210,6 +3944,7 @@ class _ChatPageState extends State<ChatPage> {
                           .toString();
 
                       currentConversationId = newId;
+                      _lastQueryContext = null; // 新建对话：清空兽聚查询上下文
 
                       conversations.insert(0, {
                         'id': newId,
@@ -3312,6 +4047,8 @@ class _ChatPageState extends State<ChatPage> {
                                         rememberLocalMessages();
                                         setState(() {
                                           currentConversationId = convo['id'];
+                                          _lastQueryContext =
+                                              null; // 切换对话：清空兽聚查询上下文
                                           messages = normalizeMessages(
                                             List<Map<String, dynamic>>.from(
                                               localConversationMessages[currentConversationId] ??
@@ -3374,6 +4111,8 @@ class _ChatPageState extends State<ChatPage> {
                                           rememberLocalMessages();
                                           setState(() {
                                             currentConversationId = convo['id'];
+                                            _lastQueryContext =
+                                                null; // 切换对话：清空兽聚查询上下文
                                             messages = normalizeMessages(
                                               List<Map<String, dynamic>>.from(
                                                 localConversationMessages[currentConversationId] ??
@@ -3606,8 +4345,7 @@ class _ChatPageState extends State<ChatPage> {
                       physics: const BouncingScrollPhysics(
                         parent: AlwaysScrollableScrollPhysics(),
                       ),
-                      // Increased bottom padding to prevent input overlap
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 180),
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final msg = messages[i];
@@ -3617,41 +4355,26 @@ class _ChatPageState extends State<ChatPage> {
                             i.toString() +
                                 (msg["isReasoning"] == true ? "_r" : "_n"),
                           ),
-                          child: AnimatedSlide(
-                            offset: const Offset(0, 0.1),
-                            duration: const Duration(milliseconds: 250),
-                            curve: Curves.easeOut,
-                            child: AnimatedOpacity(
-                              opacity: 1,
-                              duration: const Duration(milliseconds: 250),
-                              child: GestureDetector(
-                                onLongPress: () {
-                                  if (!isUser) {
-                                    Clipboard.setData(
-                                      ClipboardData(text: msg["text"]),
-                                    );
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text("已复制"),
-                                        duration: Duration(milliseconds: 1200),
-                                      ),
-                                    );
-                                  }
-                                },
-                                child: Container(
-                                  margin: const EdgeInsets.symmetric(
-                                    vertical: 6,
+                          child: GestureDetector(
+                            onLongPress: () {
+                              if (!isUser) {
+                                Clipboard.setData(
+                                  ClipboardData(text: msg["text"]),
+                                );
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text("已复制"),
+                                    duration: Duration(milliseconds: 1200),
                                   ),
-                                  alignment: isUser
-                                      ? Alignment.centerRight
-                                      : Alignment.centerLeft,
-                                  child: buildMessageContent(
-                                    msg,
-                                    isUser,
-                                    isDark,
-                                  ),
-                                ),
-                              ),
+                                );
+                              }
+                            },
+                            child: Container(
+                              margin: const EdgeInsets.symmetric(vertical: 6),
+                              alignment: isUser
+                                  ? Alignment.centerRight
+                                  : Alignment.centerLeft,
+                              child: buildMessageContent(msg, isUser, isDark),
                             ),
                           ),
                         );
@@ -3995,4 +4718,68 @@ class _ChatPageState extends State<ChatPage> {
       ),
     );
   }
+}
+
+void _showEventDetailDialog(
+  BuildContext context,
+  Map<String, dynamic> event,
+  bool isDark,
+) {
+  showDialog(
+    context: context,
+    barrierColor: Colors.black.withOpacity(0.6),
+    builder: (_) {
+      return Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20),
+        child: TweenAnimationBuilder<double>(
+          tween: Tween(begin: 0.9, end: 1.0),
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+          builder: (_, scale, child) {
+            return Transform.scale(scale: scale, child: child);
+          },
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF1E2738) : Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  event['name'] ?? '未知活动',
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Text("📍 ${event['city'] ?? ''} ${event['address'] ?? ''}"),
+                const SizedBox(height: 6),
+                Text(
+                  "📅 ${event['startAt'] ?? event['start_at'] ?? ''} ~ ${event['endAt'] ?? event['end_at'] ?? ''}",
+                ),
+                const SizedBox(height: 10),
+                if (event['raw_status'] != null)
+                  Text("状态：${event['raw_status']}"),
+                if (event['days_until'] != null)
+                  Text("倒计时：${event['days_until']} 天"),
+                const SizedBox(height: 14),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text("关闭"),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    },
+  );
 }

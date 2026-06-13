@@ -7,10 +7,10 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
+import 'package:flutter/material.dart';
 
 const String sunlandApiBase = 'https://api.sunland.dev';
 const String supabaseUrl = 'https://klyrasrqgxijwrxuoevj.supabase.co';
@@ -47,7 +47,31 @@ const String sunlandSystemPrompt = '''
 - 你就是“霜蓝”，在和用户直接聊天
 
 目标：
-让用户感觉是在和一个“长得像兽设，但本质是人类、有性格的霜蓝”交流，而不是动物或工具。
+让用户感觉是在和一个”长得像兽设，但本质是人类、有性格的霜蓝”交流，而不是动物或工具。
+
+兽聚查询能力（重要）：
+
+当用户提到「兽聚 / 毛展 / 兽展 / furry 活动 / 兽人聚会」，或询问相关的活动、城市、时间时：
+
+系统会自动查询并在你回复的上方展示活动卡片（卡片里已经包含活动名称、时间、城市、天气和酒店链接，要提示用户链接可点），你不需要、也无法自己调用任何工具或接口。
+
+你的回复方式：
+- 用自然、温暖的语气简短回应（1~2 句），引导用户看上方卡片
+  例如：“我帮你找了下近期的兽聚活动，都在上面啦，挑感兴趣的看看吧～”
+- 如果用户指定了城市或时间，可以自然地提一句（如“这是上海最近的几场”）
+- 不要罗列或编造具体的活动名称、日期等内容（卡片会展示，重复反而啰嗦）
+
+重要补充（避免逻辑冲突）：
+- 无论是否查询到数据，都不要在文字中说明“有/没有查到”
+- 绝对不要出现“没有查到”“查询失败”等表达
+- 始终只做“我帮你整理好了，在上面看看”的引导
+- 不要出现前后矛盾的两句话（例如先说没查到又说在上面）
+
+禁止行为：
+- ❌ 自己编造活动信息
+- ❌ 说“我无法查询 / 我没有这个能力”
+- ❌ 只回一个“好的”这类敷衍的词，至少给一句自然的引导
+- ❌ 输出互相矛盾的内容（例如“没有查到”+“都在上面”）
 ''';
 
 class SunlandUser {
@@ -155,6 +179,7 @@ class ChatMessage {
     required this.content,
     this.reasoning,
     this.furryEvents,
+    this.isFurryCard = false,
   });
 
   final String role;
@@ -162,6 +187,8 @@ class ChatMessage {
   final String? reasoning;
   // 兽聚卡片数据（仅本地/云端持久化用，不发送给模型）
   final List<dynamic>? furryEvents;
+  // 独立兽聚卡片消息标记（不发送给模型）
+  final bool isFurryCard;
 
   bool get isUser => role == 'user';
   bool get isSystem => role == 'system';
@@ -174,6 +201,7 @@ class ChatMessage {
       if (hasReasoning) 'reasoning': reasoning,
       if (furryEvents != null && furryEvents!.isNotEmpty)
         'furryEvents': furryEvents,
+      if (isFurryCard) 'isFurryCard': true,
     };
   }
 
@@ -191,6 +219,7 @@ class ChatMessage {
       furryEvents: json['furryEvents'] is List
           ? json['furryEvents'] as List<dynamic>
           : null,
+      isFurryCard: json['isFurryCard'] == true,
     );
   }
 }
@@ -282,9 +311,10 @@ class UsageLimitException implements Exception {
 }
 
 class ApiException implements Exception {
-  const ApiException(this.message);
+  const ApiException(this.message, {this.statusCode});
 
   final String message;
+  final int? statusCode;
 
   @override
   String toString() => message;
@@ -755,7 +785,8 @@ Exception _exceptionForApiError(int statusCode, String bodyText) {
   final body = _tryDecodeJsonObject(bodyText);
   final error = (body['error'] ?? body['message'])?.toString();
 
-  if (statusCode == 429 && error == 'LIMIT') {
+  // 429 限额错误，兼容 LIMIT/limit
+  if (statusCode == 429 && (error == 'LIMIT' || error == 'limit')) {
     final remain = int.tryParse((body['remain'] ?? '0').toString()) ?? 0;
     return UsageLimitException(remain: remain);
   }
@@ -765,7 +796,17 @@ Exception _exceptionForApiError(int statusCode, String bodyText) {
   }
 
   if (statusCode == 429) {
-    return ApiException(error ?? '请求过快，请稍后再试');
+    // 统一解析不同类型的429错误
+    if (error == 'Too Many Requests' || error == 'RATE_LIMIT') {
+      return const ApiException('请求太频繁了，稍等片刻再试 ⏳', statusCode: 429);
+    }
+
+    // fallback：未知429也统一提示
+    return const ApiException('请求过多，请稍后再试', statusCode: 429);
+  }
+
+  if (statusCode >= 500) {
+    return ApiException(error ?? '服务器暂时出错，请稍后重试', statusCode: statusCode);
   }
 
   return ApiException(error ?? '请求失败：$statusCode');
@@ -1095,16 +1136,12 @@ bool get supportsLocalImageOcr {
   return Platform.isAndroid || Platform.isIOS;
 }
 
-const String kOcrPrivacyTip =
-    '图片仅在本地识别文字，原图不会上传到服务器。';
+const String kOcrPrivacyTip = '图片仅在本地识别文字，原图不会上传到服务器。';
 
 const String kOcrEmptyMarker = '（未识别到文字）';
 
 /// 合并用户文字与 OCR 块，供 API / 云端同步使用。
-String buildApiMessageWithOcr({
-  required String userText,
-  String? ocrBlock,
-}) {
+String buildApiMessageWithOcr({required String userText, String? ocrBlock}) {
   final ocr = ocrBlock?.trim() ?? '';
   final question = userText.trim();
 
@@ -1147,6 +1184,7 @@ List<ChatMessage> buildChatHistory({
   final valid = rawMessages
       .where(
         (m) =>
+            m["isFurryCard"] != true &&
             m["text"] != "思考中..." &&
             m["text"] != "深度思考中..." &&
             m["text"] != "正在识别图片文字..." &&
@@ -1183,6 +1221,139 @@ List<ChatMessage> buildChatHistory({
   return history;
 }
 
+bool isFurryQuery(String text) {
+  final t = text.toLowerCase();
+
+  const keywords = ['兽聚', '毛展', '兽展', 'furry', '兽人', '展会', '活动', '漫展'];
+
+  return keywords.any((k) => t.contains(k));
+}
+
+const _cities = [
+  '北京',
+  '上海',
+  '广州',
+  '深圳',
+  '杭州',
+  '成都',
+  '重庆',
+  '武汉',
+  '南京',
+  '西安',
+  '天津',
+  '苏州',
+  '长沙',
+  '青岛',
+  '宁波',
+  '厦门',
+  '福州',
+  '合肥',
+  '郑州',
+  '济南',
+  '大连',
+  '沈阳',
+  '长春',
+  '哈尔滨',
+  '南昌',
+  '南宁',
+  '贵阳',
+  '昆明',
+  '兰州',
+  '乌鲁木齐',
+];
+
+String? extractCity(String text) {
+  for (final city in _cities) {
+    if (text.contains(city)) return city;
+  }
+  return null;
+}
+
+DateTimeRange? extractTimeRange(String text) {
+  final now = DateTime.now();
+
+  if (text.contains('下个月')) {
+    final year = now.month == 12 ? now.year + 1 : now.year;
+    final month = now.month == 12 ? 1 : now.month + 1;
+    final start = DateTime(year, month, 1);
+    final end = DateTime(year, month + 1, 1);
+    return DateTimeRange(start: start, end: end);
+  }
+
+  if (text.contains('这个月') || text.contains('本月')) {
+    final start = DateTime(now.year, now.month, 1);
+    final end = DateTime(now.year, now.month + 1, 1);
+    return DateTimeRange(start: start, end: end);
+  }
+
+  // 最近 / 近期 / 即将（统一逻辑）
+  if (text.contains('最近') || text.contains('近期') || text.contains('即将')) {
+    return DateTimeRange(start: now, end: now.add(const Duration(days: 60)));
+  }
+
+  return null;
+}
+
+Future<List<dynamic>> queryFurryEvents({
+  String? city,
+  DateTimeRange? range,
+}) async {
+  final supabase = Supabase.instance.client;
+
+  var query = supabase.from('furry_events').select();
+
+  if (city != null && city.isNotEmpty) {
+    query = query.ilike('city', '%$city%');
+  }
+
+  if (range != null) {
+    query = query
+        .gte('start_at', range.start.toIso8601String())
+        .lt('start_at', range.end.toIso8601String());
+  } else {
+    // 没有时间条件 → 默认未来60天
+    final now = DateTime.now();
+    query = query
+        .gte('start_at', now.toIso8601String())
+        .lt('start_at', now.add(const Duration(days: 60)).toIso8601String());
+  }
+
+  final events = await query.order('start_at');
+
+  // 👇 给每个活动补充天气数据
+  for (var e in events) {
+    final eventCity = e['city'];
+
+    if (eventCity != null && eventCity.toString().isNotEmpty) {
+      try {
+        final weather = await fetchWeather(eventCity);
+        e['weather'] = weather;
+      } catch (_) {
+        e['weather'] = null;
+      }
+    }
+  }
+
+  return events;
+}
+
+Future<Map<String, dynamic>> fetchWeather(String city) async {
+  final url = Uri.parse('https://wttr.in/$city?format=j1');
+
+  final res = await http.get(url);
+
+  if (res.statusCode != 200) {
+    throw Exception('weather error');
+  }
+
+  final data = jsonDecode(res.body);
+
+  return {
+    'temp': data['current_condition'][0]['temp_C'],
+    'desc': data['current_condition'][0]['weatherDesc'][0]['value'],
+  };
+}
+
 // ====== 新增：高阶聊天包装 API ======
 Future<AiResponse> sendSmartChat({
   required SunlandApiClient client,
@@ -1196,6 +1367,9 @@ Future<AiResponse> sendSmartChat({
 }
 
 // ====== 高阶流式聊天包装 API ======
+// 注意：兽聚查询不再在此拦截。兽聚消息照常走真实 AI 流式回复，
+// 卡片由 UI 层（main.dart sendMessage）并行通过 FurryEventSearchApi 获取并渲染，
+// 二者互不干扰。
 Stream<AiResponse> sendSmartChatStream({
   required SunlandApiClient client,
   required List<Map<String, dynamic>> rawMessages,
@@ -1272,8 +1446,9 @@ Future<ImageOcrResult> extractTextFromImages(List<String> imagePaths) async {
       if (!await file.exists()) continue;
 
       try {
-        final recognizedText =
-            await recognizer.processImage(InputImage.fromFilePath(ocrPath));
+        final recognizedText = await recognizer.processImage(
+          InputImage.fromFilePath(ocrPath),
+        );
 
         final text = recognizedText.text.trim();
         buffer.writeln('【图${i + 1}】');
@@ -1304,7 +1479,9 @@ Future<ImageOcrResult> extractTextFromImages(List<String> imagePaths) async {
         buffer.writeln();
       } finally {
         if (ocrPath != path) {
-          try { await File(ocrPath).delete(); } catch (_) {}
+          try {
+            await File(ocrPath).delete();
+          } catch (_) {}
         }
       }
     }

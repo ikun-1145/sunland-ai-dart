@@ -31,3 +31,6 @@ ios/.symlinks/
 *.driveupload
 .tmp.driveupload/
 deploy.log
+
+# ===== Claude Code =====
+.claude/

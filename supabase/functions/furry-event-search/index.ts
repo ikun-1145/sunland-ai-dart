@@ -120,7 +120,10 @@ async function scrapeFurryconsEvents(): Promise<ScrapedEvent[]> {
     const name    = raw.name ?? raw.title ?? "未知活动";
     const startAt = raw.startAt ?? raw.start_at ?? raw.startTime ?? "";
     const endAt   = raw.endAt   ?? raw.end_at   ?? raw.endTime   ?? "";
-    const city    = raw.region?.name ?? raw.city?.name ?? raw.cityName ?? "";
+    // furrycons.cn 的城市在 region.localName（如"上海""香港特别行政区"），
+    // 旧代码读的 region.name 不存在，导致 city 一直为空、按城市过滤恒为 0 条。
+    const city    = raw.region?.localName ?? raw.region?.name ??
+                    raw.city?.name ?? raw.cityName ?? "";
     const venue   = raw.address ?? raw.venue ?? raw.location?.address ?? "";
     const thumb   = raw.thumbnail ?? raw.cover ?? raw.coverImage ?? "";
     const coverUrl = thumb
@@ -213,38 +216,28 @@ Deno.serve(async (req: Request) => {
     { auth: { persistSession: false } }
   );
 
-  const supabaseUser = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_ANON_KEY")!,
-    {
-      global: { headers: { Authorization: authHeader } },
-      auth: { persistSession: false },
-    }
-  );
-
-  const { data: { user }, error: authErr } = await supabaseUser.auth.getUser();
-  if (authErr || !user) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-
-  let payload: { query?: string; city?: string; year?: number; month?: number } = {};
+  let payload: {
+    query?: string; city?: string; year?: number; month?: number;
+    refresh?: boolean;
+  } = {};
   try { payload = await req.json(); } catch { /* 空 body 合法 */ }
 
-  const { city, year, month } = payload;
+  const { city, year, month, refresh } = payload;
 
   try {
     const cacheKey = todayCacheKey();
     const cutoff   = new Date(Date.now() - 86_400_000).toISOString();
 
-    const { data: cached } = await supabaseAdmin
-      .from("furry_events")
-      .select("*")
-      .eq("cache_key", cacheKey)
-      .gte("cached_at", cutoff)
-      .order("start_at", { ascending: true });
+    // refresh=true 时跳过缓存读取，强制重爬（冷路径会先删除旧 cache_key 再写入）。
+    // 用于数据结构变更后清掉陈旧缓存。
+    const { data: cached } = refresh
+      ? { data: null }
+      : await supabaseAdmin
+          .from("furry_events")
+          .select("*")
+          .eq("cache_key", cacheKey)
+          .gte("cached_at", cutoff)
+          .order("start_at", { ascending: true });
 
     let events: any[] = [];
     let fromCache = false;
@@ -257,14 +250,22 @@ Deno.serve(async (req: Request) => {
 
       await supabaseAdmin.from("furry_events").delete().eq("cache_key", cacheKey);
 
-      // 并行抓取天气，整体耗时约为单次请求而非累加，避免函数超时
+      // 按城市+日期去重天气请求，多个同城活动共用一次 Open-Meteo 请求，
+      // 避免并发请求过多触发 429 Too Many Requests
+      const weatherCache = new Map<string, Promise<WeatherData | null>>();
+      function fetchWeatherDeduped(city: string, date: string): Promise<WeatherData | null> {
+        const k = `${city}|${date}`;
+        if (!weatherCache.has(k)) weatherCache.set(k, fetchWeather(city, date));
+        return weatherCache.get(k)!;
+      }
+
       const rows: Record<string, unknown>[] = await Promise.all(
         scraped.map(async (ev) => {
           const startDate = ev.startAt?.slice(0, 10) ?? null;
           const endDate   = ev.endAt?.slice(0, 10) ?? startDate;
 
           const weather = (startDate && ev.city)
-            ? await fetchWeather(ev.city, startDate)
+            ? await fetchWeatherDeduped(ev.city, startDate)
             : null;
 
           const checkout = endDate
