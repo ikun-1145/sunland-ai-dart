@@ -277,18 +277,13 @@ class FurryEventEnriched {
     final hotelsRaw = m['hotels'];
     final venueStr = m['address']?.toString() ?? '';
 
-    // 使用 Worker 代理图片（解决防盗链问题）
-    String? cover = m['cover']?.toString();
-    if (cover != null && cover.isNotEmpty) {
+    // 表内真实图片在 cover 列（furryfusion 图床，公网可直连、无防盗链）；
+    // 兼容旧 cover_url 列。早期版本经 *.workers.dev 代理，该域名在国内网络
+    // 不稳定/易被污染，反而导致图片加载失败，故直接使用原图地址。
+    String? cover = (m['cover'] ?? m['cover_url'])?.toString();
+    if (cover != null) {
       cover = cover.trim();
-
-      // 只处理有效 http 链接
-      if (cover.startsWith('http')) {
-        cover =
-            "https://sunland-data-worker.liuxizekali.workers.dev/image-proxy?url=${Uri.encodeComponent(cover)}";
-      } else {
-        cover = null;
-      }
+      if (!cover.startsWith('http')) cover = null;
     }
 
     return FurryEventEnriched(

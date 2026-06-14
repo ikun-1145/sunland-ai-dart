@@ -8,7 +8,8 @@ const String _captchaHtml = '''
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>安全验证</title>
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+  <script src="https://static.geetest.com/v4/gt4.js"></script>
 
   <style>
     body {
@@ -59,7 +60,7 @@ const String _captchaHtml = '''
       color: rgba(255,255,255,0.6);
     }
 
-    .cf-turnstile {
+    #captcha {
       margin-top: 10px;
     }
   </style>
@@ -71,20 +72,30 @@ const String _captchaHtml = '''
     <h2>正在验证身份</h2>
     <p>请稍候，这不会花很久</p>
 
-    <div
-      class="cf-turnstile"
-      data-sitekey="0x4AAAAAAC_W2Wj2YdkrQiMf"
-      data-callback="onSuccess"
-      data-theme="dark">
-    </div>
+    <div id="captcha"></div>
   </div>
 
   <script>
-    function onSuccess(token) {
-      document.querySelector('.spinner').style.display = 'none';
-      console.log("Turnstile success, token:", token);
-      window.location.href = "sunland://captcha?token=" + encodeURIComponent(token);
-    }
+    initGeetest4({
+      captchaId: "ad3a8126afe716ccd4541f35d428071e",
+      product: "float"
+    }, function (captchaObj) {
+
+      captchaObj.appendTo("#captcha");
+
+      captchaObj.onSuccess(function () {
+        document.querySelector('.spinner').style.display = 'none';
+
+        const result = captchaObj.getValidate();
+        console.log("GeeTest success:", result);
+
+        const token = JSON.stringify(result);
+
+        window.location.href =
+          "sunland://captcha?token=" + encodeURIComponent(token);
+      });
+
+    });
   </script>
 </body>
 </html>

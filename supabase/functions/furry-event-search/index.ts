@@ -126,12 +126,15 @@ async function scrapeFurryconsEvents(): Promise<ScrapedEvent[]> {
                     raw.city?.name ?? raw.cityName ?? "";
     const venue   = raw.address ?? raw.venue ?? raw.location?.address ?? "";
     const thumb   = raw.thumbnail ?? raw.cover ?? raw.coverImage ?? "";
+    // furrycons.cn 封面图托管在 images.furrycons.cn，www 域名同路径会 404。
     const coverUrl = thumb
-      ? `https://www.furrycons.cn/${thumb.replace(/^\//, "")}`
+      ? `https://images.furrycons.cn/${thumb.replace(/^\//, "")}`
       : "";
-    const slug = raw.slug ?? raw.id ?? "";
-    const sourceUrl = slug
-      ? `https://www.furrycons.cn/events/${slug}`
+    const slug    = raw.slug ?? raw.id ?? "";
+    const orgSlug = raw.organization?.slug ?? "";
+    // 活动详情页真实路径为 {机构slug}/{活动slug}；旧的 /events/{slug} 会 404。
+    const sourceUrl = (orgSlug && slug)
+      ? `https://www.furrycons.cn/${orgSlug}/${slug}`
       : baseUrl;
     return { name, startAt, endAt, city, venue, coverUrl, sourceUrl, rawJson: raw };
   });
