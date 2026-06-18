@@ -29,6 +29,9 @@ User _buildSupabaseUser(SunlandUser user) {
   if (user.avatarPath != null && user.avatarPath!.isNotEmpty) {
     metadata['avatar_path'] = user.avatarPath;
   }
+  if (user.name != null && user.name!.isNotEmpty) {
+    metadata['name'] = user.name;
+  }
 
   return User.fromJson({
     "id": user.id,
@@ -272,6 +275,7 @@ class _RootPageState extends State<RootPage> {
             email: user.email,
             avatarUrl: profile.avatarUrl ?? user.avatarUrl,
             avatarPath: user.avatarPath,
+            name: profile.name,
           );
           updatedUser = updated;
         }
@@ -4269,7 +4273,7 @@ class _ChatPageState extends State<ChatPage> {
                               spacing: 10,
                               runSpacing: 10,
                               children: [
-                                buildQuickBtn("🧠 激发我的活力"),
+                                buildQuickBtn("🐾 查找下个月的兽聚"),
                                 buildQuickBtn("✨ 给我一点灵感"),
                                 buildQuickBtn("📄 随便聊聊"),
                               ],
@@ -4787,8 +4791,7 @@ class _FurryEventCarouselState extends State<_FurryEventCarousel> {
             itemCount: events.isEmpty ? 0 : 2000, // ⭐ 假无限循环
             itemBuilder: (context, index) {
               final realIndex = index % events.length;
-              final e =
-                  Map<String, dynamic>.from(events[realIndex] as Map);
+              final e = Map<String, dynamic>.from(events[realIndex] as Map);
               // 动态焦点缩放 + 居中吸附效果
               return AnimatedBuilder(
                 animation: _pageController,

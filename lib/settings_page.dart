@@ -217,6 +217,11 @@ class _SettingsPageState extends State<SettingsPage> {
                                 if (!mounted) return;
                                 if (context.mounted) Navigator.pop(context);
                                 await _load();
+                                // 同步到全局用户，主页问候语立即刷新
+                                if (_user != null) {
+                                  final withName = _user!.copyWith(name: newName);
+                                  currentUserNotifier.value = _userFromSunland(withName);
+                                }
                                 _showSnack('昵称已更新');
                               } catch (e) {
                                 debugPrint('昵称保存错误: $e');
@@ -347,6 +352,9 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     if (user.avatarPath != null && user.avatarPath!.isNotEmpty) {
       metadata['avatar_path'] = user.avatarPath;
+    }
+    if (user.name != null && user.name!.isNotEmpty) {
+      metadata['name'] = user.name;
     }
     return User.fromJson({
       "id": user.id,

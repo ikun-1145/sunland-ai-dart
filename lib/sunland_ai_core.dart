@@ -80,12 +80,14 @@ class SunlandUser {
     required this.email,
     this.avatarUrl,
     this.avatarPath,
+    this.name,
   });
 
   final String id;
   final String email;
   final String? avatarUrl;
   final String? avatarPath;
+  final String? name;
 
   String get displayName {
     if (email.isEmpty || email == '未知用户') return '霜蓝用户';
@@ -102,12 +104,14 @@ class SunlandUser {
     String? email,
     String? avatarUrl,
     String? avatarPath,
+    String? name,
   }) {
     return SunlandUser(
       id: id ?? this.id,
       email: email ?? this.email,
       avatarUrl: avatarUrl ?? this.avatarUrl,
       avatarPath: avatarPath ?? this.avatarPath,
+      name: name ?? this.name,
     );
   }
 
