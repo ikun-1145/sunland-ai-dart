@@ -202,15 +202,17 @@ class WeatherApi {
 
       final json = jsonDecode(res.body);
 
-      if (json['daily'] == null || json['daily']['weathercode'] == null) {
+      final codes = json['daily']?['weathercode'];
+      if (json['daily'] == null || codes == null || (codes as List).isEmpty) {
         debugPrint("❌ 天气API返回异常: $json");
         return null;
       }
 
+      final weatherCode = _toInt(codes[0]);
       final weather = FurryEventWeather(
         date: d,
-        code: json['daily']['weathercode'][0],
-        label: _mapWeather(json['daily']['weathercode'][0]),
+        code: weatherCode,
+        label: _mapWeather(weatherCode),
         tempMax: _toDouble(json['daily']['temperature_2m_max']?[0]),
         tempMin: _toDouble(json['daily']['temperature_2m_min']?[0]),
       );
@@ -226,7 +228,8 @@ class WeatherApi {
   }
 }
 
-String _mapWeather(int code) {
+String _mapWeather(int? code) {
+  if (code == null) return "未知";
   if (code == 0) return "晴";
   if (code <= 3) return "多云";
   if (code <= 48) return "雾";
@@ -351,8 +354,8 @@ class FurryEventSearchResult {
     final rawList = (m['events'] as List?) ?? [];
     return FurryEventSearchResult(
       events: rawList
-          .whereType<Map<String, dynamic>>()
-          .map(FurryEventEnriched.fromMap)
+          .whereType<Map>()
+          .map((e) => FurryEventEnriched.fromMap(Map<String, dynamic>.from(e)))
           .toList(),
       cached: m['cached'] == true,
       total: (m['total'] as num?)?.toInt() ?? 0,
@@ -420,7 +423,10 @@ class FurryEventSearchApi {
 
       final res = await query.order('start_at');
 
-      final list = (res as List).whereType<Map<String, dynamic>>().toList();
+      final list = (res as List)
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
 
       debugPrint('兽聚查询 city=$city month=$month year=$year → ${list.length} 条');
 
@@ -430,10 +436,10 @@ class FurryEventSearchApi {
         cached: false,
         total: list.length,
       );
-    } on FunctionException catch (e) {
-      final d = e.details;
-      final msg = (d is Map) ? d['error']?.toString() : null;
-      throw Exception(msg ?? '兽聚查询失败');
+    } on PostgrestException catch (e) {
+      throw Exception(e.message.isNotEmpty ? e.message : '兽聚查询失败');
+    } catch (e) {
+      throw Exception('兽聚查询失败');
     }
   }
 }

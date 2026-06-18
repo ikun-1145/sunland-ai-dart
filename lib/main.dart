@@ -1860,70 +1860,10 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
     }
-    // 使用 PageController 并保持引用
-    final PageController pageController = PageController(
-      viewportFraction: 0.9,
-      initialPage: 1000, // ⭐ 实现“无限循环”
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const SizedBox(height: 4),
-        Text(
-          '🐾 相关兽聚活动',
-          style: TextStyle(
-            fontSize: 13,
-            fontWeight: FontWeight.w600,
-            color: isDark ? Colors.white70 : Colors.black54,
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 280,
-          child: PageView.builder(
-            controller: pageController,
-            itemCount: events.isEmpty ? 0 : 2000, // ⭐ 假无限循环
-            itemBuilder: (context, index) {
-              final realIndex = index % events.length;
-              final e = events[realIndex] as Map<String, dynamic>;
-              // 动态焦点缩放 + 居中吸附效果
-              return AnimatedBuilder(
-                animation: pageController,
-                builder: (context, child) {
-                  double scale = 0.95;
-                  try {
-                    if (pageController.position.haveDimensions) {
-                      final page =
-                          pageController.page ??
-                          pageController.initialPage.toDouble();
-                      final diff = (page - index).abs();
-                      scale = (1 - diff * 0.12).clamp(0.85, 1.0);
-                    }
-                  } catch (_) {}
-
-                  final offset =
-                      (pageController.hasClients &&
-                          pageController.position.haveDimensions)
-                      ? (pageController.page! - index)
-                      : 0.0;
-
-                  return Transform.translate(
-                    offset: Offset(offset * 20, 0), // ⭐ 横向堆叠位移
-                    child: Transform.scale(
-                      scale: scale,
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 6),
-                        child: child,
-                      ),
-                    ),
-                  );
-                },
-                child: _buildFurryEventCard(e, isDark),
-              );
-            },
-          ),
-        ),
-      ],
+    return _FurryEventCarousel(
+      events: events,
+      isDark: isDark,
+      cardBuilder: _buildFurryEventCard,
     );
   }
 
@@ -3109,7 +3049,7 @@ class _ChatPageState extends State<ChatPage> {
     if (furryFuture != null) {
       unawaited(
         furryFuture.then((result) {
-          if (!mounted) return;
+          if (!mounted || generationId != _generationSerial) return;
           final idx = messages.indexWhere(
             (m) => m["isFurryCard"] == true && m["isLoading"] == true,
           );
@@ -3390,6 +3330,7 @@ class _ChatPageState extends State<ChatPage> {
       rememberLocalMessages();
       if (user != null) await _saveToCloud();
 
+      if (!mounted) return;
       setState(() {
         isGenerating = false;
       });
@@ -3405,6 +3346,7 @@ class _ChatPageState extends State<ChatPage> {
             ),
           );
         }
+        if (!mounted) return;
         setState(() => isGenerating = false);
         return;
       }
@@ -3414,6 +3356,7 @@ class _ChatPageState extends State<ChatPage> {
         if (user != null) {
           unawaited(store.saveRemainingCount(user.id, normalized));
         }
+        if (!mounted) return;
         setState(() {
           _remainingCount = normalized;
           isGenerating = false;
@@ -3443,13 +3386,15 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
 
-      setState(() {
-        if (messages.isNotEmpty) {
-          messages.removeLast();
-        }
-        messages.add({"text": e.toString(), "isUser": false});
-        isGenerating = false;
-      });
+      if (mounted) {
+        setState(() {
+          if (messages.isNotEmpty) {
+            messages.removeLast();
+          }
+          messages.add({"text": e.toString(), "isUser": false});
+          isGenerating = false;
+        });
+      }
 
       rememberLocalMessages();
     } finally {
@@ -4782,4 +4727,106 @@ void _showEventDetailDialog(
       );
     },
   );
+}
+
+// ── 兽聚轮播卡片组件（独立 StatefulWidget，正确管理 PageController 生命周期）─────────────
+class _FurryEventCarousel extends StatefulWidget {
+  final List<dynamic> events;
+  final bool isDark;
+  final Widget Function(Map<String, dynamic>, bool) cardBuilder;
+
+  const _FurryEventCarousel({
+    required this.events,
+    required this.isDark,
+    required this.cardBuilder,
+  });
+
+  @override
+  State<_FurryEventCarousel> createState() => _FurryEventCarouselState();
+}
+
+class _FurryEventCarouselState extends State<_FurryEventCarousel> {
+  late final PageController _pageController;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController(
+      viewportFraction: 0.9,
+      initialPage: 1000, // ⭐ 实现"无限循环"
+    );
+  }
+
+  @override
+  void dispose() {
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final events = widget.events;
+    final isDark = widget.isDark;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 4),
+        Text(
+          '🐾 相关兽聚活动',
+          style: TextStyle(
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+            color: isDark ? Colors.white70 : Colors.black54,
+          ),
+        ),
+        const SizedBox(height: 10),
+        SizedBox(
+          height: 280,
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: events.isEmpty ? 0 : 2000, // ⭐ 假无限循环
+            itemBuilder: (context, index) {
+              final realIndex = index % events.length;
+              final e =
+                  Map<String, dynamic>.from(events[realIndex] as Map);
+              // 动态焦点缩放 + 居中吸附效果
+              return AnimatedBuilder(
+                animation: _pageController,
+                builder: (context, child) {
+                  double scale = 0.95;
+                  try {
+                    if (_pageController.position.haveDimensions) {
+                      final page =
+                          _pageController.page ??
+                          _pageController.initialPage.toDouble();
+                      final diff = (page - index).abs();
+                      scale = (1 - diff * 0.12).clamp(0.85, 1.0);
+                    }
+                  } catch (_) {}
+
+                  final offset =
+                      (_pageController.hasClients &&
+                          _pageController.position.haveDimensions)
+                      ? (_pageController.page! - index)
+                      : 0.0;
+
+                  return Transform.translate(
+                    offset: Offset(offset * 20, 0), // ⭐ 横向堆叠位移
+                    child: Transform.scale(
+                      scale: scale,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: child,
+                      ),
+                    ),
+                  );
+                },
+                child: widget.cardBuilder(e, isDark),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
 }

@@ -105,7 +105,7 @@ class UpdateService {
       if (!v.contains('-')) return 9999;
       final suffix = v.split('-').last;
       final num = RegExp(r'\d+').firstMatch(suffix);
-      return num != null ? int.parse(num.group(0)!) : 0;
+      return num != null ? int.tryParse(num.group(0)!) ?? 0 : 0;
     }
 
     final cMain = parseMain(current);
