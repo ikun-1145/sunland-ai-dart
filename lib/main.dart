@@ -2879,8 +2879,8 @@ class _ChatPageState extends State<ChatPage> {
               duration: Duration(seconds: 3),
             ),
           );
+          setState(() => isGenerating = false);
         }
-        setState(() => isGenerating = false);
         return;
       } catch (e) {
         debugPrint('OCR error: $e');
@@ -3308,7 +3308,7 @@ class _ChatPageState extends State<ChatPage> {
       flushStreamingMessage(force: true); // ensure last chunk flushed
 
       // ⭐ 图片发送完成后安全清空
-      if (pickedImages.isNotEmpty) {
+      if (mounted && pickedImages.isNotEmpty) {
         setState(() => pickedImages.clear());
       }
 
@@ -3476,6 +3476,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> pickImage() async {
     if (!_ocrPrivacyTipShown && mounted) {
       await _markOcrPrivacyTipShown();
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(kOcrPrivacyTip),
@@ -3489,6 +3490,7 @@ class _ChatPageState extends State<ChatPage> {
       final picker = ImagePicker();
       final picked = await picker.pickMultiImage();
 
+      if (!mounted) return;
       if (picked.isEmpty) return;
 
       setState(() {
@@ -3507,6 +3509,7 @@ class _ChatPageState extends State<ChatPage> {
       type: FileType.image,
     );
 
+    if (!mounted) return;
     if (result == null || result.files.isEmpty) return;
 
     setState(() {
