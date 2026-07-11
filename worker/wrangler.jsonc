@@ -1,0 +1,17 @@
+{
+	"$schema": "https://unpkg.com/wrangler/config-schema.json",
+	"name": "ai",
+	"main": "src/index.js",
+	"compatibility_date": "2026-03-21",
+	// 保留 Dashboard 中配置的环境变量（DEEPSEEK_KEY 等），部署时不清除
+	"keep_vars": true,
+	// 不启用 workers.dev 子域名，流量走自定义域名 api.sunland.dev
+	"workers_dev": false,
+	"observability": {
+		"enabled": true
+	},
+	"kv_namespaces": [
+		{ "binding": "CODE_STORE", "id": "29b10d1dd6a647b9bd0bccff5a48719f" },
+		{ "binding": "USAGE_KV", "id": "29b10d1dd6a647b9bd0bccff5a48719f" }
+	]
+}
