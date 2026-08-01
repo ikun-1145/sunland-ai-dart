@@ -26,6 +26,7 @@ dependencies:
   webview_flutter: ^4.4.2
   app_links: ^7.0.0
   characters: ^1.4.0
+  crypto: ^3.0.7
   image: ^4.5.4
 
 dev_dependencies:
@@ -42,6 +43,9 @@ flutter:
     - assets/ten_wx.webp
     - assets/ten_zfb.webp
     - assets/deepseek.png
+    - assets/studio.png
+    - assets/sunland-core.js
+    - assets/sunland-core.manifest.json
     - assets/ailogo_dark.png
     - assets/loading.gif
 

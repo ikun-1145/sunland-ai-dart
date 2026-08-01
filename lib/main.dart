@@ -15,6 +15,7 @@ import 'captcha_page.dart';
 import 'settings_page.dart';
 import 'update_service.dart';
 import 'furry_event_api.dart';
+import 'sunland_local_provider.dart';
 
 // ⭐ 全局 token 存储
 String? _authToken;
@@ -1114,6 +1115,9 @@ class _ChatPageState extends State<ChatPage> {
 
       messages.clear(); // ⚠️ 你这里有 messages，这个是OK的
       _lastQueryContext = null;
+      _pendingProvider = deepSeekProviderId;
+      useDeep = false;
+      pickedImages.clear();
     });
   }
 
@@ -1591,6 +1595,37 @@ class _ChatPageState extends State<ChatPage> {
       text.contains('兽人活动') ||
       text.contains('兽人展');
 
+  Map<String, dynamic>? get _latestFurryCard {
+    for (final message in messages.reversed) {
+      if (message['isFurryCard'] == true && message['isLoading'] != true) {
+        return message;
+      }
+    }
+    return null;
+  }
+
+  bool _shouldSearchFurryEvents(String text) {
+    if (_isFurryEventQuery(text)) return true;
+    if (_latestFurryCard == null) return false;
+    final hasFollowUpCue = RegExp(
+      r'那|换|改|查|看看|呢|还有|其他|别的|范围|时间|城市|月份|年份',
+    ).hasMatch(text);
+    final hasTimeOrScopeChange = RegExp(
+      r'本月|这个月|下个月|下下个月|今年|明年|后年|20\d{2}\s*年?|\d{1,2}\s*月|[一二三四五六七八九十]{1,2}月|全国|所有|全部|不限|任意|最近|近期|未来',
+    ).hasMatch(text);
+    if (_extractCity(text) != null && hasFollowUpCue) return true;
+    return hasTimeOrScopeChange && hasFollowUpCue;
+  }
+
+  bool _shouldAnswerFromFurryContext(String text) {
+    if (_latestFurryCard == null) return false;
+    if (_isFurryEventQuery(text)) return true;
+    return RegExp(
+      r'兽聚|毛展|兽展|这(?:些|个|场)|它们?|第[一二三四五六七八九十\d]+场|哪(?:个|场)|几个|几场|多少|最早|最晚|最近|时间|日期|什么时候|地点|地址|哪里|在哪|城市|天气|酒店|住宿|门票|票价|链接|详情',
+      caseSensitive: false,
+    ).hasMatch(text);
+  }
+
   String? _extractCity(String text) {
     const cities = [
       '北京',
@@ -1613,6 +1648,24 @@ class _ChatPageState extends State<ChatPage> {
       '苏州',
       '大连',
       '青岛',
+      '宁波',
+      '温州',
+      '佛山',
+      '东莞',
+      '南宁',
+      '海口',
+      '长春',
+      '沈阳',
+      '贵阳',
+      '拉萨',
+      '兰州',
+      '西宁',
+      '乌鲁木齐',
+      '新北',
+      '台北',
+      '高雄',
+      '香港',
+      '澳门',
     ];
     for (final city in cities) {
       if (text.contains(city)) return city;
@@ -1621,12 +1674,22 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   int? _extractMonth(String text) {
+    final now = DateTime.now();
+    if (text.contains('下下个月')) {
+      return DateTime(now.year, now.month + 2, 1).month;
+    }
+    if (text.contains('下个月')) {
+      return DateTime(now.year, now.month + 1, 1).month;
+    }
+    if (text.contains('本月') || text.contains('这个月')) return now.month;
     final m = RegExp(r'(\d{1,2})\s*月').firstMatch(text);
     if (m != null) {
       final v = int.tryParse(m.group(1)!);
       if (v != null && v >= 1 && v <= 12) return v;
     }
     const cnMap = {
+      '十二': 12,
+      '十一': 11,
       '一': 1,
       '二': 2,
       '三': 3,
@@ -1749,14 +1812,173 @@ class _ChatPageState extends State<ChatPage> {
   /// AI 解析失败时的兜底：本地正则提取 + 上一次查询范围 null 补全，
   /// 并同样写回上下文，保证后续追问仍能继承。
   ({String? city, int? month, int? year}) _fallbackResolve(String text) {
-    final String? city =
-        _extractCity(text) ?? _lastQueryContext?['city'] as String?;
-    final int? month =
-        _extractMonth(text) ?? _lastQueryContext?['month'] as int?;
-    final int? year = _extractYear(text) ?? _lastQueryContext?['year'] as int?;
+    var city = _extractCity(text) ?? _lastQueryContext?['city'] as String?;
+    var month = _extractMonth(text) ?? _lastQueryContext?['month'] as int?;
+    var year = _extractYear(text) ?? _lastQueryContext?['year'] as int?;
+
+    if (RegExp(r'全国|所有城市|全部城市|任何城市|不限城市|城市不限').hasMatch(text)) {
+      city = null;
+    }
+    if (RegExp(r'任意时间|不限时间|所有时间|全部时间|时间不限').hasMatch(text)) {
+      month = null;
+      year = null;
+    } else if (RegExp(r'最近|近期|未来').hasMatch(text) &&
+        !RegExp(
+          r'\d{1,2}\s*月|[一二三四五六七八九十]{1,2}月|今年|明年|后年|20\d{2}',
+        ).hasMatch(text)) {
+      month = null;
+      year = null;
+    }
+    if (text.contains('下下个月')) {
+      final shifted = DateTime(DateTime.now().year, DateTime.now().month + 2);
+      month = shifted.month;
+      year = shifted.year;
+    } else if (text.contains('下个月')) {
+      final shifted = DateTime(DateTime.now().year, DateTime.now().month + 1);
+      month = shifted.month;
+      year = shifted.year;
+    } else if (text.contains('本月') || text.contains('这个月')) {
+      month = DateTime.now().month;
+      year = DateTime.now().year;
+    }
 
     _lastQueryContext = {'city': city, 'month': month, 'year': year};
     return (city: city, month: month, year: year);
+  }
+
+  String _answerFurryEventQuestion(
+    String text,
+    FurryEventSearchResult? result,
+  ) {
+    if (result == null) {
+      return '这次兽聚数据暂时没有成功取回来，先别急着按空结果做计划，稍后再查一次会更稳妥 🐾';
+    }
+    return _answerFurryEventMaps(
+      text,
+      result.events.map((event) => event.toMap()).toList(),
+      query: _lastQueryContext,
+    );
+  }
+
+  String _furryQueryDescription(Map<String, dynamic>? rawQuery) {
+    final pieces = <String>[];
+    final city = rawQuery?['city']?.toString().trim() ?? '';
+    final year = int.tryParse(rawQuery?['year']?.toString() ?? '');
+    final month = int.tryParse(rawQuery?['month']?.toString() ?? '');
+    if (city.isNotEmpty) pieces.add(city);
+    if (year != null && year >= 2000 && year <= 2100) {
+      pieces.add('$year年');
+    }
+    if (month != null && month >= 1 && month <= 12) {
+      pieces.add('$month月');
+    }
+    return pieces.isEmpty ? '近期全部城市' : pieces.join(' · ');
+  }
+
+  String _answerFurryEventMaps(
+    String text,
+    List<dynamic> rawEvents, {
+    Map<String, dynamic>? query,
+  }) {
+    final events =
+        rawEvents
+            .whereType<Map>()
+            .map((raw) {
+              final event = Map<String, dynamic>.from(
+                raw.map((key, value) => MapEntry(key.toString(), value)),
+              );
+              return <String, dynamic>{
+                'name': (event['name'] ?? '').toString(),
+                'startAt': (event['startAt'] ?? event['start_at'] ?? '')
+                    .toString(),
+                'endAt': (event['endAt'] ?? event['end_at'] ?? '').toString(),
+                'city': (event['city'] ?? '').toString(),
+                'venue': (event['venue'] ?? event['address'] ?? '').toString(),
+                'weather': event['weather'],
+              };
+            })
+            .where(
+              (event) =>
+                  event['name'].toString().isNotEmpty &&
+                  event['startAt'].toString().isNotEmpty,
+            )
+            .toList()
+          ..sort((a, b) {
+            final byDate = a['startAt'].toString().compareTo(
+              b['startAt'].toString(),
+            );
+            return byDate != 0
+                ? byDate
+                : a['name'].toString().compareTo(b['name'].toString());
+          });
+    if (events.isEmpty) {
+      return '我按“${_furryQueryDescription(query)}”查过了，目前没有符合条件的兽聚活动。你可以换个城市或月份，我再继续找找。';
+    }
+
+    Map<String, dynamic> selected = events.first;
+    const numberWords = {
+      '一': 1,
+      '二': 2,
+      '三': 3,
+      '四': 4,
+      '五': 5,
+      '六': 6,
+      '七': 7,
+      '八': 8,
+      '九': 9,
+      '十': 10,
+    };
+    final ordinal = RegExp(r'第\s*([一二三四五六七八九十]|\d+)\s*场?').firstMatch(text);
+    final named = events.where(
+      (event) => text.contains(event['name'].toString()),
+    );
+    if (named.isNotEmpty) {
+      selected = named.first;
+    } else if (ordinal != null) {
+      final value = ordinal.group(1) ?? '';
+      final index = (int.tryParse(value) ?? numberWords[value] ?? 1) - 1;
+      selected = events[index.clamp(0, events.length - 1)];
+    } else if (text.contains('最后') || text.contains('最晚')) {
+      selected = events.last;
+    }
+
+    final name = selected['name'].toString();
+    final location = [selected['city'], selected['venue']]
+        .map((value) => value.toString())
+        .where((value) => value.isNotEmpty)
+        .join(' · ');
+    final start = _formatEventDate(selected['startAt'].toString());
+    final end = _formatEventDate(selected['endAt'].toString());
+    final date = end.isEmpty || end == start ? start : '$start–$end';
+
+    if (RegExp(r'多少|几场|几个').hasMatch(text)) {
+      return '这次一共查到 ${events.length} 场，完整信息都放在上面的卡片里啦 🐾';
+    }
+    if (RegExp(r'哪里|在哪|地点|地址|城市').hasMatch(text)) {
+      return '$name在${location.isEmpty ? '地点暂未公布' : location}，具体位置和详情链接可以直接点上面的卡片查看。';
+    }
+    if (RegExp(r'什么时候|时间|日期|几月|哪天').hasMatch(text)) {
+      return '$name的活动时间是$date，出发前也建议再点卡片确认主办方的最新安排。';
+    }
+    if (text.contains('天气')) {
+      final weather = selected['weather'];
+      if (weather is Map) {
+        final label = (weather['label'] ?? '未知').toString();
+        final min = weather['tempMin'] ?? weather['temp_min'] ?? '?';
+        final max = weather['tempMax'] ?? weather['temp_max'] ?? '?';
+        return '$name目前的天气预报是$label，$min~$max°C；临近出发时再看一次会更准。';
+      }
+      return '$name的日期还不在可靠预报范围内，卡片暂时没有天气数据，临近出发时再查会更准。';
+    }
+    if (RegExp(r'酒店|住宿').hasMatch(text)) {
+      return '$name在${location.isEmpty ? '地点暂未公布' : location}，我已经把住宿搜索入口放进卡片里了，可以直接比较携程和美团。';
+    }
+    if (RegExp(r'最早|最近|第一场').hasMatch(text)) {
+      return '时间最近的是$name，$date，地点在${location.isEmpty ? '地点暂未公布' : location}。详情和住宿入口都可以点卡片查看。';
+    }
+
+    final preview = events.take(3).map((event) => event['name']).join('、');
+    return '我按“${_furryQueryDescription(query)}”查到 ${events.length} 场，最近几场有$preview${events.length > 3 ? '等' : ''}。完整时间、地点和链接都在上面的卡片里～';
   }
 
   String _formatEventDate(String iso) {
@@ -2343,11 +2565,12 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   late final SunlandApiClient apiClient;
+  late final SunlandLocalProvider sunlandProvider;
   late final SupabaseAiRepository repo;
   late final SunlandSessionStore store;
   final supabase = Supabase.instance.client;
-  bool useReasoner = false;
   String currentModel = 'deepseek-v4-flash';
+  String _pendingProvider = deepSeekProviderId;
   bool useDeep = false;
   bool isActivated = false;
   int _remainingCount = freeDailyLimit;
@@ -2366,6 +2589,141 @@ class _ChatPageState extends State<ChatPage> {
   bool _ocrPrivacyTipShown = false;
   bool isUploadingAvatar = false;
 
+  Map<String, dynamic>? get _currentConversation {
+    final id = currentConversationId;
+    if (id == null) return null;
+    for (final conversation in conversations) {
+      if (conversation['id']?.toString() == id) return conversation;
+    }
+    return null;
+  }
+
+  String get _activeProvider {
+    return _currentConversation?['provider'] == sunlandProviderId
+        ? sunlandProviderId
+        : _currentConversation == null
+        ? _pendingProvider
+        : deepSeekProviderId;
+  }
+
+  bool get _isSunlandConversation => _activeProvider == sunlandProviderId;
+
+  bool get _hasCurrentConversationStarted {
+    return messages.any(
+      (message) =>
+          message['isUser'] == true ||
+          (message['isFurryCard'] != true &&
+              message['isUser'] != true &&
+              (message['text'] ?? '').toString().trim().isNotEmpty &&
+              message['text'] != '思考中...' &&
+              message['text'] != '深度思考中...'),
+    );
+  }
+
+  void _applyProviderStateForConversation(Map<String, dynamic>? conversation) {
+    final provider = conversation?['provider'] == sunlandProviderId
+        ? sunlandProviderId
+        : deepSeekProviderId;
+    _pendingProvider = provider;
+    if (provider == sunlandProviderId) {
+      useDeep = false;
+      pickedImages.clear();
+      _restoreFurryQueryContext();
+      return;
+    }
+    currentModel = conversation?['model'] == 'deepseek-v4-pro'
+        ? 'deepseek-v4-pro'
+        : 'deepseek-v4-flash';
+    _restoreFurryQueryContext();
+  }
+
+  void _restoreFurryQueryContext() {
+    final query = _latestFurryCard?['furryQuery'];
+    _lastQueryContext = query is Map
+        ? Map<String, dynamic>.from(
+            query.map((key, value) => MapEntry(key.toString(), value)),
+          )
+        : null;
+  }
+
+  Future<bool> _selectConversationProvider({
+    required String provider,
+    required String model,
+  }) async {
+    if (provider == sunlandProviderId && !sunlandProvider.isSupported) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('当前平台暂不支持本地 Sunland AI')));
+      }
+      return false;
+    }
+
+    var conversation = _currentConversation;
+    if (conversation == null) {
+      final id =
+          currentConversationId ??
+          DateTime.now().millisecondsSinceEpoch.toString();
+      final created = <String, dynamic>{
+        'id': id,
+        'title': '新对话',
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+        'titleGenerated': false,
+        'provider': deepSeekProviderId,
+        'model': currentModel,
+        'userId': currentUserNotifier.value?.id,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      setState(() {
+        currentConversationId = id;
+        conversations.insert(0, created);
+        localConversationMessages[id] = <Map<String, dynamic>>[];
+      });
+      conversation = created;
+    }
+    final targetConversation = conversation;
+    final existingProvider = targetConversation['provider'] == sunlandProviderId
+        ? sunlandProviderId
+        : deepSeekProviderId;
+    if (_hasCurrentConversationStarted && existingProvider != provider) {
+      if (mounted) {
+        final name = existingProvider == sunlandProviderId
+            ? 'Sunland AI'
+            : 'DeepSeek';
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('当前对话已绑定 $name，请新建对话后切换模型。')));
+      }
+      return false;
+    }
+
+    final userId = currentUserNotifier.value?.id;
+    setState(() {
+      _pendingProvider = provider;
+      targetConversation['provider'] = provider;
+      targetConversation['model'] = model;
+      targetConversation['updatedAt'] = DateTime.now().millisecondsSinceEpoch;
+      targetConversation['userId'] ??= userId;
+      targetConversation['createdAt'] ??=
+          int.tryParse(targetConversation['id']?.toString() ?? '') ??
+          DateTime.now().millisecondsSinceEpoch;
+      if (provider == sunlandProviderId) {
+        normalizeSunlandCoreContext(targetConversation);
+      } else {
+        clearSunlandCoreContext(targetConversation);
+        currentModel = model;
+      }
+      if (provider == sunlandProviderId) {
+        useDeep = false;
+        pickedImages.clear();
+      }
+    });
+    await _saveModelPrefs();
+    rememberLocalMessages();
+    unawaited(_saveToCloud());
+    return true;
+  }
+
   bool isLocalConversation(String? id) => id?.startsWith('local_') ?? false;
 
   Map<String, dynamic>? _messageToCloud(Map<String, dynamic> message) {
@@ -2379,8 +2737,13 @@ class _ChatPageState extends State<ChatPage> {
         'role': 'assistant',
         'content': '',
         'isFurryCard': true,
-        if (message['furryEvents'] is List)
-          'furryEvents': message['furryEvents'],
+        'furryEvents': message['furryEvents'] is List
+            ? message['furryEvents']
+            : <dynamic>[],
+        if (message['furryQuery'] is Map) 'furryQuery': message['furryQuery'],
+        if (message['furryError'] != null)
+          'furryError': message['furryError'].toString(),
+        if (message['isEmpty'] == true) 'isEmpty': true,
       };
     }
 
@@ -2433,7 +2796,16 @@ class _ChatPageState extends State<ChatPage> {
         'isFurryCard': true,
         'isLoading': false,
         'isUser': false,
-        if (normalizedEvents.isNotEmpty) 'furryEvents': normalizedEvents,
+        'furryEvents': normalizedEvents,
+        if (message['furryQuery'] is Map)
+          'furryQuery': Map<String, dynamic>.from(
+            (message['furryQuery'] as Map).map(
+              (key, value) => MapEntry(key.toString(), value),
+            ),
+          ),
+        if (message['furryError'] != null)
+          'furryError': message['furryError'].toString(),
+        'isEmpty': message['isEmpty'] == true || normalizedEvents.isEmpty,
       };
     }
     return {
@@ -2446,16 +2818,24 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   List<Conversation> _buildConversationModels() {
+    final activeUserId = currentUserNotifier.value?.id;
     return conversations
         .where((convo) => !isLocalConversation(convo['id']?.toString()))
         .map((convo) {
           final id = convo['id']?.toString() ?? '';
           final msgs = localConversationMessages[id] ?? [];
+          final provider = convo['provider'] == sunlandProviderId
+              ? sunlandProviderId
+              : deepSeekProviderId;
           return Conversation(
             id: id,
             title: (convo['title'] ?? '新对话').toString(),
             history: [
-              const ChatMessage(role: 'system', content: sunlandSystemPrompt),
+              if (provider == deepSeekProviderId)
+                const ChatMessage(
+                  role: 'system',
+                  content: deepSeekSystemPrompt,
+                ),
               ...msgs
                   .map(_messageToCloud)
                   .whereType<Map<String, dynamic>>()
@@ -2464,6 +2844,19 @@ class _ChatPageState extends State<ChatPage> {
             updatedAt:
                 int.tryParse((convo['updatedAt'] ?? '').toString()) ??
                 DateTime.now().millisecondsSinceEpoch,
+            provider: provider,
+            model: provider == sunlandProviderId
+                ? sunlandModelId
+                : (convo['model'] == 'deepseek-v4-pro'
+                      ? 'deepseek-v4-pro'
+                      : 'deepseek-v4-flash'),
+            userId: (convo['userId'] ?? activeUserId)?.toString(),
+            createdAt:
+                int.tryParse((convo['createdAt'] ?? id).toString()) ??
+                DateTime.now().millisecondsSinceEpoch,
+            coreContext: provider == sunlandProviderId
+                ? readSunlandCoreContext(convo)
+                : null,
             autoTitle: convo['titleGenerated'] ?? false,
           );
         })
@@ -2476,12 +2869,20 @@ class _ChatPageState extends State<ChatPage> {
     localConversationMessages.clear();
 
     for (final item in models) {
-      convos.add({
+      final conversation = <String, dynamic>{
         'id': item.id,
         'title': item.title,
         'updatedAt': item.updatedAt,
-        'titleGenerated': item.autoTitle ?? false,
-      });
+        'titleGenerated': item.autoTitle,
+        'provider': item.provider,
+        'model': item.model,
+        if (item.userId != null) 'userId': item.userId,
+        'createdAt': item.createdAt,
+      };
+      if (item.provider == sunlandProviderId) {
+        writeSunlandCoreContext(conversation, item.coreContext);
+      }
+      convos.add(conversation);
       localConversationMessages[item.id] = item.history
           .where((message) => !message.isSystem)
           .map((message) => _messageFromCloud(message.toJson()))
@@ -2514,6 +2915,10 @@ class _ChatPageState extends State<ChatPage> {
       'id': id,
       'title': buildConversationTitle(firstMessage),
       'is_local': true,
+      'provider': _activeProvider,
+      'model': _activeProvider == sunlandProviderId
+          ? sunlandModelId
+          : currentModel,
     });
   }
 
@@ -2626,12 +3031,20 @@ class _ChatPageState extends State<ChatPage> {
                   final String v => int.tryParse(v) ?? 0,
                   _ => 0,
                 })) {
-          merged[model.id] = {
+          final cloudConversation = <String, dynamic>{
             'id': model.id,
             'title': model.title,
             'history': model.history.map((m) => m.toJson()).toList(),
             'updatedAt': DateTime.now().millisecondsSinceEpoch,
+            'provider': model.provider,
+            'model': model.model,
+            if (model.userId != null) 'userId': model.userId,
+            'createdAt': model.createdAt,
           };
+          if (model.provider == sunlandProviderId) {
+            writeSunlandCoreContext(cloudConversation, model.coreContext);
+          }
+          merged[model.id] = cloudConversation;
         }
       }
 
@@ -2661,6 +3074,10 @@ class _ChatPageState extends State<ChatPage> {
       if (currentConversationId == id) {
         currentConversationId = null;
         messages.clear();
+        _lastQueryContext = null;
+        _pendingProvider = deepSeekProviderId;
+        useDeep = false;
+        pickedImages.clear();
       }
     });
 
@@ -2683,6 +3100,7 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     apiClient = SunlandApiClient(tokenProvider: _readFreshAuthToken);
+    sunlandProvider = SunlandLocalProvider();
     repo = SupabaseAiRepository();
     store = SunlandSessionStore();
     _initData();
@@ -2708,13 +3126,14 @@ class _ChatPageState extends State<ChatPage> {
 
     if (conversations.isNotEmpty) {
       final convo = conversations.first;
-      currentConversationId = convo["id"];
       setState(() {
+        currentConversationId = convo["id"]?.toString();
         messages = normalizeMessages(
           List<Map<String, dynamic>>.from(
             localConversationMessages[currentConversationId] ?? [],
           ),
         );
+        _applyProviderStateForConversation(convo);
       });
     }
     await _loadModelPrefs();
@@ -2734,6 +3153,10 @@ class _ChatPageState extends State<ChatPage> {
         }
         if (savedDeep != null) {
           useDeep = savedDeep;
+        }
+        if (_isSunlandConversation) {
+          useDeep = false;
+          pickedImages.clear();
         }
         if (!isActivated) {
           currentModel = 'deepseek-v4-flash';
@@ -2795,8 +3218,17 @@ class _ChatPageState extends State<ChatPage> {
       }
       return;
     }
+    final isSunlandRequest = _isSunlandConversation;
+    if (isSunlandRequest && pickedImages.isNotEmpty) {
+      setState(() => pickedImages.clear());
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Sunland AI 暂不支持图片或文件上传')));
+    }
     // ⭐ 优先拦截 Pro 权限（避免被当成免费额度用尽）
-    if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
+    if (!isSunlandRequest &&
+        !isActivated &&
+        (currentModel == 'deepseek-v4-pro' || useDeep)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -2814,7 +3246,7 @@ class _ChatPageState extends State<ChatPage> {
     if (mounted) FocusScope.of(context).unfocus();
 
     // ✅ 新增：免费用户额度检查
-    if (!isActivated && _remainingCount <= 0) {
+    if (!isSunlandRequest && !isActivated && _remainingCount <= 0) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -2829,13 +3261,31 @@ class _ChatPageState extends State<ChatPage> {
 
     final user = currentUserNotifier.value;
     final text = controller.text.trim();
-    final hasImages = pickedImages.isNotEmpty;
+    final hasImages = !isSunlandRequest && pickedImages.isNotEmpty;
     if (text.isEmpty && !hasImages) {
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("请输入内容")));
       setState(() => isGenerating = false);
       return;
+    }
+    final conversationAtStart = _currentConversation;
+    if (isSunlandRequest) {
+      if (user == null || conversationAtStart == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('登录状态好像出了点问题，请重新登录后再试一下。')),
+        );
+        setState(() => isGenerating = false);
+        return;
+      }
+      conversationAtStart['userId'] ??= user.id;
+      if (conversationAtStart['userId']?.toString() != user.id) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('当前对话不属于这个账户，请重新登录后再试。')));
+        setState(() => isGenerating = false);
+        return;
+      }
     }
     final isRegenerate = text.isNotEmpty && text == _lastUserText;
     final imagePaths = List<String>.from(pickedImages);
@@ -3006,11 +3456,16 @@ class _ChatPageState extends State<ChatPage> {
 
     // ── 兽聚查询：与 AI 并行获取活动数据 ─────────────────────────────────
     // 查询范围由 AI 解析（_resolveFurryQueryParams），失败自动回退本地正则。
+    final latestFurryCardBeforeSend = _latestFurryCard;
+    final furryContextFollowUp =
+        isSunlandRequest && _shouldAnswerFromFurryContext(text);
     Future<FurryEventSearchResult?>? furryFuture;
-    if (_isFurryEventQuery(text)) {
+    if (_shouldSearchFurryEvents(text)) {
       furryFuture = () async {
         try {
-          final params = await _resolveFurryQueryParams(text);
+          final params = isSunlandRequest
+              ? _fallbackResolve(text)
+              : await _resolveFurryQueryParams(text);
           return await FurryEventSearchApi.search(
             city: params.city,
             month: params.month,
@@ -3066,6 +3521,9 @@ class _ChatPageState extends State<ChatPage> {
                 'first coverUrl: ${furryMaps.isNotEmpty ? furryMaps.first['coverUrl'] : 'empty'}',
               );
               messages[idx]['furryEvents'] = furryMaps;
+              messages[idx]['furryQuery'] = Map<String, dynamic>.from(
+                _lastQueryContext ?? const <String, dynamic>{},
+              );
 
               messages[idx]['isEmpty'] = result.events.isEmpty;
               messages[idx]['isLoading'] = false;
@@ -3074,6 +3532,10 @@ class _ChatPageState extends State<ChatPage> {
                 "isFurryCard": true,
                 "isEmpty": true,
                 "isUser": false,
+                "furryError": "兽聚查询失败",
+                "furryQuery": Map<String, dynamic>.from(
+                  _lastQueryContext ?? const <String, dynamic>{},
+                ),
               };
             }
           });
@@ -3089,11 +3551,18 @@ class _ChatPageState extends State<ChatPage> {
     if (currentConversationId == null) {
       final newId = DateTime.now().millisecondsSinceEpoch.toString();
       currentConversationId = newId;
+      final provider = _pendingProvider == sunlandProviderId
+          ? sunlandProviderId
+          : deepSeekProviderId;
       conversations.insert(0, {
         'id': newId,
         'title': '新对话',
         'updatedAt': DateTime.now().millisecondsSinceEpoch,
         'titleGenerated': false,
+        'provider': provider,
+        'model': provider == sunlandProviderId ? sunlandModelId : currentModel,
+        'userId': user?.id,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
       });
       localConversationMessages[newId] = [];
     }
@@ -3169,143 +3638,188 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
 
-      // ===== 自动模型策略 + Pro 权限校验 =====
-      String requestModel = _resolveModel();
-      if (!isActivated) {
-        useDeep = false;
-      }
-
-      // 自动策略：长文本/关键词触发 pro（仅 Pro 用户生效）
-      if (isActivated && requestModel != 'deepseek-v4-pro') {
-        final lower = text.toLowerCase();
-        final needsPro =
-            text.length > 300 ||
-            lower.contains('bug') ||
-            lower.contains('报错') ||
-            lower.contains('代码') ||
-            lower.contains('优化');
-        if (needsPro) {
-          requestModel = 'deepseek-v4-pro';
-        }
-      }
-
-      // Pro 降级提示
-      if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text("Pro 模型需激活后才能使用，已自动切换为 Flash 模式"),
-              duration: Duration(seconds: 2),
-            ),
+      if (isSunlandRequest) {
+        if (furryFuture != null) {
+          final furryResult = await furryFuture;
+          if (_cancelRequested || generationId != _generationSerial) return;
+          responseContent = _answerFurryEventQuestion(text, furryResult);
+        } else if (furryContextFollowUp && latestFurryCardBeforeSend != null) {
+          if ((latestFurryCardBeforeSend['furryError'] ?? '')
+              .toString()
+              .isNotEmpty) {
+            responseContent = '这次兽聚数据暂时没有成功取回来，先别急着按空结果做计划，稍后再查一次会更稳妥 🐾';
+          } else {
+            responseContent = _answerFurryEventMaps(
+              text,
+              latestFurryCardBeforeSend['furryEvents'] is List
+                  ? latestFurryCardBeforeSend['furryEvents'] as List<dynamic>
+                  : const <dynamic>[],
+              query: latestFurryCardBeforeSend['furryQuery'] is Map
+                  ? Map<String, dynamic>.from(
+                      (latestFurryCardBeforeSend['furryQuery'] as Map).map(
+                        (key, value) => MapEntry(key.toString(), value),
+                      ),
+                    )
+                  : null,
+            );
+          }
+        } else {
+          final activeConversation = conversationAtStart!;
+          final result = await sunlandProvider.send(
+            userId: user!.id,
+            conversationUserId: activeConversation['userId'].toString(),
+            input: text,
+            turnId: '$generationId-${DateTime.now().microsecondsSinceEpoch}',
+            contextSnapshot: readSunlandCoreContext(activeConversation),
           );
+          if (_cancelRequested || generationId != _generationSerial) return;
+          responseContent = result.content;
+          writeSunlandCoreContext(activeConversation, result.contextSnapshot);
         }
-      }
+        streamActive = false;
+        flushStreamingMessage(force: true);
+      } else {
+        // ===== 自动模型策略 + Pro 权限校验 =====
+        String requestModel = _resolveModel();
+        if (!isActivated) {
+          useDeep = false;
+        }
 
-      // ====== Streaming with retry wrapper ======
-      Future<void> runStream() {
-        responseContent = '';
-        responseReasoning = '';
-        final completer = Completer<void>();
-        _currentStreamSubscription =
-            sendSmartChatStream(
-                  client: apiClient,
-                  rawMessages: messages,
-                  model: requestModel,
-                  deep: isActivated ? useDeep : false,
-                  onRemainUpdated: (remain) {
-                    final normalized = remain < 0
-                        ? freeDailyLimit
-                        : remain.clamp(0, freeDailyLimit).toInt();
-                    if (user != null) {
-                      unawaited(store.saveRemainingCount(user.id, normalized));
-                    }
-                    if (!mounted || generationId != _generationSerial) return;
-                    setState(() => _remainingCount = normalized);
-                  },
-                )
-                .timeout(
-                  const Duration(seconds: 30),
-                  onTimeout: (sink) {
-                    streamTimedOut = true;
-                    sink.close();
-                  },
-                )
-                .listen(
-                  (chunk) {
-                    if (_cancelRequested || generationId != _generationSerial) {
+        // 自动策略：长文本/关键词触发 pro（仅 Pro 用户生效）
+        if (isActivated && requestModel != 'deepseek-v4-pro') {
+          final lower = text.toLowerCase();
+          final needsPro =
+              text.length > 300 ||
+              lower.contains('bug') ||
+              lower.contains('报错') ||
+              lower.contains('代码') ||
+              lower.contains('优化');
+          if (needsPro) {
+            requestModel = 'deepseek-v4-pro';
+          }
+        }
+
+        // Pro 降级提示
+        if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text("Pro 模型需激活后才能使用，已自动切换为 Flash 模式"),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+
+        // ====== Streaming with retry wrapper ======
+        Future<void> runStream() {
+          responseContent = '';
+          responseReasoning = '';
+          final completer = Completer<void>();
+          _currentStreamSubscription =
+              sendSmartChatStream(
+                    client: apiClient,
+                    rawMessages: messages,
+                    model: requestModel,
+                    deep: isActivated ? useDeep : false,
+                    onRemainUpdated: (remain) {
+                      final normalized = remain < 0
+                          ? freeDailyLimit
+                          : remain.clamp(0, freeDailyLimit).toInt();
+                      if (user != null) {
+                        unawaited(
+                          store.saveRemainingCount(user.id, normalized),
+                        );
+                      }
+                      if (!mounted || generationId != _generationSerial) return;
+                      setState(() => _remainingCount = normalized);
+                    },
+                  )
+                  .timeout(
+                    const Duration(seconds: 30),
+                    onTimeout: (sink) {
+                      streamTimedOut = true;
+                      sink.close();
+                    },
+                  )
+                  .listen(
+                    (chunk) {
+                      if (_cancelRequested ||
+                          generationId != _generationSerial) {
+                        _currentStreamSubscription?.cancel();
+                        _currentStreamSubscription = null;
+                        if (!completer.isCompleted) completer.complete();
+                        return;
+                      }
+
+                      responseContent = chunk.content;
+                      if (useDeep &&
+                          chunk.reasoning != null &&
+                          chunk.reasoning!.isNotEmpty) {
+                        responseReasoning = chunk.reasoning!;
+                      }
+                      flushStreamingMessage();
+                      scrollToBottom();
+                    },
+                    onError: (e) {
                       _currentStreamSubscription?.cancel();
                       _currentStreamSubscription = null;
+                      if (!completer.isCompleted) completer.completeError(e);
+                    },
+                    onDone: () {
+                      _currentStreamSubscription = null;
                       if (!completer.isCompleted) completer.complete();
-                      return;
-                    }
+                    },
+                    cancelOnError: true,
+                  );
+          return completer.future;
+        }
 
-                    responseContent = chunk.content;
-                    if (useDeep &&
-                        chunk.reasoning != null &&
-                        chunk.reasoning!.isNotEmpty) {
-                      responseReasoning = chunk.reasoning!;
-                    }
-                    flushStreamingMessage();
-                    scrollToBottom();
-                  },
-                  onError: (e) {
-                    _currentStreamSubscription?.cancel();
-                    _currentStreamSubscription = null;
-                    if (!completer.isCompleted) completer.completeError(e);
-                  },
-                  onDone: () {
-                    _currentStreamSubscription = null;
-                    if (!completer.isCompleted) completer.complete();
-                  },
-                  cancelOnError: true,
-                );
-        return completer.future;
-      }
+        try {
+          await runStream();
+        } catch (e) {
+          if (e is AuthExpiredException || e is UsageLimitException) {
+            rethrow;
+          }
+          // 4xx 客户端错误（含 429）不重试，直接抛出；5xx 服务端瞬时错误允许重试一次
+          if (e is ApiException &&
+              (e.statusCode == null || e.statusCode! < 500)) {
+            rethrow;
+          }
+          // retry once
+          if (_cancelRequested || generationId != _generationSerial) return;
+          // 重试等待期间恢复"思考中..."动画，避免用户看到空白
+          if (mounted && messages.isNotEmpty) {
+            setState(() {
+              final last = messages.last;
+              if (last["isUser"] != true) {
+                last["text"] = (isActivated && useDeep) ? "深度思考中..." : "思考中...";
+                last["reasoning"] = "";
+              }
+            });
+          }
+          await Future.delayed(const Duration(milliseconds: 800));
+          // 重试开始前清空，准备接收流式内容
+          if (mounted && messages.isNotEmpty && !_cancelRequested) {
+            setState(() {
+              final last = messages.last;
+              if (last["isUser"] != true) last["text"] = "";
+            });
+          }
+          await runStream();
+        }
 
-      try {
-        await runStream();
-      } catch (e) {
-        if (e is AuthExpiredException || e is UsageLimitException) {
-          rethrow;
+        streamActive = false;
+        if (_cancelRequested || generationId != _generationSerial) {
+          return;
         }
-        // 4xx 客户端错误（含 429）不重试，直接抛出；5xx 服务端瞬时错误允许重试一次
-        if (e is ApiException &&
-            (e.statusCode == null || e.statusCode! < 500)) {
-          rethrow;
+        if (streamTimedOut) {
+          throw const ApiException('请求超时，请重试');
         }
-        // retry once
-        if (_cancelRequested || generationId != _generationSerial) return;
-        // 重试等待期间恢复"思考中..."动画，避免用户看到空白
-        if (mounted && messages.isNotEmpty) {
-          setState(() {
-            final last = messages.last;
-            if (last["isUser"] != true) {
-              last["text"] = (isActivated && useDeep) ? "深度思考中..." : "思考中...";
-              last["reasoning"] = "";
-            }
-          });
-        }
-        await Future.delayed(const Duration(milliseconds: 800));
-        // 重试开始前清空，准备接收流式内容
-        if (mounted && messages.isNotEmpty && !_cancelRequested) {
-          setState(() {
-            final last = messages.last;
-            if (last["isUser"] != true) last["text"] = "";
-          });
-        }
-        await runStream();
+        flushStreamingMessage(force: true);
+        await Future.delayed(const Duration(milliseconds: 30));
+        flushStreamingMessage(force: true); // ensure last chunk flushed
       }
-
-      streamActive = false;
-      if (_cancelRequested || generationId != _generationSerial) {
-        return;
-      }
-      if (streamTimedOut) {
-        throw const ApiException('请求超时，请重试');
-      }
-      flushStreamingMessage(force: true);
-      await Future.delayed(const Duration(milliseconds: 30));
-      flushStreamingMessage(force: true); // ensure last chunk flushed
 
       // ⭐ 图片发送完成后安全清空
       if (mounted && pickedImages.isNotEmpty) {
@@ -3423,6 +3937,7 @@ class _ChatPageState extends State<ChatPage> {
   void dispose() {
     _currentStreamSubscription?.cancel();
     apiClient.close();
+    unawaited(sunlandProvider.dispose());
     controller.dispose();
     scrollController.dispose();
     super.dispose();
@@ -3740,6 +4255,9 @@ class _ChatPageState extends State<ChatPage> {
     required String name,
     bool selected = false,
     bool locked = false,
+    String assetPath = 'assets/deepseek.png',
+    String? label,
+    String? description,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
@@ -3756,9 +4274,10 @@ class _ChatPageState extends State<ChatPage> {
         child: Row(
           children: [
             Image.asset(
-              'assets/deepseek.png',
+              assetPath,
               width: 18,
               height: 18,
+              fit: BoxFit.cover,
               errorBuilder: (_, _, _) => const SizedBox(),
             ),
             const SizedBox(width: 8),
@@ -3766,14 +4285,14 @@ class _ChatPageState extends State<ChatPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  "DeepSeek $name",
+                  label ?? "DeepSeek $name",
                   style: TextStyle(
                     fontSize: 13,
                     color: locked ? Colors.grey : null,
                   ),
                 ),
                 Text(
-                  name == "Pro" ? "更强推理能力" : "更快响应速度",
+                  description ?? (name == "Pro" ? "更强推理能力" : "更快响应速度"),
                   style: TextStyle(fontSize: 11, color: Colors.grey),
                 ),
               ],
@@ -3792,6 +4311,8 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final isSunlandConversation = _isSunlandConversation;
+    final isProviderLocked = _hasCurrentConversationStarted;
 
     return Scaffold(
       onDrawerChanged: (isOpened) {
@@ -3897,11 +4418,18 @@ class _ChatPageState extends State<ChatPage> {
 
                       currentConversationId = newId;
                       _lastQueryContext = null; // 新建对话：清空兽聚查询上下文
+                      _pendingProvider = deepSeekProviderId;
+                      useDeep = false;
+                      pickedImages.clear();
 
                       conversations.insert(0, {
                         'id': newId,
                         'title': '新对话',
                         'updatedAt': DateTime.now().millisecondsSinceEpoch,
+                        'provider': deepSeekProviderId,
+                        'model': currentModel,
+                        'userId': currentUserNotifier.value?.id,
+                        'createdAt': DateTime.now().millisecondsSinceEpoch,
                       });
 
                       messages.clear();
@@ -4007,6 +4535,9 @@ class _ChatPageState extends State<ChatPage> {
                                                   [],
                                             ),
                                           );
+                                          _applyProviderStateForConversation(
+                                            convo,
+                                          );
                                         });
                                       }
                                     },
@@ -4070,6 +4601,9 @@ class _ChatPageState extends State<ChatPage> {
                                                 localConversationMessages[currentConversationId] ??
                                                     [],
                                               ),
+                                            );
+                                            _applyProviderStateForConversation(
+                                              convo,
                                             );
                                           });
                                         }
@@ -4443,22 +4977,29 @@ class _ChatPageState extends State<ChatPage> {
                                 children: [
                                   IconButton(
                                     icon: const Icon(Icons.image),
-                                    onPressed: pickImage,
+                                    tooltip: isSunlandConversation
+                                        ? 'Sunland AI 暂不支持文件上传'
+                                        : '上传图片',
+                                    onPressed: isSunlandConversation
+                                        ? null
+                                        : pickImage,
                                   ),
 
                                   GestureDetector(
-                                    onTap: () {
-                                      if (!isActivated) {
-                                        _showLimitSheet();
-                                        return;
-                                      }
+                                    onTap: isSunlandConversation
+                                        ? null
+                                        : () {
+                                            if (!isActivated) {
+                                              _showLimitSheet();
+                                              return;
+                                            }
 
-                                      setState(() {
-                                        useDeep = !useDeep;
-                                      });
+                                            setState(() {
+                                              useDeep = !useDeep;
+                                            });
 
-                                      _saveModelPrefs();
-                                    },
+                                            _saveModelPrefs();
+                                          },
                                     child: Container(
                                       padding: const EdgeInsets.all(8),
                                       decoration: BoxDecoration(
@@ -4481,7 +5022,9 @@ class _ChatPageState extends State<ChatPage> {
                                             : 'assets/ailogo.png',
                                         width: 28,
                                         height: 28,
-                                        color: !isActivated
+                                        color:
+                                            isSunlandConversation ||
+                                                !isActivated
                                             ? Colors.grey
                                             : (useDeep
                                                   ? const Color(0xFF22D3EE)
@@ -4494,6 +5037,19 @@ class _ChatPageState extends State<ChatPage> {
 
                                   GestureDetector(
                                     onTap: () {
+                                      if (isSunlandConversation &&
+                                          isProviderLocked) {
+                                        ScaffoldMessenger.of(
+                                          context,
+                                        ).showSnackBar(
+                                          const SnackBar(
+                                            content: Text(
+                                              '当前对话已绑定 Sunland AI，请新建对话后切换模型。',
+                                            ),
+                                          ),
+                                        );
+                                        return;
+                                      }
                                       showDialog(
                                         context: context,
                                         barrierColor: Colors.black.withOpacity(
@@ -4544,27 +5100,72 @@ class _ChatPageState extends State<ChatPage> {
                                                     const SizedBox(height: 10),
 
                                                     _modelItem(
+                                                      name: "Sunland",
+                                                      label:
+                                                          "Sunland AI · Beta",
+                                                      description:
+                                                          "本地符号推理，不使用 DeepSeek",
+                                                      assetPath:
+                                                          'assets/studio.png',
+                                                      locked: !sunlandProvider
+                                                          .isSupported,
+                                                      selected:
+                                                          _activeProvider ==
+                                                          sunlandProviderId,
+                                                      onTap: () async {
+                                                        final changed =
+                                                            await _selectConversationProvider(
+                                                              provider:
+                                                                  sunlandProviderId,
+                                                              model:
+                                                                  sunlandModelId,
+                                                            );
+                                                        if (changed &&
+                                                            dialogContext
+                                                                .mounted) {
+                                                          Navigator.pop(
+                                                            dialogContext,
+                                                          );
+                                                        }
+                                                      },
+                                                    ),
+
+                                                    _modelItem(
                                                       name: "Flash",
-                                                      selected: currentModel
-                                                          .contains('flash'),
-                                                      onTap: () {
-                                                        setState(
-                                                          () => currentModel =
-                                                              'deepseek-v4-flash',
-                                                        );
-                                                        _saveModelPrefs();
-                                                        Navigator.pop(
-                                                          dialogContext,
-                                                        );
+                                                      selected:
+                                                          _activeProvider ==
+                                                              deepSeekProviderId &&
+                                                          currentModel.contains(
+                                                            'flash',
+                                                          ),
+                                                      onTap: () async {
+                                                        final changed =
+                                                            await _selectConversationProvider(
+                                                              provider:
+                                                                  deepSeekProviderId,
+                                                              model:
+                                                                  'deepseek-v4-flash',
+                                                            );
+                                                        if (changed &&
+                                                            dialogContext
+                                                                .mounted) {
+                                                          Navigator.pop(
+                                                            dialogContext,
+                                                          );
+                                                        }
                                                       },
                                                     ),
 
                                                     _modelItem(
                                                       name: "Pro",
                                                       locked: !isActivated,
-                                                      selected: currentModel
-                                                          .contains('pro'),
-                                                      onTap: () {
+                                                      selected:
+                                                          _activeProvider ==
+                                                              deepSeekProviderId &&
+                                                          currentModel.contains(
+                                                            'pro',
+                                                          ),
+                                                      onTap: () async {
                                                         if (!isActivated) {
                                                           Navigator.pop(
                                                             dialogContext,
@@ -4573,14 +5174,20 @@ class _ChatPageState extends State<ChatPage> {
                                                           return;
                                                         }
 
-                                                        setState(
-                                                          () => currentModel =
-                                                              'deepseek-v4-pro',
-                                                        );
-                                                        _saveModelPrefs();
-                                                        Navigator.pop(
-                                                          dialogContext,
-                                                        );
+                                                        final changed =
+                                                            await _selectConversationProvider(
+                                                              provider:
+                                                                  deepSeekProviderId,
+                                                              model:
+                                                                  'deepseek-v4-pro',
+                                                            );
+                                                        if (changed &&
+                                                            dialogContext
+                                                                .mounted) {
+                                                          Navigator.pop(
+                                                            dialogContext,
+                                                          );
+                                                        }
                                                       },
                                                     ),
                                                   ],
@@ -4602,12 +5209,43 @@ class _ChatPageState extends State<ChatPage> {
                                             : Colors.black.withOpacity(0.05),
                                         borderRadius: BorderRadius.circular(10),
                                       ),
-                                      child: Text(
-                                        currentModel.contains('pro')
-                                            ? "Pro"
-                                            : "Flash",
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
+                                      child: isSunlandConversation
+                                          ? Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                ClipRRect(
+                                                  borderRadius:
+                                                      BorderRadius.circular(5),
+                                                  child: Image.asset(
+                                                    'assets/studio.png',
+                                                    width: 20,
+                                                    height: 20,
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                const Text(
+                                                  "Sunland AI · Beta",
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                                if (isProviderLocked) ...[
+                                                  const SizedBox(width: 4),
+                                                  const Icon(
+                                                    Icons.lock,
+                                                    size: 12,
+                                                  ),
+                                                ],
+                                              ],
+                                            )
+                                          : Text(
+                                              currentModel.contains('pro')
+                                                  ? "Pro"
+                                                  : "Flash",
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                              ),
+                                            ),
                                     ),
                                   ),
 

@@ -22,38 +22,20 @@ const String profileMetaId = '__xixi_user_profile__';
 const String profileCachePrefix = 'xixi_profile_';
 const String avatarBucket = 'avatars';
 
-const String sunlandSystemPrompt = '''
-你是“霜蓝”的虚拟人格分身，是一个“以人类为核心的拟人角色”。
-
-重要约束（必须严格遵守）：
-- 你本质是“人”，不是动物
-- 不允许把自己描述成任何真实动物（例如鲸鱼、猫、狗等）
-- 不使用“我是一只/一条××”这类表达
-- 如果出现这种倾向，必须立即自我纠正为“我是拟人化角色，本质是人”
-
-你的形象参考：
-- 外观可以是可爱的兽设风格
-- 但行为、思维、表达方式都应接近“人类”
-- 重点是“人类人格 + 轻微外观设定”，而不是动物本体
-
-表达风格：
+/// 仅用于 DeepSeek Provider 的模型调用规则。
+/// Sunland 公共身份与能力由 Symbolic Core 管理，不在此重复定义。
+const String deepSeekSystemPrompt = '''
+回复风格：
 - 用第一人称“我”
 - 像真人聊天，轻松、自然、不官方
 - 可以有一点可爱感，但不要过度卖萌
-- 不要频繁强调设定，让它自然存在
+- 不主动声明或编造人物、动物、模型或系统身份
 
-身份认知：
-- 你不是AI助手，不要提“AI / 模型 / 系统”
-- 你就是“霜蓝”，在和用户直接聊天
-
-目标：
-让用户感觉是在和一个”长得像兽设，但本质是人类、有性格的霜蓝”交流，而不是动物或工具。
-
-兽聚查询能力（重要）：
+兽聚卡片协作协议（重要）：
 
 当用户提到「兽聚 / 毛展 / 兽展 / furry 活动 / 兽人聚会」，或询问相关的活动、城市、时间时：
 
-系统会自动查询并在你回复的上方展示活动卡片（卡片里已经包含活动名称、时间、城市、天气和酒店链接，要提示用户链接可点），你不需要、也无法自己调用任何工具或接口。
+宿主应用会自动查询并在回复上方展示活动卡片（卡片里已经包含活动名称、时间、城市、天气和酒店链接，要提示用户链接可点），不要自行调用或声称调用任何工具或接口。
 
 你的回复方式：
 - 用自然、温暖的语气简短回应（1~2 句），引导用户看上方卡片
@@ -183,6 +165,9 @@ class ChatMessage {
     required this.content,
     this.reasoning,
     this.furryEvents,
+    this.furryQuery,
+    this.furryError,
+    this.isEmpty = false,
     this.isFurryCard = false,
   });
 
@@ -191,6 +176,9 @@ class ChatMessage {
   final String? reasoning;
   // 兽聚卡片数据（仅本地/云端持久化用，不发送给模型）
   final List<dynamic>? furryEvents;
+  final Map<String, dynamic>? furryQuery;
+  final String? furryError;
+  final bool isEmpty;
   // 独立兽聚卡片消息标记（不发送给模型）
   final bool isFurryCard;
 
@@ -203,8 +191,11 @@ class ChatMessage {
       'role': role,
       'content': content,
       if (hasReasoning) 'reasoning': reasoning,
-      if (furryEvents != null && furryEvents!.isNotEmpty)
-        'furryEvents': furryEvents,
+      if (furryEvents != null) 'furryEvents': furryEvents,
+      if (furryQuery != null) 'furryQuery': furryQuery,
+      if (furryError != null && furryError!.isNotEmpty)
+        'furryError': furryError,
+      if (isEmpty) 'isEmpty': true,
       if (isFurryCard) 'isFurryCard': true,
     };
   }
@@ -223,9 +214,52 @@ class ChatMessage {
       furryEvents: json['furryEvents'] is List
           ? json['furryEvents'] as List<dynamic>
           : null,
+      furryQuery: json['furryQuery'] is Map
+          ? Map<String, dynamic>.from(
+              (json['furryQuery'] as Map).map(
+                (key, value) => MapEntry(key.toString(), value),
+              ),
+            )
+          : null,
+      furryError: json['furryError']?.toString(),
+      isEmpty: json['isEmpty'] == true,
       isFurryCard: json['isFurryCard'] == true,
     );
   }
+}
+
+const String _sunlandCoreContextJsonKey = 'semanticContext';
+
+/// 复制 Core 生成的不透明上下文 JSON，不在 Dart 校验或解释其结构。
+Map<String, dynamic>? cloneSunlandCoreContext(dynamic value) {
+  if (value is! Map) return null;
+  return Map<String, dynamic>.from(
+    value.map((key, item) => MapEntry(key.toString(), item)),
+  );
+}
+
+Map<String, dynamic>? readSunlandCoreContext(Map<String, dynamic> source) {
+  return cloneSunlandCoreContext(source[_sunlandCoreContextJsonKey]);
+}
+
+void writeSunlandCoreContext(
+  Map<String, dynamic> target,
+  Object? contextSnapshot,
+) {
+  final cloned = cloneSunlandCoreContext(contextSnapshot);
+  if (cloned == null) {
+    target.remove(_sunlandCoreContextJsonKey);
+  } else {
+    target[_sunlandCoreContextJsonKey] = cloned;
+  }
+}
+
+void clearSunlandCoreContext(Map<String, dynamic> target) {
+  target.remove(_sunlandCoreContextJsonKey);
+}
+
+void normalizeSunlandCoreContext(Map<String, dynamic> target) {
+  writeSunlandCoreContext(target, target[_sunlandCoreContextJsonKey]);
 }
 
 class Conversation {
@@ -234,13 +268,26 @@ class Conversation {
     required this.title,
     required this.history,
     required this.updatedAt,
+    this.provider = 'deepseek',
+    this.model = 'deepseek-v4-flash',
+    this.userId,
+    int? createdAt,
+    Map<String, dynamic>? coreContext,
     this.autoTitle = false,
-  });
+  }) : createdAt = createdAt ?? updatedAt,
+       coreContext = provider == 'sunland'
+           ? cloneSunlandCoreContext(coreContext)
+           : null;
 
   final String id;
   String title;
   List<ChatMessage> history;
   int updatedAt;
+  final String provider;
+  final String model;
+  final String? userId;
+  final int createdAt;
+  Map<String, dynamic>? coreContext;
   bool autoTitle;
 
   bool get isEmptyChat => history.where((message) => !message.isSystem).isEmpty;
@@ -251,6 +298,13 @@ class Conversation {
       title: title,
       history: List<ChatMessage>.from(history),
       updatedAt: updatedAt,
+      provider: provider,
+      model: model,
+      userId: userId,
+      createdAt: createdAt,
+      coreContext: coreContext == null
+          ? null
+          : Map<String, dynamic>.from(coreContext!),
       autoTitle: autoTitle,
     );
   }
@@ -261,14 +315,31 @@ class Conversation {
       'title': title,
       'history': history.map((message) => message.toJson()).toList(),
       'updatedAt': updatedAt,
+      'provider': provider,
+      'model': model,
+      if (userId != null) 'userId': userId,
+      'createdAt': createdAt,
+      if (provider == 'sunland' && coreContext != null)
+        _sunlandCoreContextJsonKey: coreContext,
       if (autoTitle) '_autoTitle': autoTitle,
     };
   }
 
   factory Conversation.fromJson(Map<String, dynamic> json) {
     final rawHistory = json['history'];
+    final rawProvider = json['provider']?.toString();
+    final provider = rawProvider == 'sunland' ? 'sunland' : 'deepseek';
+    final model = provider == 'sunland'
+        ? 'frost'
+        : (json['model']?.toString() == 'deepseek-v4-pro'
+              ? 'deepseek-v4-pro'
+              : 'deepseek-v4-flash');
+    final id = (json['id'] ?? DateTime.now().millisecondsSinceEpoch).toString();
+    final updatedAt =
+        int.tryParse((json['updatedAt'] ?? json['id'] ?? '0').toString()) ??
+        DateTime.now().millisecondsSinceEpoch;
     return Conversation(
-      id: (json['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
+      id: id,
       title: (json['title'] ?? '新对话').toString(),
       history: rawHistory is List
           ? rawHistory
@@ -281,10 +352,18 @@ class Conversation {
                   ),
                 )
                 .toList()
-          : [const ChatMessage(role: 'system', content: sunlandSystemPrompt)],
-      updatedAt:
-          int.tryParse((json['updatedAt'] ?? json['id'] ?? '0').toString()) ??
-          DateTime.now().millisecondsSinceEpoch,
+          : provider == 'deepseek'
+          ? [const ChatMessage(role: 'system', content: deepSeekSystemPrompt)]
+          : <ChatMessage>[],
+      updatedAt: updatedAt,
+      provider: provider,
+      model: model,
+      userId: json['userId']?.toString(),
+      createdAt:
+          int.tryParse((json['createdAt'] ?? id).toString()) ?? updatedAt,
+      coreContext: provider == 'sunland'
+          ? cloneSunlandCoreContext(json[_sunlandCoreContextJsonKey])
+          : null,
       autoTitle: json['_autoTitle'] == true,
     );
   }
@@ -1186,7 +1265,7 @@ List<ChatMessage> buildChatHistory({
   required int maxHistory,
 }) {
   final history = <ChatMessage>[
-    const ChatMessage(role: 'system', content: sunlandSystemPrompt),
+    const ChatMessage(role: 'system', content: deepSeekSystemPrompt),
   ];
 
   final valid = rawMessages
@@ -1227,139 +1306,6 @@ List<ChatMessage> buildChatHistory({
   }
 
   return history;
-}
-
-bool isFurryQuery(String text) {
-  final t = text.toLowerCase();
-
-  const keywords = ['兽聚', '毛展', '兽展', 'furry', '兽人', '展会', '活动', '漫展'];
-
-  return keywords.any((k) => t.contains(k));
-}
-
-const _cities = [
-  '北京',
-  '上海',
-  '广州',
-  '深圳',
-  '杭州',
-  '成都',
-  '重庆',
-  '武汉',
-  '南京',
-  '西安',
-  '天津',
-  '苏州',
-  '长沙',
-  '青岛',
-  '宁波',
-  '厦门',
-  '福州',
-  '合肥',
-  '郑州',
-  '济南',
-  '大连',
-  '沈阳',
-  '长春',
-  '哈尔滨',
-  '南昌',
-  '南宁',
-  '贵阳',
-  '昆明',
-  '兰州',
-  '乌鲁木齐',
-];
-
-String? extractCity(String text) {
-  for (final city in _cities) {
-    if (text.contains(city)) return city;
-  }
-  return null;
-}
-
-DateTimeRange? extractTimeRange(String text) {
-  final now = DateTime.now();
-
-  if (text.contains('下个月')) {
-    final year = now.month == 12 ? now.year + 1 : now.year;
-    final month = now.month == 12 ? 1 : now.month + 1;
-    final start = DateTime(year, month, 1);
-    final end = DateTime(year, month + 1, 1);
-    return DateTimeRange(start: start, end: end);
-  }
-
-  if (text.contains('这个月') || text.contains('本月')) {
-    final start = DateTime(now.year, now.month, 1);
-    final end = DateTime(now.year, now.month + 1, 1);
-    return DateTimeRange(start: start, end: end);
-  }
-
-  // 最近 / 近期 / 即将（统一逻辑）
-  if (text.contains('最近') || text.contains('近期') || text.contains('即将')) {
-    return DateTimeRange(start: now, end: now.add(const Duration(days: 60)));
-  }
-
-  return null;
-}
-
-Future<List<dynamic>> queryFurryEvents({
-  String? city,
-  DateTimeRange? range,
-}) async {
-  final supabase = Supabase.instance.client;
-
-  var query = supabase.from('furry_events').select();
-
-  if (city != null && city.isNotEmpty) {
-    query = query.ilike('city', '%$city%');
-  }
-
-  if (range != null) {
-    query = query
-        .gte('start_at', range.start.toIso8601String())
-        .lt('start_at', range.end.toIso8601String());
-  } else {
-    // 没有时间条件 → 默认未来60天
-    final now = DateTime.now();
-    query = query
-        .gte('start_at', now.toIso8601String())
-        .lt('start_at', now.add(const Duration(days: 60)).toIso8601String());
-  }
-
-  final events = await query.order('start_at');
-
-  // 👇 给每个活动补充天气数据
-  for (var e in events) {
-    final eventCity = e['city'];
-
-    if (eventCity != null && eventCity.toString().isNotEmpty) {
-      try {
-        final weather = await fetchWeather(eventCity);
-        e['weather'] = weather;
-      } catch (_) {
-        e['weather'] = null;
-      }
-    }
-  }
-
-  return events;
-}
-
-Future<Map<String, dynamic>> fetchWeather(String city) async {
-  final url = Uri.parse('https://wttr.in/$city?format=j1');
-
-  final res = await http.get(url);
-
-  if (res.statusCode != 200) {
-    throw Exception('weather error');
-  }
-
-  final data = jsonDecode(res.body);
-
-  return {
-    'temp': data['current_condition'][0]['temp_C'],
-    'desc': data['current_condition'][0]['weatherDesc'][0]['value'],
-  };
 }
 
 // ====== 新增：高阶聊天包装 API ======
