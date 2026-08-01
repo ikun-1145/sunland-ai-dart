@@ -13,7 +13,7 @@ trap 'echo "\n❌ 脚本执行失败，日志如下："; tail -n 50 $LOG_FILE' E
 # ===== 手动路径配置（方案一） =====
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$SCRIPT_DIR"
-UPDATE_DIR="/Users/liuxize/Library/Mobile Documents/com~apple~CloudDocs/Documents/xixi"   # ← iCloud 文稿真实路径
+UPDATE_DIR="/Users/liuxize/Developer/xixi"   # ← iCloud 文稿真实路径
 UPDATE_FILE="$UPDATE_DIR/update.json"
 APK_PATH="build/app/outputs/flutter-apk/app-release.apk"
 
@@ -126,8 +126,9 @@ fi
 # ===== 更新 pubspec.yaml =====
 sed -i '' "s/^version:.*/version: $new_version/" $file
 
-git add $file
+git add "$file" assets/sunland-core.js assets/sunland-core.manifest.json bump_version.sh
 git commit -m "chore: bump version to $new_version" || true
+git push
 
 # ===== 构建前清理 =====
 echo "🧹 清理构建缓存..."
@@ -150,8 +151,9 @@ echo "🚀 发布 GitHub Release..."
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "❌ 未安装 gh CLI，请先安装: brew install gh"
-else/.
+else
   if gh release create "v$new_version" "$VERSIONED_APK" \
+    --target "$(git rev-parse HEAD)" \
     --title "v$new_version" \
     --notes "$notes"; then
 
