@@ -150,7 +150,7 @@ echo "🚀 发布 GitHub Release..."
 
 if ! command -v gh >/dev/null 2>&1; then
   echo "❌ 未安装 gh CLI，请先安装: brew install gh"
-else
+else/.
   if gh release create "v$new_version" "$VERSIONED_APK" \
     --title "v$new_version" \
     --notes "$notes"; then
