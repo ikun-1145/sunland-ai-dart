@@ -241,16 +241,22 @@ String _mapWeather(int? code) {
 }
 
 class FurryEventEnriched {
+  final String? sourceId;
   final String name;
+  final String? fullName;
   final String startAt;
   final String endAt;
+  final String? province;
   final String city;
+  final String? address;
   final String venue;
-
   final String? coverUrl;
   final String? sourceUrl;
-
-  final String? rawStatus;
+  final String? organization;
+  final String? detail;
+  final String? status;
+  final int? sourceState;
+  final String? sourceStateText;
   final int? daysUntil;
 
   // ⚠️ 后端天气可能为空，前端需实时调用 WeatherApi.fetch
@@ -259,14 +265,22 @@ class FurryEventEnriched {
   final String? meituanUrl;
 
   const FurryEventEnriched({
+    this.sourceId,
     required this.name,
+    this.fullName,
     required this.startAt,
     required this.endAt,
+    this.province,
     required this.city,
+    this.address,
     required this.venue,
     this.coverUrl,
     this.sourceUrl,
-    this.rawStatus,
+    this.organization,
+    this.detail,
+    this.status,
+    this.sourceState,
+    this.sourceStateText,
     this.daysUntil,
     this.weather,
     this.ctripUrl,
@@ -274,65 +288,78 @@ class FurryEventEnriched {
   });
 
   factory FurryEventEnriched.fromMap(Map<String, dynamic> m) {
-    debugPrint('fromMap keys: ${m.keys.toList()}');
-    debugPrint('fromMap coverUrl raw: ${m['coverUrl']}');
     final weatherRaw = m['weather'];
     final hotelsRaw = m['hotels'];
-    final venueStr = m['address']?.toString() ?? '';
-
-    // 表内真实图片在 cover 列（furryfusion 图床，公网可直连、无防盗链）；
-    // 兼容旧 cover_url 列。早期版本经 *.workers.dev 代理，该域名在国内网络
-    // 不稳定/易被污染，反而导致图片加载失败，故直接使用原图地址。
-    String? cover = (m['cover'] ?? m['cover_url'])?.toString();
-    if (cover != null) {
-      cover = cover.trim();
-      if (!cover.startsWith('http')) cover = null;
-    }
+    final venue = m['venue']?.toString() ?? '';
 
     return FurryEventEnriched(
+      sourceId: m['source_id']?.toString(),
       name: m['name']?.toString() ?? '',
-
-      // ✅ 使用 snake_case
+      fullName: m['full_name']?.toString(),
       startAt: m['start_at']?.toString() ?? '',
       endAt: m['end_at']?.toString() ?? '',
-
+      province: m['province']?.toString(),
       city: m['city']?.toString() ?? '',
-
-      // ✅ address = 酒店名
-      venue: m['address']?.toString() ?? '',
-
-      coverUrl: cover,
-
-      // ✅ 跳转链接
+      address: m['address']?.toString(),
+      venue: venue,
+      coverUrl: m['cover']?.toString(),
       sourceUrl: m['source_url']?.toString(),
-
-      // ✅ 新增字段
-      rawStatus: m['raw_status']?.toString(),
+      organization: m['organization']?.toString(),
+      detail: m['detail']?.toString(),
+      status: m['status']?.toString(),
+      sourceState: _toInt(m['source_state']),
+      sourceStateText: m['source_state_text']?.toString(),
       daysUntil: _toInt(m['days_until']),
-
       weather: weatherRaw is Map<String, dynamic>
           ? FurryEventWeather.fromMap(weatherRaw)
           : null,
-
-      // ✅ 只有有酒店才给链接
-      ctripUrl: (hotelsRaw is Map && venueStr.isNotEmpty)
+      ctripUrl: (hotelsRaw is Map && venue.isNotEmpty)
           ? hotelsRaw['ctripUrl']?.toString()
           : null,
-      meituanUrl: (hotelsRaw is Map && venueStr.isNotEmpty)
+      meituanUrl: (hotelsRaw is Map && venue.isNotEmpty)
           ? hotelsRaw['meituanUrl']?.toString()
           : null,
     );
   }
 
+  factory FurryEventEnriched.fromHistoricalMap(Map<String, dynamic> m) {
+    return FurryEventEnriched.fromMap({
+      ...m,
+      'source_id': m['source_id'] ?? m['sourceId'],
+      'full_name': m['full_name'] ?? m['fullName'] ?? m['name'],
+      'start_at': m['start_at'] ?? m['startAt'],
+      'end_at': m['end_at'] ?? m['endAt'],
+      'address': m['address'] ?? m['venue'],
+      'venue': m['venue'],
+      'cover': m['cover'] ?? m['coverUrl'] ?? m['cover_url'],
+      'source_url': m['source_url'] ?? m['sourceUrl'],
+      'status': m['status'] ?? m['rawStatus'] ?? m['raw_status'],
+      'source_state': m['source_state'] ?? m['sourceState'],
+      'source_state_text': m['source_state_text'] ?? m['sourceStateText'],
+      'organization': m['organization'] ?? m['organizer'],
+    });
+  }
+
+  String get displayName =>
+      (fullName?.trim().isNotEmpty ?? false) ? fullName!.trim() : name;
+
   Map<String, dynamic> toMap() => {
+    'source_id': sourceId,
     'name': name,
+    'full_name': fullName,
     'start_at': startAt,
     'end_at': endAt,
+    'province': province,
     'city': city,
-    'address': venue,
+    'address': address,
+    'venue': venue,
     'cover': coverUrl,
     'source_url': sourceUrl,
-    'raw_status': rawStatus,
+    'organization': organization,
+    'detail': detail,
+    'status': status,
+    'source_state': sourceState,
+    'source_state_text': sourceStateText,
     'days_until': daysUntil,
     'weather': weather?.toMap(),
     'hotels': {'ctripUrl': ctripUrl, 'meituanUrl': meituanUrl},
@@ -372,7 +399,7 @@ class _WeatherCacheItem {
 }
 
 class FurryEventSearchApi {
-  // 兽聚查询入口：城市 / 月份 / 年份均可选，直接查 furry_events 表。
+  // 兽聚查询入口：城市 / 月份 / 年份均可选，只通过公开 Edge Function 查询。
   // 参数解析与跨轮上下文合并由调用方（main.dart 的 _resolveFurryQueryParams）负责。
   static Future<FurryEventSearchResult> search({
     String? city,
@@ -389,55 +416,17 @@ class FurryEventSearchApi {
   }) async {
     final client = Supabase.instance.client;
     try {
-      // 动态构建查询，支持城市、月份和年份筛选
-      var query = client.from('furry_events').select();
-
-      // 城市筛选
-      if (city != null && city.isNotEmpty) {
-        query = query.ilike('city', '%$city%');
-      }
-
-      // 时间筛选：月份优先，其次年份，都没有则只看未来。
-      // start_at 为 ISO 字符串列，区间用字典序比较（与 ISO 时间序一致）。
-      final now = DateTime.now();
-      DateTime? start;
-      DateTime? end;
-      if (month != null) {
-        // 月份已指定：年份用显式值，否则自动推断（已过去的月份顺延到明年）
-        final y = year ?? (month < now.month ? now.year + 1 : now.year);
-        start = DateTime(y, month, 1);
-        end = DateTime(y, month + 1, 1); // month==12 → 次年1月，Dart 自动归一化
-      } else if (year != null) {
-        // 仅指定年份：限定整年
-        start = DateTime(year, 1, 1);
-        end = DateTime(year + 1, 1, 1);
-      } else {
-        // 无年月约束：只返回未来活动
-        start = now;
-      }
-
-      query = query.gte('start_at', start.toIso8601String());
-      if (end != null) {
-        query = query.lt('start_at', end.toIso8601String());
-      }
-
-      final res = await query.order('start_at');
-
-      final list = (res as List)
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-
-      debugPrint('兽聚查询 city=$city month=$month year=$year → ${list.length} 条');
-
-      // 严格语义：无匹配即返回空（由 UI 显示"没有找到相关兽聚活动"），不放宽时间/城市
-      return FurryEventSearchResult(
-        events: list.map(FurryEventEnriched.fromMap).toList(),
-        cached: false,
-        total: list.length,
+      final normalizedCity = city?.trim().isNotEmpty == true
+          ? city!.trim()
+          : null;
+      final response = await client.functions.invoke(
+        'furry-event-search',
+        body: {'city': ?normalizedCity, 'month': ?month, 'year': ?year},
       );
-    } on PostgrestException catch (e) {
-      throw Exception(e.message.isNotEmpty ? e.message : '兽聚查询失败');
+      if (response.data is! Map) throw Exception('兽聚查询返回格式无效');
+      return FurryEventSearchResult.fromMap(
+        Map<String, dynamic>.from(response.data as Map),
+      );
     } catch (e) {
       throw Exception('兽聚查询失败');
     }

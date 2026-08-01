@@ -1621,7 +1621,7 @@ class _ChatPageState extends State<ChatPage> {
     if (_latestFurryCard == null) return false;
     if (_isFurryEventQuery(text)) return true;
     return RegExp(
-      r'兽聚|毛展|兽展|这(?:些|个|场)|它们?|第[一二三四五六七八九十\d]+场|哪(?:个|场)|几个|几场|多少|最早|最晚|最近|时间|日期|什么时候|地点|地址|哪里|在哪|城市|天气|酒店|住宿|门票|票价|链接|详情',
+      r'兽聚|毛展|兽展|这(?:些|个|场)|它们?|第[一二三四五六七八九十\d]+场|哪(?:个|场)|几个|几场|多少|最早|最晚|最近|时间|日期|什么时候|地点|地址|哪里|在哪|城市|天气|酒店|住宿|门票|票价|链接|详情|介绍|主办|组织|状态|预告|确认',
       caseSensitive: false,
     ).hasMatch(text);
   }
@@ -1666,6 +1666,17 @@ class _ChatPageState extends State<ChatPage> {
       '高雄',
       '香港',
       '澳门',
+      '济南',
+      '呼和浩特',
+      '台中',
+      '惠州',
+      '保定',
+      '台州',
+      '龙岩',
+      '长宁',
+      '闵行',
+      '东丽',
+      '西青',
     ];
     for (final city in cities) {
       if (text.contains(city)) return city;
@@ -1884,28 +1895,35 @@ class _ChatPageState extends State<ChatPage> {
         rawEvents
             .whereType<Map>()
             .map((raw) {
-              final event = Map<String, dynamic>.from(
+              final stored = Map<String, dynamic>.from(
                 raw.map((key, value) => MapEntry(key.toString(), value)),
               );
+              final event = FurryEventEnriched.fromHistoricalMap(stored);
               return <String, dynamic>{
-                'name': (event['name'] ?? '').toString(),
-                'startAt': (event['startAt'] ?? event['start_at'] ?? '')
-                    .toString(),
-                'endAt': (event['endAt'] ?? event['end_at'] ?? '').toString(),
-                'city': (event['city'] ?? '').toString(),
-                'venue': (event['venue'] ?? event['address'] ?? '').toString(),
-                'weather': event['weather'],
+                'name': event.displayName,
+                'start_at': event.startAt,
+                'end_at': event.endAt,
+                'province': event.province ?? '',
+                'city': event.city,
+                'address': event.address ?? '',
+                'venue': event.venue,
+                'organization': event.organization ?? '',
+                'detail': (event.detail ?? '').length > 600
+                    ? '${event.detail!.substring(0, 600)}…'
+                    : event.detail ?? '',
+                'status': event.status ?? '',
+                'weather': event.weather?.toMap(),
               };
             })
             .where(
               (event) =>
                   event['name'].toString().isNotEmpty &&
-                  event['startAt'].toString().isNotEmpty,
+                  event['start_at'].toString().isNotEmpty,
             )
             .toList()
           ..sort((a, b) {
-            final byDate = a['startAt'].toString().compareTo(
-              b['startAt'].toString(),
+            final byDate = a['start_at'].toString().compareTo(
+              b['start_at'].toString(),
             );
             return byDate != 0
                 ? byDate
@@ -1943,12 +1961,20 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     final name = selected['name'].toString();
-    final location = [selected['city'], selected['venue']]
-        .map((value) => value.toString())
-        .where((value) => value.isNotEmpty)
-        .join(' · ');
-    final start = _formatEventDate(selected['startAt'].toString());
-    final end = _formatEventDate(selected['endAt'].toString());
+    final location =
+        [
+              selected['province'],
+              selected['city'],
+              selected['venue'].toString().isNotEmpty
+                  ? selected['venue']
+                  : selected['address'],
+            ]
+            .map((value) => value.toString())
+            .where((value) => value.isNotEmpty)
+            .toSet()
+            .join(' · ');
+    final start = _formatEventDate(selected['start_at'].toString());
+    final end = _formatEventDate(selected['end_at'].toString());
     final date = end.isEmpty || end == start ? start : '$start–$end';
 
     if (RegExp(r'多少|几场|几个').hasMatch(text)) {
@@ -1959,6 +1985,27 @@ class _ChatPageState extends State<ChatPage> {
     }
     if (RegExp(r'什么时候|时间|日期|几月|哪天').hasMatch(text)) {
       return '$name的活动时间是$date，出发前也建议再点卡片确认主办方的最新安排。';
+    }
+    if (RegExp(r'主办|组织|举办方').hasMatch(text)) {
+      final organization = selected['organization'].toString();
+      return organization.isEmpty
+          ? '$name目前没有提供主办组织信息，可以点卡片查看活动方的最新说明。'
+          : '$name的主办组织是$organization。';
+    }
+    if (RegExp(r'状态|确认|预告').hasMatch(text)) {
+      final status = switch (selected['status'].toString()) {
+        'preview' => '预告',
+        'confirmed' => '已确认',
+        final value when value.isNotEmpty => value,
+        _ => '未注明',
+      };
+      return '$name当前状态是$status，出发前建议再通过卡片里的活动链接确认。';
+    }
+    if (RegExp(r'详情|介绍|内容').hasMatch(text)) {
+      final detail = selected['detail'].toString();
+      return detail.isEmpty
+          ? '$name目前没有提供文字详情，可以点卡片查看活动页。'
+          : '$name的活动说明是：$detail';
     }
     if (text.contains('天气')) {
       final weather = selected['weather'];
@@ -2074,7 +2121,13 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget _buildFurryEventCards(List<dynamic> events, bool isDark) {
-    if (events.isEmpty) {
+    final canonicalEvents = events.whereType<Map>().map((event) {
+      final map = Map<String, dynamic>.from(
+        event.map((key, value) => MapEntry(key.toString(), value)),
+      );
+      return FurryEventEnriched.fromHistoricalMap(map).toMap();
+    }).toList();
+    if (canonicalEvents.isEmpty) {
       return Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Text(
@@ -2087,7 +2140,7 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
     return _FurryEventCarousel(
-      events: events,
+      events: canonicalEvents,
       isDark: isDark,
       cardBuilder: _buildFurryEventCard,
     );
@@ -2095,43 +2148,38 @@ class _ChatPageState extends State<ChatPage> {
 
   Widget _buildFurryEventCard(Map<String, dynamic> event, bool isDark) {
     final name = (event['name'] ?? '').toString();
-    // 兼容新字段名（coverUrl/startAt）和旧字段名（cover/start_at）
-    final startAt = (event['startAt'] ?? event['start_at'] ?? '').toString();
-    final endAt = (event['endAt'] ?? event['end_at'] ?? '').toString();
+    final fullName = (event['full_name'] ?? '').toString().trim();
+    final displayName = fullName.isNotEmpty ? fullName : name;
+    final startAt = (event['start_at'] ?? '').toString();
+    final endAt = (event['end_at'] ?? '').toString();
+    final province = (event['province'] ?? '').toString();
     final city = (event['city'] ?? '').toString();
-    final venue = (event['venue'] ?? event['address'] ?? '').toString();
-
-    // 直接使用后端返回的代理图片（Worker 已处理防盗链）
-    String? coverUrl = (event['coverUrl'] ?? event['cover'])?.toString();
-
-    if (coverUrl != null) {
-      coverUrl = coverUrl.trim();
-      if (coverUrl.isEmpty) coverUrl = null;
-
-      // 如果是相对路径（/proxy?...），补全 Worker 域名，避免双斜杠 bug
-      if (coverUrl != null && coverUrl.startsWith('/proxy')) {
-        coverUrl =
-            'https://sunland-data-worker.liuxizekali.workers.dev$coverUrl';
-      }
-      print("最终图片URL = $coverUrl");
-    }
-
-    final sourceUrl = (event['sourceUrl'] ?? event['source_url'])?.toString();
-
-    final rawStatus = (event['raw_status'] ?? '').toString();
+    final address = (event['address'] ?? '').toString();
+    final venue = (event['venue'] ?? '').toString();
+    final organization = (event['organization'] ?? '').toString();
+    final detail = (event['detail'] ?? '').toString();
+    final coverUrl = event['cover']?.toString().trim();
+    final sourceUrl = event['source_url']?.toString().trim();
+    final status = (event['status'] ?? '').toString();
+    final statusLabel = switch (status) {
+      'preview' => '预告',
+      'confirmed' => '已确认',
+      _ => status,
+    };
     final daysUntil = event['days_until'];
-
-    // ✅ 调试用：看看真实返回的封面地址
-    print("coverUrl = $coverUrl");
-    final weather = (event['weather'] is Map)
-        ? Map<String, dynamic>.from(event['weather'])
-        : null;
-    // 调试天气
-    print("weather = $weather");
-
     final hotels = (event['hotels'] is Map)
         ? Map<String, dynamic>.from(event['hotels'])
         : null;
+    final sourceUri = Uri.tryParse(sourceUrl ?? '');
+    final canOpenSource =
+        sourceUri != null &&
+        (sourceUri.scheme == 'http' || sourceUri.scheme == 'https');
+    final locationParts = <String>[
+      province,
+      city,
+      venue.isNotEmpty ? venue : address,
+    ].where((part) => part.isNotEmpty).toSet().toList();
+    final location = locationParts.join(' · ');
 
     String formatShort(String s) {
       if (s.isEmpty) return '';
@@ -2156,11 +2204,8 @@ class _ChatPageState extends State<ChatPage> {
         : Colors.black.withOpacity(0.06);
 
     return GestureDetector(
-      onTap: (sourceUrl != null && sourceUrl.isNotEmpty)
-          ? () => launchUrl(
-              Uri.parse(sourceUrl),
-              mode: LaunchMode.externalApplication,
-            )
+      onTap: canOpenSource
+          ? () => launchUrl(sourceUri, mode: LaunchMode.externalApplication)
           : null,
       onLongPress: () {
         showGeneralDialog(
@@ -2190,7 +2235,7 @@ class _ChatPageState extends State<ChatPage> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (coverUrl != null)
+                        if (coverUrl != null && coverUrl.isNotEmpty)
                           Image.network(
                             coverUrl,
                             height: 180,
@@ -2203,7 +2248,7 @@ class _ChatPageState extends State<ChatPage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                name,
+                                displayName,
                                 style: const TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.bold,
@@ -2212,9 +2257,18 @@ class _ChatPageState extends State<ChatPage> {
                               const SizedBox(height: 8),
                               Text(dateStr),
                               const SizedBox(height: 6),
-                              Text(city.isNotEmpty ? city : "未知城市"),
+                              Text(location.isNotEmpty ? location : "地点待公布"),
                               const SizedBox(height: 6),
-                              if (venue.isNotEmpty) Text(venue),
+                              if (organization.isNotEmpty)
+                                Text('主办：$organization'),
+                              if (detail.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text(detail),
+                              ],
+                              if (statusLabel.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                Text('状态：$statusLabel'),
+                              ],
                             ],
                           ),
                         ),
@@ -2279,8 +2333,7 @@ class _ChatPageState extends State<ChatPage> {
                           ),
                         );
                       },
-                      errorBuilder: (_, error, stack) {
-                        print("图片加载失败: $coverUrl");
+                      errorBuilder: (_, _, _) {
                         return Container(
                           height: 130,
                           color: isDark
@@ -2312,7 +2365,7 @@ class _ChatPageState extends State<ChatPage> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    name,
+                    displayName,
                     style: const TextStyle(
                       fontSize: 14,
                       fontWeight: FontWeight.w600,
@@ -2346,11 +2399,7 @@ class _ChatPageState extends State<ChatPage> {
                       const SizedBox(width: 4),
                       Expanded(
                         child: Text(
-                          city.isNotEmpty && venue.isNotEmpty
-                              ? '$city · $venue'
-                              : city.isNotEmpty
-                              ? city
-                              : venue,
+                          location,
                           style: TextStyle(
                             fontSize: 12,
                             color: isDark ? Colors.white60 : Colors.black54,
@@ -2365,7 +2414,7 @@ class _ChatPageState extends State<ChatPage> {
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      if (rawStatus.isNotEmpty)
+                      if (statusLabel.isNotEmpty)
                         Container(
                           padding: const EdgeInsets.symmetric(
                             horizontal: 6,
@@ -2376,7 +2425,7 @@ class _ChatPageState extends State<ChatPage> {
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(
-                            rawStatus,
+                            statusLabel,
                             style: TextStyle(
                               fontSize: 11,
                               color: Colors.blue,
@@ -2384,7 +2433,7 @@ class _ChatPageState extends State<ChatPage> {
                             ),
                           ),
                         ),
-                      if (rawStatus.isNotEmpty && daysUntil != null)
+                      if (statusLabel.isNotEmpty && daysUntil != null)
                         const SizedBox(width: 8),
                       if (daysUntil != null)
                         Text(
@@ -2469,6 +2518,31 @@ class _ChatPageState extends State<ChatPage> {
                       );
                     },
                   ),
+                  if (organization.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      '主办：$organization',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isDark ? Colors.white54 : Colors.black54,
+                      ),
+                    ),
+                  ],
+                  if (detail.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      detail,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 11,
+                        height: 1.35,
+                        color: isDark ? Colors.white54 : Colors.black54,
+                      ),
+                    ),
+                  ],
                   if (venue.isNotEmpty &&
                       hotels != null &&
                       (hotels['ctripUrl'] != null ||
@@ -2771,7 +2845,7 @@ class _ChatPageState extends State<ChatPage> {
         ?.toString()
         .trim();
     if (message['isFurryCard'] == true) {
-      // 从缓存恢复时，把旧字段名转换成新字段名
+      // 历史缓存仅在反序列化边界兼容旧字段，并立即转换为规范字段。
       List<dynamic> normalizedEvents = [];
       if (message['furryEvents'] is List) {
         normalizedEvents = (message['furryEvents'] as List).map((e) {
@@ -2779,17 +2853,7 @@ class _ChatPageState extends State<ChatPage> {
           final m = Map<String, dynamic>.from(
             e.map((k, v) => MapEntry(k.toString(), v)),
           );
-          return {
-            'name': m['name'] ?? '',
-            'startAt': m['startAt'] ?? m['start_at'] ?? '',
-            'endAt': m['endAt'] ?? m['end_at'] ?? '',
-            'city': m['city'] ?? '',
-            'venue': m['venue'] ?? m['address'] ?? '',
-            'coverUrl': (m['coverUrl'] ?? m['cover'])?.toString(),
-            'sourceUrl': m['sourceUrl'] ?? m['source_url'],
-            'weather': m['weather'],
-            'hotels': m['hotels'],
-          };
+          return FurryEventEnriched.fromHistoricalMap(m).toMap();
         }).toList();
       }
       return {
@@ -3516,10 +3580,6 @@ class _ChatPageState extends State<ChatPage> {
           setState(() {
             if (result != null) {
               final furryMaps = result.events.map((e) => e.toMap()).toList();
-              debugPrint('furry count: ${furryMaps.length}');
-              debugPrint(
-                'first coverUrl: ${furryMaps.isNotEmpty ? furryMaps.first['coverUrl'] : 'empty'}',
-              );
               messages[idx]['furryEvents'] = furryMaps;
               messages[idx]['furryQuery'] = Map<String, dynamic>.from(
                 _lastQueryContext ?? const <String, dynamic>{},

@@ -1,4 +1,4 @@
--- furry_events: 缓存 furrycons.cn 爬取结果（24h TTL）
+-- furry_events: 历史活动缓存表（24h TTL）
 CREATE TABLE IF NOT EXISTS public.furry_events (
   id           BIGSERIAL PRIMARY KEY,
   cache_key    TEXT        NOT NULL,

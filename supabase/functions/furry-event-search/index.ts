@@ -1,4 +1,5 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
+import { FURRY_EVENT_SOURCE } from "../_shared/furry_event_contract.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -6,384 +7,150 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// ── 城市坐标表（Open-Meteo，可按需扩充）──────────────────────────────────
-const CITY_COORDS: Record<string, { lat: number; lon: number }> = {
-  "北京":   { lat: 39.9042,  lon: 116.4074 },
-  "上海":   { lat: 31.2304,  lon: 121.4737 },
-  "广州":   { lat: 23.1291,  lon: 113.2644 },
-  "深圳":   { lat: 22.5431,  lon: 114.0579 },
-  "成都":   { lat: 30.5728,  lon: 104.0668 },
-  "杭州":   { lat: 30.2741,  lon: 120.1551 },
-  "武汉":   { lat: 30.5928,  lon: 114.3055 },
-  "南京":   { lat: 32.0603,  lon: 118.7969 },
-  "西安":   { lat: 34.3416,  lon: 108.9398 },
-  "重庆":   { lat: 29.5630,  lon: 106.5516 },
-  "天津":   { lat: 39.0842,  lon: 117.2010 },
-  "长沙":   { lat: 28.2282,  lon: 112.9388 },
-  "哈尔滨": { lat: 45.8038,  lon: 126.5349 },
-  "昆明":   { lat: 25.0453,  lon: 102.7097 },
-  "福州":   { lat: 26.0745,  lon: 119.2965 },
-  "厦门":   { lat: 24.4798,  lon: 118.0894 },
-  "郑州":   { lat: 34.7466,  lon: 113.6254 },
-  "苏州":   { lat: 31.2990,  lon: 120.5853 },
-  "大连":   { lat: 38.9140,  lon: 121.6147 },
-  "青岛":   { lat: 36.0671,  lon: 120.3826 },
+const SELECT_FIELDS = [
+  "source_id", "name", "full_name", "start_at", "end_at", "province",
+  "city", "address", "venue", "cover", "status", "source_state",
+  "source_state_text", "source_url", "detail", "organization", "updated_at",
+].join(",");
+
+type SearchRequest = {
+  query?: string;
+  city?: string;
+  month?: number;
+  year?: number;
+  include_inactive?: boolean;
 };
 
-// ── WMO 天气码 → 中文标签 ────────────────────────────────────────────────
-function wmoLabel(code: number | null): string {
-  if (code === null) return "未知";
-  if (code === 0) return "晴";
-  if (code <= 3)  return "多云";
-  if (code <= 9)  return "雾";
-  if (code <= 49) return "大雾";
-  if (code <= 59) return "毛毛雨";
-  if (code <= 69) return "雨";
-  if (code <= 79) return "雪";
-  if (code <= 84) return "阵雨";
-  if (code <= 90) return "阵雪";
-  return "雷暴";
-}
-
-// ── 日期工具 ──────────────────────────────────────────────────────────────
-function todayCacheKey(): string {
-  const d = new Date();
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
-  return `list_${y}_${m}_${day}`;
-}
-
-function daysFromNow(iso: string): number {
-  return Math.round((new Date(iso).getTime() - Date.now()) / 86_400_000);
-}
-
-function addDays(iso: string, n: number): string {
-  return new Date(new Date(iso).getTime() + n * 86_400_000)
-    .toISOString().slice(0, 10);
-}
-
-// ── 爬取 furrycons.cn 活动列表 ────────────────────────────────────────────
-interface ScrapedEvent {
-  name: string; startAt: string; endAt: string;
-  city: string; venue: string; coverUrl: string; sourceUrl: string;
-  rawJson: Record<string, unknown>;
-}
-
-async function scrapeFurryconsEvents(): Promise<ScrapedEvent[]> {
-  const CANDIDATES = [
-    "https://www.furrycons.cn/events",
-    "https://www.furrycons.cn/conventions",
-    "https://www.furrycons.cn/",
-  ];
-
-  let html = "";
-  let baseUrl = "";
-
-  for (const url of CANDIDATES) {
-    try {
-      const r = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (compatible; SunlandAI/1.0)",
-          "Accept": "text/html",
-          "Accept-Language": "zh-CN,zh;q=0.9",
-        },
-        signal: AbortSignal.timeout(12_000),
-      });
-      if (!r.ok) continue;
-      const text = await r.text();
-      if (
-        text.includes("__NEXT_DATA__") &&
-        (text.includes('"events"') || text.includes('"conventions"'))
-      ) {
-        html = text;
-        baseUrl = url;
-        break;
-      }
-    } catch { /* 尝试下一个 URL */ }
-  }
-
-  if (!html) throw new Error("furrycons.cn: 无法获取活动列表页面");
-
-  const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]*?)<\/script>/);
-  if (!match) throw new Error("furrycons.cn: 未找到 __NEXT_DATA__");
-
-  const nextData = JSON.parse(match[1]) as any;
-  const pp = nextData?.props?.pageProps ?? {};
-  const rawList: any[] = pp.events ?? pp.conventions ?? pp.data?.events ?? [];
-
-  if (!Array.isArray(rawList) || rawList.length === 0) {
-    throw new Error("furrycons.cn: pageProps 中未找到 events 数组");
-  }
-
-  return rawList.map((raw: any) => {
-    const name    = raw.name ?? raw.title ?? "未知活动";
-    const startAt = raw.startAt ?? raw.start_at ?? raw.startTime ?? "";
-    const endAt   = raw.endAt   ?? raw.end_at   ?? raw.endTime   ?? "";
-    // furrycons.cn 的城市在 region.localName（如"上海""香港特别行政区"），
-    // 旧代码读的 region.name 不存在，导致 city 一直为空、按城市过滤恒为 0 条。
-    const city    = raw.region?.localName ?? raw.region?.name ??
-                    raw.city?.name ?? raw.cityName ?? "";
-    const venue   = raw.address ?? raw.venue ?? raw.location?.address ?? "";
-    const thumb   = raw.thumbnail ?? raw.cover ?? raw.coverImage ?? "";
-    // furrycons.cn 封面图托管在 images.furrycons.cn，www 域名同路径会 404。
-    const coverUrl = thumb
-      ? `https://images.furrycons.cn/${thumb.replace(/^\//, "")}`
-      : "";
-    const slug    = raw.slug ?? raw.id ?? "";
-    const orgSlug = raw.organization?.slug ?? "";
-    // 活动详情页真实路径为 {机构slug}/{活动slug}；旧的 /events/{slug} 会 404。
-    const sourceUrl = (orgSlug && slug)
-      ? `https://www.furrycons.cn/${orgSlug}/${slug}`
-      : baseUrl;
-    return { name, startAt, endAt, city, venue, coverUrl, sourceUrl, rawJson: raw };
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json; charset=utf-8" },
   });
 }
 
-// ── Open-Meteo 天气（免费，无需 API Key，支持 16 天预报）────────────────
-interface WeatherData {
-  date: string; code: number; label: string;
-  tempMax: number; tempMin: number; precipMm: number;
+function normalizeInteger(value: unknown, min: number, max: number): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : null;
 }
 
-async function fetchWeather(city: string, targetDate: string): Promise<WeatherData | null> {
-  const coords = CITY_COORDS[city];
-  if (!coords) return null;
-  const days = daysFromNow(targetDate);
-  if (days < 0 || days > 15) return null;
-
-  const params = new URLSearchParams({
-    latitude:      String(coords.lat),
-    longitude:     String(coords.lon),
-    daily:         "temperature_2m_max,temperature_2m_min,weathercode,precipitation_sum",
-    timezone:      "Asia/Shanghai",
-    forecast_days: "16",
-  });
-
-  try {
-    const r = await fetch(`https://api.open-meteo.com/v1/forecast?${params}`,
-      { signal: AbortSignal.timeout(8_000) });
-    if (!r.ok) return null;
-    const data = await r.json() as any;
-    const daily = data.daily;
-    const idx = (daily?.time as string[] ?? []).indexOf(targetDate);
-    if (idx === -1) return null;
-    const code = daily.weathercode?.[idx] ?? 0;
-    return {
-      date:     targetDate,
-      code,
-      label:    wmoLabel(code),
-      tempMax:  daily.temperature_2m_max?.[idx]  ?? 0,
-      tempMin:  daily.temperature_2m_min?.[idx]  ?? 0,
-      precipMm: daily.precipitation_sum?.[idx]   ?? 0,
-    };
-  } catch { return null; }
-}
-
-// ── 酒店搜索链接 ─────────────────────────────────────────────────────────
-function hotelUrls(
-  city: string, venue: string, checkin: string, checkout: string
-) {
-  const kw     = encodeURIComponent(`${city} ${venue}`);
-  const cityKw = encodeURIComponent(`${city} 附近酒店`);
+function shanghaiToday(): { year: number; month: number; day: number } {
+  const shifted = new Date(Date.now() + 8 * 60 * 60 * 1000);
   return {
-    ctripUrl:   `https://hotels.ctrip.com/hotels/list?keyword=${kw}&checkin=${checkin}&checkout=${checkout}`,
-    meituanUrl: `https://i.meituan.com/awp/h5/hotel/search/search.html?keyword=${cityKw}&checkin=${checkin}&checkout=${checkout}`,
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
   };
 }
 
-// ── 主处理函数 ────────────────────────────────────────────────────────────
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+function isoDate(year: number, month: number, day = 1): string {
+  const normalized = new Date(Date.UTC(year, month - 1, day));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${normalized.getUTCFullYear()}-${pad(normalized.getUTCMonth() + 1)}-${pad(normalized.getUTCDate())}T00:00:00+08:00`;
+}
+
+function searchRange(month: number | null, year: number | null) {
+  const today = shanghaiToday();
+  if (month !== null) {
+    const resolvedYear = year ?? (month < today.month ? today.year + 1 : today.year);
+    return { start: isoDate(resolvedYear, month), end: isoDate(resolvedYear, month + 1) };
+  }
+  if (year !== null) {
+    return { start: isoDate(year, 1), end: isoDate(year + 1, 1) };
+  }
+  return { start: isoDate(today.year, today.month, today.day), end: null };
+}
+
+function safeLocation(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/[,%()*"']/g, " ").replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, 64) : null;
+}
+
+function withAliases(row: Record<string, unknown>) {
+  return {
+    ...row,
+    startAt: row.start_at ?? null,
+    endAt: row.end_at ?? null,
+    coverUrl: row.cover ?? null,
+    sourceUrl: row.source_url ?? null,
+  };
+}
+
+Deno.serve(async (request: Request) => {
+  if (request.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: corsHeaders });
+  }
+  if (request.method !== "POST") {
+    return jsonResponse({ error: "METHOD_NOT_ALLOWED", message: "Only POST is supported" }, 405);
+  }
+  if (!request.headers.get("Authorization")?.startsWith("Bearer ")) {
+    return jsonResponse({ error: "UNAUTHORIZED", message: "A valid bearer token is required" }, 401);
   }
 
-  if (req.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  let payload: SearchRequest = {};
+  try {
+    const text = await request.text();
+    payload = text.trim() ? JSON.parse(text) : {};
+  } catch {
+    return jsonResponse({ error: "INVALID_REQUEST", message: "Request body must be valid JSON" }, 400);
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return jsonResponse({ error: "INVALID_REQUEST", message: "Request body must be an object" }, 400);
   }
 
-  const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer ")) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+  const city = safeLocation(payload.city);
+  const month = normalizeInteger(payload.month, 1, 12);
+  const year = normalizeInteger(payload.year, 2000, 2100);
+  if (payload.month != null && month === null) {
+    return jsonResponse({ error: "INVALID_REQUEST", message: "month must be between 1 and 12" }, 400);
+  }
+  if (payload.year != null && year === null) {
+    return jsonResponse({ error: "INVALID_REQUEST", message: "year must be between 2000 and 2100" }, 400);
   }
 
-  const supabaseAdmin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    { auth: { persistSession: false } }
-  );
-
-  let payload: {
-    query?: string; city?: string; year?: number; month?: number;
-    refresh?: boolean;
-  } = {};
-  try { payload = await req.json(); } catch { /* 空 body 合法 */ }
-
-  const { city, year, month, refresh } = payload;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  if (!supabaseUrl || !serviceRoleKey) {
+    return jsonResponse({ error: "SERVICE_UNAVAILABLE", message: "Database configuration is unavailable" }, 503);
+  }
+  const admin = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 
   try {
-    const cacheKey = todayCacheKey();
-    const cutoff   = new Date(Date.now() - 86_400_000).toISOString();
-
-    // refresh=true 时跳过缓存读取，强制重爬（冷路径会先删除旧 cache_key 再写入）。
-    // 用于数据结构变更后清掉陈旧缓存。
-    const { data: cached } = refresh
-      ? { data: null }
-      : await supabaseAdmin
-          .from("furry_events")
-          .select("*")
-          .eq("cache_key", cacheKey)
-          .gte("cached_at", cutoff)
-          .order("start_at", { ascending: true });
-
-    let events: any[] = [];
-    let fromCache = false;
-
-    if (cached && cached.length > 0) {
-      events    = cached;
-      fromCache = true;
-    } else {
-      const scraped = await scrapeFurryconsEvents();
-
-      await supabaseAdmin.from("furry_events").delete().eq("cache_key", cacheKey);
-
-      // 按城市+日期去重天气请求，多个同城活动共用一次 Open-Meteo 请求，
-      // 避免并发请求过多触发 429 Too Many Requests
-      const weatherCache = new Map<string, Promise<WeatherData | null>>();
-      function fetchWeatherDeduped(city: string, date: string): Promise<WeatherData | null> {
-        const k = `${city}|${date}`;
-        if (!weatherCache.has(k)) weatherCache.set(k, fetchWeather(city, date));
-        return weatherCache.get(k)!;
-      }
-
-      const rows: Record<string, unknown>[] = await Promise.all(
-        scraped.map(async (ev) => {
-          const startDate = ev.startAt?.slice(0, 10) ?? null;
-          const endDate   = ev.endAt?.slice(0, 10) ?? startDate;
-
-          const weather = (startDate && ev.city)
-            ? await fetchWeatherDeduped(ev.city, startDate)
-            : null;
-
-          const checkout = endDate
-            ? addDays(endDate, 1)
-            : (startDate ? addDays(startDate, 1) : "");
-
-          const hotels = (startDate && ev.city)
-            ? hotelUrls(ev.city, ev.venue, startDate, checkout)
-            : { ctripUrl: null, meituanUrl: null };
-
-          return {
-            cache_key:    cacheKey,
-            name:         ev.name,
-            start_at:     ev.startAt,
-            end_at:       ev.endAt,
-            city:         ev.city,
-            venue:        ev.venue,
-            cover_url:    ev.coverUrl  || null,
-            source_url:   ev.sourceUrl || null,
-            weather_date: weather?.date    ?? null,
-            weather_code: weather?.code    ?? null,
-            temp_max:     weather?.tempMax ?? null,
-            temp_min:     weather?.tempMin ?? null,
-            precip_mm:    weather?.precipMm ?? null,
-            ctrip_url:    hotels.ctripUrl,
-            meituan_url:  hotels.meituanUrl,
-            raw_json:     ev.rawJson,
-          };
-        })
-      );
-
-      if (rows.length > 0) {
-        const { error: insErr } = await supabaseAdmin.from("furry_events").insert(rows);
-        if (insErr) console.error("DB insert error:", insErr.message);
-      }
-
-      const { data: fresh } = await supabaseAdmin
-        .from("furry_events")
-        .select("*")
-        .eq("cache_key", cacheKey)
-        .order("start_at", { ascending: true });
-
-      // 若写入或重查失败导致 fresh 为空，回退到内存中已富化的数据，
-      // 保证本次仍能返回结果（内存值为真实数字，亦避免数据库往返）
-      events = (fresh && fresh.length > 0) ? fresh : rows;
-    }
-
-    // 去重：防止并发冷缓存或删除失败导致同一活动重复
-    const seen = new Set<string>();
-    events = events.filter((e: any) => {
-      const k = `${e.name}|${e.start_at}`;
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-
-    // 过滤
-    let filtered = events;
+    const range = searchRange(month, year);
+    let query = admin
+      .from("furry_events")
+      .select(SELECT_FIELDS)
+      .eq("source", FURRY_EVENT_SOURCE)
+      .gte("start_at", range.start);
+    if (payload.include_inactive !== true) query = query.eq("is_active", true);
     if (city) {
-      filtered = filtered.filter((e: any) =>
-        e.city && (e.city.includes(city) || city.includes(e.city))
-      );
+      query = query.or(`address.ilike.*${city}*,province.ilike.*${city}*,city.ilike.*${city}*`);
     }
-    if (year || month) {
-      filtered = filtered.filter((e: any) => {
-        if (!e.start_at) return false;
-        const d = new Date(e.start_at);
-        if (isNaN(d.getTime())) return false;
-        // 转换到北京时间（UTC+8，无夏令时）再取日历字段，
-        // 避免 +08:00 活动在月/年边界被错误分桶
-        const bj = new Date(d.getTime() + 8 * 3600 * 1000);
-        if (year  && bj.getUTCFullYear()  !== year)  return false;
-        if (month && bj.getUTCMonth() + 1 !== month) return false;
-        return true;
-      });
-    }
+    if (range.end) query = query.lt("start_at", range.end);
 
-    const responseEvents = filtered.map((e: any) => ({
-      name:      e.name,
-      startAt:   e.start_at,
-      endAt:     e.end_at,
-      city:      e.city,
-      venue:     e.venue,
-      coverUrl:  e.cover_url,
-      sourceUrl: e.source_url,
-      weather:   e.weather_code !== null ? {
-        date:     e.weather_date,
-        code:     e.weather_code,
-        label:    wmoLabel(e.weather_code),
-        tempMax:  e.temp_max,
-        tempMin:  e.temp_min,
-        precipMm: e.precip_mm,
-      } : null,
-      hotels: {
-        ctripUrl:   e.ctrip_url,
-        meituanUrl: e.meituan_url,
-      },
+    const { data, error } = await query.order("start_at", { ascending: true });
+    if (error) throw error;
+    const rows = (data ?? []) as unknown as Record<string, unknown>[];
+    const events = rows.map(withAliases);
+    return jsonResponse({
+      events,
+      total: events.length,
+      cached: false,
+      cacheKey: null,
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      level: "error",
+      code: "FURRY_EVENT_SEARCH_FAILED",
+      message: error instanceof Error ? error.message : String(error),
     }));
-
-    return new Response(
-      JSON.stringify({
-        events:   responseEvents,
-        total:    responseEvents.length,
-        cached:   fromCache,
-        cacheKey,
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("furry-event-search error:", msg);
-    return new Response(
-      JSON.stringify({ error: msg, events: [], total: 0, cached: false }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return jsonResponse({
+      error: "FURRY_EVENT_SEARCH_FAILED",
+      message: "Furry events could not be queried",
+      details: {},
+    }, 500);
   }
 });
