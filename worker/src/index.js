@@ -41,14 +41,14 @@ export default {
       try {
         data = JSON.parse(token);
       } catch (e) {
-        console.error("❌ token 解析失败:", e);
+        console.error("[GEETEST_TOKEN_INVALID]");
         return { success: false, error: "invalid token" };
       }
 
       const { lot_number, captcha_output, pass_token, gen_time } = data;
 
       if (!lot_number || !captcha_output || !pass_token || !gen_time) {
-        console.warn("❌ GeeTest 参数不完整:", data);
+        console.warn("[GEETEST_FIELDS_MISSING]");
         return { success: false, error: "missing params" };
       }
 
@@ -76,10 +76,9 @@ export default {
         let result;
         try {
           const text = await res.text();
-          console.log("🌐 GeeTest原始返回:", text);
           result = JSON.parse(text);
-        } catch (e) {
-          console.error("❌ GeeTest JSON解析失败:", e);
+        } catch {
+          console.error("[GEETEST_RESPONSE_INVALID]");
           return { success: false, error: "invalid json" };
         }
 
@@ -87,10 +86,10 @@ export default {
           return { success: true };
         }
 
-        return { success: false, error: "verify failed", raw: result };
+        return { success: false, error: "verify failed" };
 
-      } catch (e) {
-        console.error("GeeTest验证异常:", e);
+      } catch {
+        console.error("[GEETEST_REQUEST_ERROR]");
         return { success: false, error: "exception" };
       }
     }
@@ -101,20 +100,20 @@ export default {
     if (url.pathname === "/send-code") {
       const { email, token, captcha_token, captchaToken } = body;
       const captchaData = token || captcha_token || captchaToken;
-      console.log("📩 send-code 收到token:", token);
+      console.log("[SEND_CODE_REQUEST] captcha_present=" + Boolean(captchaData));
 
       let verifyResult;
       let verified = false;
       try {
         verifyResult = await verifyGeeTest(captchaData);
         verified = verifyResult.success;
-      } catch (e) {
-        console.error("❌ 验证执行异常:", e);
+      } catch {
+        console.error("[GEETEST_EXECUTION_ERROR]");
         return json({ error: "验证码服务异常" }, 500, env);
       }
 
       if (!verified) {
-        console.error("❌ 验证失败详情:", verifyResult);
+        console.warn(`[GEETEST_REJECTED] reason=${verifyResult.error}`);
         return json({ error: "人机验证失败", detail: verifyResult.error }, 400, env);
       }
 
@@ -163,8 +162,7 @@ export default {
       });
 
       if (!mailRes.ok) {
-        const errText = await mailRes.text().catch(() => "");
-        console.error("Resend error:", mailRes.status, errText);
+        console.error(`[RESEND_ERROR] status=${mailRes.status}`);
         return json({ error: "邮件发送失败，请稍后重试" }, 500, env);
       }
 
@@ -248,6 +246,53 @@ export default {
     const userId = user.id;
 
     // =========================
+    // 🔐 短期 Supabase 数据访问 Token
+    // =========================
+    if (url.pathname === "/v1/database-token") {
+      if (!env.SUPABASE_JWT_SECRET) {
+        console.error("[DATABASE_TOKEN_ERROR] SUPABASE_JWT_SECRET is missing");
+        return json({ error: "Token service unavailable" }, 503, env);
+      }
+      const token = await signJWT(
+        {
+          sub: userId,
+          id: userId,
+          email: user.email,
+          role: "authenticated",
+          aud: "authenticated",
+          iss: "sunland-api"
+        },
+        env.SUPABASE_JWT_SECRET,
+        15 * 60
+      );
+      return json({ token, expiresIn: 15 * 60 }, 200, env);
+    }
+
+    // =========================
+    // 🎟️ 服务端原子领取激活码
+    // =========================
+    if (url.pathname === "/v1/activation/claim") {
+      const code = typeof body.code === "string" ? body.code.trim() : "";
+      if (!/^[A-Za-z0-9_-]{4,64}$/.test(code)) {
+        return json({ result: "invalid_code" }, 400, env);
+      }
+      const claimResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/sunland_claim_activation_code`, {
+        method: "POST",
+        headers: supabaseHeaders(env, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ p_user_id: userId, p_code: code })
+      });
+      if (!claimResponse.ok) {
+        console.error("[ACTIVATION_CLAIM_ERROR]", claimResponse.status);
+        return json({ error: "Activation service unavailable" }, 503, env);
+      }
+      const result = await claimResponse.json();
+      if (result === "success" || result === "already_activated") {
+        await env.USAGE_KV.put("pro:" + userId, "1", { expirationTtl: 21600 });
+      }
+      return json({ result }, result === "invalid_code" ? 400 : 200, env);
+    }
+
+    // =========================
     // 💎 Pro 检测（查 Supabase activation_codes 表）
     // =========================
     let isPro = false;
@@ -281,8 +326,8 @@ export default {
             { expirationTtl: isPro ? 21600 : 1800 }
           );
         }
-      } catch (e) {
-        console.error("Pro check failed:", e);
+      } catch {
+        console.error("[PRO_CHECK_ERROR]");
         // 查询失败时降级为非 Pro，不阻断服务
       }
     }
@@ -357,12 +402,9 @@ export default {
             }
           );
 
-          // 📋 [日志] 审核请求上游状态与响应体
           const modText = await modRes.text().catch(() => "");
           if (!modRes.ok) {
-            console.error(
-              `[AUDIT_UPSTREAM_ERROR] 审核请求失败 status=${modRes.status} user=${userId} body=${modText.slice(0, 300)}`
-            );
+            console.error(`[AUDIT_UPSTREAM_ERROR] status=${modRes.status}`);
           }
 
           let modData = {};
@@ -371,7 +413,7 @@ export default {
           const decision = modData.choices?.[0]?.message?.content?.trim().toLowerCase();
 
           if (!decision) {
-            console.warn(`[AUDIT_BAD_FORMAT] 审核返回异常格式 status=${modRes.status} body=${modText.slice(0, 300)}`);
+            console.warn(`[AUDIT_BAD_FORMAT] status=${modRes.status}`);
             return json({
               choices: [{
                 message: {
@@ -405,15 +447,12 @@ export default {
           }
 
           if (decision !== "ok") {
-            console.warn("[AUDIT_UNKNOWN_DECISION] 审核决策未知:", decision);
+            console.warn("[AUDIT_UNKNOWN_DECISION]");
             return json({ error: "审核失败" }, 429, env);
           }
 
-        } catch (e) {
-          // 📋 [日志] 审核异常 → 客户端将收到 503
-          console.error(
-            `[RETURN_503] 审核网络异常(客户端将收到503) user=${userId} error=${e && (e.stack || e.message || e)}`
-          );
+        } catch {
+          console.error("[RETURN_503] audit_request_failed");
           return json({ error: "系统繁忙，请稍后重试" }, 503, env);
         }
       }
@@ -472,12 +511,8 @@ export default {
           }
         );
 
-        // 📋 [日志] 主请求失败时记录上游状态码 + 响应体
         if (!response.ok) {
-          const primaryErrText = await response.clone().text().catch(() => "");
-          console.error(
-            `[UPSTREAM_ERROR] DeepSeek主请求失败 status=${response.status} model=${finalModel} deep=${deep} user=${userId} body=${primaryErrText.slice(0, 500)}`
-          );
+          console.error(`[UPSTREAM_ERROR] status=${response.status} model=${finalModel} deep=${deep}`);
         }
 
         // =========================
@@ -508,21 +543,16 @@ export default {
           if (fallback.ok) {
             response = fallback;
           } else {
-            // 📋 [日志] fallback 也失败
-            const fbErrText = await fallback.text().catch(() => "");
-            console.error(
-              `[FALLBACK_ERROR] flash降级也失败 status=${fallback.status} user=${userId} body=${fbErrText.slice(0, 500)}`
-            );
+            console.error(`[FALLBACK_ERROR] status=${fallback.status}`);
           }
         }
 
         if (!response.ok) {
           const upstream = response.status;
 
-          // 📋 [日志] 明确记录映射后返回给客户端的状态码
           const clientStatus = upstream === 402 ? 503 : upstream === 429 ? 429 : 502;
           console.error(
-            `[RETURN_${clientStatus}] AI上游错误已映射 upstream=${upstream} → client=${clientStatus} model=${finalModel} user=${userId}`
+            `[RETURN_${clientStatus}] upstream=${upstream} client=${clientStatus} model=${finalModel}`
           );
 
           if (upstream === 402) return json({ error: "服务暂时不可用" }, 503, env);
@@ -553,11 +583,8 @@ export default {
           }
         });
 
-      } catch (e) {
-        // 📋 [日志] 未预期的异常 → 客户端将收到 500
-        console.error(
-          `[RETURN_500] DeepSeek请求异常 user=${userId} model=${model} error=${e && (e.stack || e.message || e)}`
-        );
+      } catch {
+        console.error(`[RETURN_500] deepseek_request_failed model=${model || "default"}`);
         return json({ error: "服务器内部错误" }, 500, env);
       }
     }
@@ -575,15 +602,17 @@ function json(data, status = 200, env) {
     status,
     headers: {
       "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "X-Content-Type-Options": "nosniff",
       ...corsHeaders(env)
     }
   });
 }
 
 function corsHeaders(env) {
-  // ⭐ 限制为你自己的域名（生产环境）
-  // 如需多个域名，可改成从 env.ALLOWED_ORIGIN 读取
-  const origin = (env && env.ALLOWED_ORIGIN) ? env.ALLOWED_ORIGIN : "*";
+  const origin = (env && env.ALLOWED_ORIGIN)
+    ? env.ALLOWED_ORIGIN
+    : "https://sunland.dev";
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
@@ -607,7 +636,7 @@ async function findUserIdByEmail(env, email) {
   );
 
   if (!userRes.ok) {
-    console.error("[USER_LOOKUP_ERROR] Supabase query failed:", userRes.status, await userRes.text().catch(() => ""));
+    console.error(`[USER_LOOKUP_ERROR] status=${userRes.status}`);
     return null;
   }
 
@@ -641,7 +670,7 @@ async function getOrCreateUserId(env, email) {
     return await findUserIdByEmail(env, email);
   }
 
-  console.error("[USER_CREATE_ERROR] Supabase insert failed:", insertRes.status, errText);
+  console.error(`[USER_CREATE_ERROR] status=${insertRes.status}`);
   return null;
 }
 
@@ -712,7 +741,7 @@ function wrapStreamWithErrorLogging(body) {
         }
         controller.close();
       } catch (e) {
-        console.error("[STREAM_ERROR] AI流式响应中断:", e && (e.stack || e.message || e));
+        console.error("[STREAM_ERROR]");
         controller.error(e);
       } finally {
         reader.releaseLock();
@@ -779,9 +808,13 @@ function base64url(obj) {
     .replace(/=+$/, "");
 }
 
-async function signJWT(payload, secret) {
+async function signJWT(payload, secret, expiresInSeconds = 7 * 24 * 60 * 60) {
   const header = { alg: "HS256", typ: "JWT" };
-  payload.exp = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60; // 7天
+  payload = {
+    ...payload,
+    iat: Math.floor(Date.now() / 1000),
+    exp: Math.floor(Date.now() / 1000) + expiresInSeconds
+  };
 
   const encoder = new TextEncoder();
   const headerStr = base64url(header);
@@ -813,8 +846,8 @@ async function getUserFromRequest(request, env) {
   const jwtToken = auth.slice(7);
   try {
     return await verifyJWT(jwtToken, env.JWT_SECRET);
-  } catch (e) {
-    console.warn("JWT verify failed:", e);
+  } catch {
+    console.warn("[JWT_VERIFY_FAILED]");
     return null;
   }
 }
@@ -824,6 +857,8 @@ async function verifyJWT(token, secret) {
   if (parts.length !== 3) throw new Error("malformed");
 
   const [header, payload, signature] = parts;
+  const decodedHeader = JSON.parse(decodeJwtSegment(header));
+  if (decodedHeader?.alg !== "HS256") throw new Error("unsupported algorithm");
   const encoder = new TextEncoder();
   const data = `${header}.${payload}`;
 
@@ -835,8 +870,9 @@ async function verifyJWT(token, secret) {
     ["verify"]
   );
 
+  const normalizedSignature = signature.replace(/-/g, "+").replace(/_/g, "/");
   const sig = Uint8Array.from(
-    atob(signature.replace(/-/g, "+").replace(/_/g, "/")),
+    atob(normalizedSignature.padEnd(Math.ceil(normalizedSignature.length / 4) * 4, "=")),
     c => c.charCodeAt(0)
   );
 
@@ -844,13 +880,21 @@ async function verifyJWT(token, secret) {
   if (!valid) throw new Error("invalid signature");
 
   // ⭐ 用同样的 base64url 解码（兼容中文）
-  const decoded = JSON.parse(
-    decodeURIComponent(escape(atob(payload.replace(/-/g, "+").replace(/_/g, "/"))))
-  );
+  const decoded = JSON.parse(decodeJwtSegment(payload));
 
-  if (decoded.exp < Math.floor(Date.now() / 1000)) {
+  if (!Number.isSafeInteger(decoded.exp) || decoded.exp <= Math.floor(Date.now() / 1000)) {
     throw new Error("expired");
+  }
+  if (typeof decoded.id !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9@._+\-]{0,127}$/.test(decoded.id)) {
+    throw new Error("invalid identity");
   }
 
   return decoded;
+}
+
+function decodeJwtSegment(segment) {
+  const normalized = segment.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  return decodeURIComponent(escape(atob(padded)));
 }

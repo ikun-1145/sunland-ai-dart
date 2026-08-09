@@ -15,12 +15,16 @@ import 'captcha_page.dart';
 import 'settings_page.dart';
 import 'update_service.dart';
 import 'furry_event_api.dart';
-import 'sunland_local_provider.dart';
+import 'sunland_remote_provider.dart';
+import 'database_token_provider.dart';
 
 // ⭐ 全局 token 存储
 String? _authToken;
 Completer<String?>? _tokenRefreshInProgress;
+int? _tokenRefreshGeneration;
+int _authSessionGeneration = 0;
 final SunlandSessionStore _sessionStore = SunlandSessionStore();
+late final DatabaseTokenProvider _databaseTokenProvider;
 
 User _buildSupabaseUser(SunlandUser user) {
   final metadata = <String, dynamic>{};
@@ -44,25 +48,41 @@ User _buildSupabaseUser(SunlandUser user) {
   })!;
 }
 
-Future<String?> _readFreshAuthToken({bool notify = true}) async {
+Future<String?> _readFreshAuthToken({
+  bool notify = true,
+  bool forceRefresh = false,
+}) async {
   var token = _authToken ?? await _sessionStore.readToken();
   if (token == null || token.isEmpty) return null;
 
-  if (isJwtExpired(token, skew: const Duration(seconds: 30))) {
+  if (forceRefresh || isJwtExpired(token, skew: const Duration(seconds: 30))) {
+    final requestGeneration = _authSessionGeneration;
+    final requestUserId = userFromJwt(token)?.id;
+    if (requestUserId == null) return null;
     // 如果已有刷新在进行，等待结果
     if (_tokenRefreshInProgress != null) {
-      return _tokenRefreshInProgress!.future;
+      return _tokenRefreshGeneration == requestGeneration
+          ? _tokenRefreshInProgress!.future
+          : token;
     }
 
     _tokenRefreshInProgress = Completer<String?>();
+    _tokenRefreshGeneration = requestGeneration;
     try {
       final refreshed = await const SunlandAuthApi().refreshToken(token);
+      if (_authSessionGeneration != requestGeneration) {
+        _tokenRefreshInProgress!.complete(null);
+        return null;
+      }
       if (refreshed == null) {
         await _sessionStore.clearSession();
         _authToken = null;
         if (notify) currentUserNotifier.value = null;
         _tokenRefreshInProgress!.complete(null);
         return null;
+      }
+      if (refreshed.user.id != requestUserId) {
+        throw const AuthExpiredException();
       }
       token = refreshed.token;
       try {
@@ -73,6 +93,7 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
       }
       // 只有在saveSession成功后才更新内存状态
       _authToken = token;
+      _databaseTokenProvider.clear();
       if (notify) {
         currentUserNotifier.value = _buildSupabaseUser(refreshed.user);
       }
@@ -82,20 +103,34 @@ Future<String?> _readFreshAuthToken({bool notify = true}) async {
       debugPrint('Token refresh failed: $e');
       // 对于临时错误（网络），不清除session，让下次重试
       // 对于permanent错误（401），才登出
-      if (e.toString().contains('401') ||
-          e.toString().contains('Unauthorized')) {
+      if (_authSessionGeneration == requestGeneration &&
+          (e.toString().contains('401') ||
+              e.toString().contains('Unauthorized'))) {
         await _sessionStore.clearSession();
+        _authToken = null;
         if (notify) currentUserNotifier.value = null;
       }
       _tokenRefreshInProgress!.completeError(e);
       rethrow;
     } finally {
       _tokenRefreshInProgress = null;
+      _tokenRefreshGeneration = null;
     }
   }
 
   _authToken = token;
   return token;
+}
+
+Future<String?> readFreshAuthToken({bool forceRefresh = false}) =>
+    _readFreshAuthToken(forceRefresh: forceRefresh);
+
+void clearDatabaseAccessToken() => _databaseTokenProvider.clear();
+
+void clearApplicationAuthState() {
+  _authSessionGeneration++;
+  _authToken = null;
+  _databaseTokenProvider.clear();
 }
 
 /// 全局主题选择弹框，避免三处重复定义
@@ -148,10 +183,16 @@ Future<void> showThemeSelectionDialog(BuildContext context) async {
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  _databaseTokenProvider = DatabaseTokenProvider(
+    appTokenProvider: ({bool forceRefresh = false}) =>
+        _readFreshAuthToken(forceRefresh: forceRefresh),
+  );
+
   await Supabase.initialize(
     url: 'https://klyrasrqgxijwrxuoevj.supabase.co',
     anonKey:
         'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtseXJhc3JxZ3hpandyeHVvZXZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4ODUyMzcsImV4cCI6MjA2ODQ2MTIzN30.qjeTrLp_QquSwvF09HrrQd-stPtgu6H51-Zdb4JUeSM',
+    accessToken: () => _databaseTokenProvider.getToken(),
   );
   final savedTheme = await loadThemeMode();
 
@@ -543,6 +584,8 @@ class _LoginPageState extends State<LoginPage>
       }
 
       // ✅ 只有存储成功才更新内存
+      _authSessionGeneration++;
+      _databaseTokenProvider.clear();
       _authToken = result.token;
 
       // ✅ 更新全局用户状态
@@ -1178,6 +1221,7 @@ class _ChatPageState extends State<ChatPage> {
     // ✅ 直接取消stream，防止幽灵请求
     _currentStreamSubscription?.cancel();
     _currentStreamSubscription = null;
+    sunlandProvider.cancelCurrent();
 
     _cancelRequested = true;
     _generationSerial++;
@@ -2565,7 +2609,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   late final SunlandApiClient apiClient;
-  late final SunlandLocalProvider sunlandProvider;
+  late final SunlandRemoteProvider sunlandProvider;
   late final SupabaseAiRepository repo;
   late final SunlandSessionStore store;
   final supabase = Supabase.instance.client;
@@ -2654,7 +2698,7 @@ class _ChatPageState extends State<ChatPage> {
       if (mounted) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(const SnackBar(content: Text('当前平台暂不支持本地 Sunland AI')));
+        ).showSnackBar(const SnackBar(content: Text('Sunland AI 服务暂时不可用')));
       }
       return false;
     }
@@ -2707,10 +2751,7 @@ class _ChatPageState extends State<ChatPage> {
       targetConversation['createdAt'] ??=
           int.tryParse(targetConversation['id']?.toString() ?? '') ??
           DateTime.now().millisecondsSinceEpoch;
-      if (provider == sunlandProviderId) {
-        normalizeSunlandCoreContext(targetConversation);
-      } else {
-        clearSunlandCoreContext(targetConversation);
+      if (provider != sunlandProviderId) {
         currentModel = model;
       }
       if (provider == sunlandProviderId) {
@@ -2854,9 +2895,6 @@ class _ChatPageState extends State<ChatPage> {
             createdAt:
                 int.tryParse((convo['createdAt'] ?? id).toString()) ??
                 DateTime.now().millisecondsSinceEpoch,
-            coreContext: provider == sunlandProviderId
-                ? readSunlandCoreContext(convo)
-                : null,
             autoTitle: convo['titleGenerated'] ?? false,
           );
         })
@@ -2879,9 +2917,6 @@ class _ChatPageState extends State<ChatPage> {
         if (item.userId != null) 'userId': item.userId,
         'createdAt': item.createdAt,
       };
-      if (item.provider == sunlandProviderId) {
-        writeSunlandCoreContext(conversation, item.coreContext);
-      }
       convos.add(conversation);
       localConversationMessages[item.id] = item.history
           .where((message) => !message.isSystem)
@@ -3041,9 +3076,6 @@ class _ChatPageState extends State<ChatPage> {
             if (model.userId != null) 'userId': model.userId,
             'createdAt': model.createdAt,
           };
-          if (model.provider == sunlandProviderId) {
-            writeSunlandCoreContext(cloudConversation, model.coreContext);
-          }
           merged[model.id] = cloudConversation;
         }
       }
@@ -3066,6 +3098,29 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> deleteConversation(String id) async {
     final user = currentUserNotifier.value;
+    Map<String, dynamic>? target;
+    for (final conversation in conversations) {
+      if (conversation['id']?.toString() == id) {
+        target = conversation;
+        break;
+      }
+    }
+    if (target?['provider'] == sunlandProviderId) {
+      if (user == null) return;
+      try {
+        await sunlandProvider.deleteConversationContext(
+          userId: user.id,
+          conversationId: id,
+        );
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('暂时无法清理 AI 上下文，请稍后再试')));
+        }
+        return;
+      }
+    }
 
     setState(() {
       conversations.removeWhere((c) => c['id'] == id);
@@ -3100,8 +3155,14 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     apiClient = SunlandApiClient(tokenProvider: _readFreshAuthToken);
-    sunlandProvider = SunlandLocalProvider();
-    repo = SupabaseAiRepository();
+    sunlandProvider = SunlandRemoteProvider(
+      tokenProvider: ({bool forceRefresh = false}) =>
+          _readFreshAuthToken(forceRefresh: forceRefresh),
+    );
+    repo = SupabaseAiRepository(
+      tokenProvider: ({bool forceRefresh = false}) =>
+          _readFreshAuthToken(forceRefresh: forceRefresh),
+    );
     store = SunlandSessionStore();
     _initData();
     unawaited(_loadOcrPrivacyTipFlag());
@@ -3118,6 +3179,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _initData() async {
     final user = currentUserNotifier.value;
     if (user == null) return;
+    await sunlandProvider.preserveLegacyState(user.id);
     await repo.ensureProfile(user.id); // ⭐ 再保险一层
     await loadConversations();
     await _checkActivation();
@@ -3668,13 +3730,17 @@ class _ChatPageState extends State<ChatPage> {
           final result = await sunlandProvider.send(
             userId: user!.id,
             conversationUserId: activeConversation['userId'].toString(),
+            conversationId: activeConversation['id'].toString(),
             input: text,
             turnId: '$generationId-${DateTime.now().microsecondsSinceEpoch}',
-            contextSnapshot: readSunlandCoreContext(activeConversation),
           );
           if (_cancelRequested || generationId != _generationSerial) return;
           responseContent = result.content;
-          writeSunlandCoreContext(activeConversation, result.contextSnapshot);
+          if (result.migrationWarning != null && mounted) {
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(SnackBar(content: Text(result.migrationWarning!)));
+          }
         }
         streamActive = false;
         flushStreamingMessage(force: true);
@@ -4146,7 +4212,7 @@ class _ChatPageState extends State<ChatPage> {
 
     if (!mounted) return;
     if (result?.loggedOut == true || currentUserNotifier.value == null) {
-      _authToken = null;
+      clearApplicationAuthState();
       Navigator.pushAndRemoveUntil(
         context,
         MaterialPageRoute(builder: (_) => const RootPage()),
@@ -5104,7 +5170,7 @@ class _ChatPageState extends State<ChatPage> {
                                                       label:
                                                           "Sunland AI · Beta",
                                                       description:
-                                                          "本地符号推理，不使用 DeepSeek",
+                                                          "云端符号推理，不使用 DeepSeek",
                                                       assetPath:
                                                           'assets/studio.png',
                                                       locked: !sunlandProvider

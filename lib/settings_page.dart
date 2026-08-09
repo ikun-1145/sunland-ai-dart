@@ -30,7 +30,10 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   late final SunlandSessionStore _store = SunlandSessionStore();
-  late final SupabaseAiRepository _repository = SupabaseAiRepository();
+  late final SupabaseAiRepository _repository = SupabaseAiRepository(
+    tokenProvider: ({bool forceRefresh = false}) =>
+        readFreshAuthToken(forceRefresh: forceRefresh),
+  );
   SunlandUser? _user;
   bool _isActivated = false;
   int _usageCount = 0;
@@ -219,8 +222,12 @@ class _SettingsPageState extends State<SettingsPage> {
                                 await _load();
                                 // 同步到全局用户，主页问候语立即刷新
                                 if (_user != null) {
-                                  final withName = _user!.copyWith(name: newName);
-                                  currentUserNotifier.value = _userFromSunland(withName);
+                                  final withName = _user!.copyWith(
+                                    name: newName,
+                                  );
+                                  currentUserNotifier.value = _userFromSunland(
+                                    withName,
+                                  );
                                 }
                                 _showSnack('昵称已更新');
                               } catch (e) {
@@ -561,6 +568,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
       // 2. 清除本地登录状态
       await _store.clearSession();
+      clearApplicationAuthState();
       // 2.1 清除本地历史记录缓存（退出后不保留本地对话）
       try {
         await _store.clearAll(); // 若你的实现中没有该方法，请确保删除本地聊天/缓存数据

@@ -228,40 +228,6 @@ class ChatMessage {
   }
 }
 
-const String _sunlandCoreContextJsonKey = 'semanticContext';
-
-/// 复制 Core 生成的不透明上下文 JSON，不在 Dart 校验或解释其结构。
-Map<String, dynamic>? cloneSunlandCoreContext(dynamic value) {
-  if (value is! Map) return null;
-  return Map<String, dynamic>.from(
-    value.map((key, item) => MapEntry(key.toString(), item)),
-  );
-}
-
-Map<String, dynamic>? readSunlandCoreContext(Map<String, dynamic> source) {
-  return cloneSunlandCoreContext(source[_sunlandCoreContextJsonKey]);
-}
-
-void writeSunlandCoreContext(
-  Map<String, dynamic> target,
-  Object? contextSnapshot,
-) {
-  final cloned = cloneSunlandCoreContext(contextSnapshot);
-  if (cloned == null) {
-    target.remove(_sunlandCoreContextJsonKey);
-  } else {
-    target[_sunlandCoreContextJsonKey] = cloned;
-  }
-}
-
-void clearSunlandCoreContext(Map<String, dynamic> target) {
-  target.remove(_sunlandCoreContextJsonKey);
-}
-
-void normalizeSunlandCoreContext(Map<String, dynamic> target) {
-  writeSunlandCoreContext(target, target[_sunlandCoreContextJsonKey]);
-}
-
 class Conversation {
   Conversation({
     required this.id,
@@ -272,12 +238,8 @@ class Conversation {
     this.model = 'deepseek-v4-flash',
     this.userId,
     int? createdAt,
-    Map<String, dynamic>? coreContext,
     this.autoTitle = false,
-  }) : createdAt = createdAt ?? updatedAt,
-       coreContext = provider == 'sunland'
-           ? cloneSunlandCoreContext(coreContext)
-           : null;
+  }) : createdAt = createdAt ?? updatedAt;
 
   final String id;
   String title;
@@ -287,7 +249,6 @@ class Conversation {
   final String model;
   final String? userId;
   final int createdAt;
-  Map<String, dynamic>? coreContext;
   bool autoTitle;
 
   bool get isEmptyChat => history.where((message) => !message.isSystem).isEmpty;
@@ -302,9 +263,6 @@ class Conversation {
       model: model,
       userId: userId,
       createdAt: createdAt,
-      coreContext: coreContext == null
-          ? null
-          : Map<String, dynamic>.from(coreContext!),
       autoTitle: autoTitle,
     );
   }
@@ -319,8 +277,6 @@ class Conversation {
       'model': model,
       if (userId != null) 'userId': userId,
       'createdAt': createdAt,
-      if (provider == 'sunland' && coreContext != null)
-        _sunlandCoreContextJsonKey: coreContext,
       if (autoTitle) '_autoTitle': autoTitle,
     };
   }
@@ -361,9 +317,6 @@ class Conversation {
       userId: json['userId']?.toString(),
       createdAt:
           int.tryParse((json['createdAt'] ?? id).toString()) ?? updatedAt,
-      coreContext: provider == 'sunland'
-          ? cloneSunlandCoreContext(json[_sunlandCoreContextJsonKey])
-          : null,
       autoTitle: json['_autoTitle'] == true,
     );
   }
@@ -915,6 +868,15 @@ Map<String, dynamic> _tryDecodeJsonObject(String text) {
 }
 
 class SupabaseAiRepository {
+  SupabaseAiRepository({
+    Future<String?> Function({bool forceRefresh})? tokenProvider,
+    http.Client? client,
+  }) : _tokenProvider = tokenProvider,
+       _httpClient = client ?? http.Client();
+
+  final Future<String?> Function({bool forceRefresh})? _tokenProvider;
+  final http.Client _httpClient;
+
   Future<void> ensureProfile(String userId) async {
     final existing = await _client
         .from('user_profiles')
@@ -923,23 +885,13 @@ class SupabaseAiRepository {
         .maybeSingle();
 
     if (existing == null) {
-      await _client.from('user_profiles').insert({
-        'user_id': userId,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      throw const ApiException('用户资料不存在，请重新登录');
     }
   }
 
   SupabaseClient get _client => Supabase.instance.client;
 
   Future<bool> isActivated(String userId) async {
-    final codeData = await _client
-        .from('activation_codes')
-        .select('code')
-        .eq('used_by', userId)
-        .maybeSingle();
-    if (codeData != null) return true;
-
     final profileData = await _client
         .from('user_profiles')
         .select('pro')
@@ -958,10 +910,6 @@ class SupabaseAiRepository {
     return int.tryParse((data['count'] ?? 0).toString()) ?? 0;
   }
 
-  Future<void> incrementUsage(String userId) async {
-    await _client.rpc('increment_usage', params: {'uid': userId});
-  }
-
   Future<UserProfile?> loadProfile(String userId) async {
     final data = await _client
         .from('user_profiles')
@@ -975,12 +923,14 @@ class SupabaseAiRepository {
   }
 
   Future<void> saveProfile(String userId, UserProfile profile) async {
-    await _client.from('user_profiles').upsert({
-      'user_id': userId,
-      'avatar_url': profile.avatarUrl ?? '',
-      'avatar_path': profile.avatarPath ?? '',
-      'updated_at': DateTime.now().toIso8601String(),
-    }, onConflict: 'user_id');
+    await _client
+        .from('user_profiles')
+        .update({
+          'avatar_url': profile.avatarUrl ?? '',
+          'avatar_path': profile.avatarPath ?? '',
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('user_id', userId);
   }
 
   Future<String?> loadNickname(String userId) async {
@@ -995,11 +945,13 @@ class SupabaseAiRepository {
   }
 
   Future<void> saveNickname(String userId, String nickname) async {
-    await _client.from('user_profiles').upsert({
-      'user_id': userId,
-      'name': nickname,
-      'updated_at': DateTime.now().toIso8601String(),
-    }, onConflict: 'user_id');
+    await _client
+        .from('user_profiles')
+        .update({
+          'name': nickname,
+          'updated_at': DateTime.now().toIso8601String(),
+        })
+        .eq('user_id', userId);
   }
 
   Future<UserProfile> uploadAvatar({
@@ -1029,58 +981,40 @@ class SupabaseAiRepository {
     required String userId,
     required String code,
   }) async {
-    final existing = await _client
-        .from('activation_codes')
-        .select('code')
-        .eq('used_by', userId)
-        .maybeSingle();
-    if (existing != null) return ActivationResult.alreadyActivated;
-
-    final data = await _client
-        .from('activation_codes')
-        .select('code, used_by')
-        .eq('code', code)
-        .maybeSingle();
-    if (data == null) return ActivationResult.invalidCode;
-
-    final usedBy = data['used_by']?.toString();
-    if (usedBy != null && usedBy.isNotEmpty) {
-      return usedBy == userId
-          ? ActivationResult.alreadyActivated
-          : ActivationResult.usedByOther;
+    Future<http.Response> claim({required bool forceRefresh}) async {
+      final token = _tokenProvider == null
+          ? await SunlandSessionStore().readToken()
+          : await _tokenProvider(forceRefresh: forceRefresh);
+      if (token == null || token.isEmpty) throw const AuthExpiredException();
+      if (userFromJwt(token)?.id != userId) {
+        throw const AuthExpiredException();
+      }
+      return _httpClient.post(
+        Uri.parse('$sunlandApiBase/v1/activation/claim'),
+        headers: {
+          'content-type': 'application/json',
+          'authorization': 'Bearer $token',
+        },
+        body: jsonEncode({'code': code}),
+      );
     }
 
-    try {
-      final updated = await _client
-          .from('activation_codes')
-          .update({
-            'used_by': userId,
-            'used_at': DateTime.now().toIso8601String(),
-          })
-          .eq('code', code)
-          .filter('used_by', 'is', null)
-          .select();
-
-      if (updated.isNotEmpty) {
-        final record = updated[0];
-        if ((record['used_by'] ?? '') != userId) {
-          return ActivationResult.raceLost;
-        }
-        await _client.from('user_profiles').upsert({
-          'user_id': userId,
-          'pro': true,
-          'updated_at': DateTime.now().toIso8601String(),
-        }, onConflict: 'user_id');
-        return ActivationResult.success;
-      }
-      return ActivationResult.raceLost;
-    } catch (error) {
-      final text = error.toString();
-      if (text.contains('duplicate key') || text.contains('unique')) {
-        return ActivationResult.alreadyActivated;
-      }
-      rethrow;
+    var response = await claim(forceRefresh: false);
+    if (response.statusCode == 401 && _tokenProvider != null) {
+      response = await claim(forceRefresh: true);
     }
+    final body = _tryDecodeJsonObject(response.body);
+    final result = body['result']?.toString();
+    return switch (result) {
+      'success' => ActivationResult.success,
+      'already_activated' => ActivationResult.alreadyActivated,
+      'invalid_code' => ActivationResult.invalidCode,
+      'used_by_other' => ActivationResult.usedByOther,
+      _ =>
+        response.statusCode == 409
+            ? ActivationResult.raceLost
+            : throw ApiException('激活服务暂时不可用', statusCode: response.statusCode),
+    };
   }
 }
 

@@ -10,6 +10,9 @@
 	"observability": {
 		"enabled": true
 	},
+	"vars": {
+		"ALLOWED_ORIGIN": "https://sunland.dev"
+	},
 	"kv_namespaces": [
 		{ "binding": "CODE_STORE", "id": "29b10d1dd6a647b9bd0bccff5a48719f" },
 		{ "binding": "USAGE_KV", "id": "29b10d1dd6a647b9bd0bccff5a48719f" }
