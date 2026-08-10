@@ -7,6 +7,12 @@
 	"keep_vars": true,
 	// 不启用 workers.dev 子域名，流量走自定义域名 api.sunland.dev
 	"workers_dev": false,
+	"routes": [
+		{
+			"pattern": "api.sunland.dev",
+			"custom_domain": true
+		}
+	],
 	"observability": {
 		"enabled": true
 	},
