@@ -211,12 +211,13 @@ test("Supabase project and server-key aliases replace legacy names", async () =>
       SUPABASE_URL: "",
       SUPABASE_SERVICE_ROLE_KEY: "",
       SUPABASE_PROJECT_URL: "https://database-alias.example",
-      SUPABASE_SECRET_KEY: "server-alias-secret",
+      SUPABASE_SECRET_KEY: "sb_secret_server-alias",
     }),
   );
   assert.equal(response.status, 200);
   assert.equal(calls[0].url, "https://database-alias.example/rest/v1/rpc/sunland_claim_activation_code");
-  assert.equal(calls[0].init.headers.Authorization, "Bearer server-alias-secret");
+  assert.equal(calls[0].init.headers.apikey, "sb_secret_server-alias");
+  assert.equal(calls[0].init.headers.Authorization, undefined);
 });
 
 test("invalid activation code is rejected without reaching Supabase", async () => {

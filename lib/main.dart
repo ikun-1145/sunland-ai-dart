@@ -190,8 +190,7 @@ void main() async {
 
   await Supabase.initialize(
     url: 'https://klyrasrqgxijwrxuoevj.supabase.co',
-    anonKey:
-        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtseXJhc3JxZ3hpandyeHVvZXZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4ODUyMzcsImV4cCI6MjA2ODQ2MTIzN30.qjeTrLp_QquSwvF09HrrQd-stPtgu6H51-Zdb4JUeSM',
+    publishableKey: supabasePublishableKey,
     accessToken: () => _databaseTokenProvider.getToken(),
   );
   final savedTheme = await loadThemeMode();

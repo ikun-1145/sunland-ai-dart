@@ -33,6 +33,17 @@
 				"GEETEST_ID": "ad3a8126afe716ccd4541f35d428071e",
 				"SUPABASE_PROJECT_URL": "https://klyrasrqgxijwrxuoevj.supabase.co"
 			},
+			"secrets": {
+				"required": [
+					"APP_JWT_PRIMARY_SECRET",
+					"APP_JWT_LEGACY_SECRET",
+					"DEEPSEEK_API_KEY",
+					"GEETEST_SERVER_KEY",
+					"RESEND_API_TOKEN",
+					"SUPABASE_LEGACY_JWT_SECRET",
+					"SUPABASE_SECRET_KEY"
+				]
+			},
 			"kv_namespaces": [
 				{ "binding": "CODE_STORE", "id": "9599d92d600b4a19bf85fb29669cf4e2" },
 				{ "binding": "USAGE_KV", "id": "04fdebf1c3d4482ab31d8f31008033be" }

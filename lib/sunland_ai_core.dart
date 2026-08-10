@@ -14,8 +14,8 @@ import 'package:flutter/material.dart';
 
 const String sunlandApiBase = 'https://api.sunland.dev';
 const String supabaseUrl = 'https://klyrasrqgxijwrxuoevj.supabase.co';
-const String supabaseAnonKey =
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtseXJhc3JxZ3hpandyeHVvZXZqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI4ODUyMzcsImV4cCI6MjA2ODQ2MTIzN30.qjeTrLp_QquSwvF09HrrQd-stPtgu6H51-Zdb4JUeSM';
+const String supabasePublishableKey =
+    'sb_publishable_4ZIHfHr8wI0QFusEf_m7wA_pthBhxsI';
 
 const int freeDailyLimit = 20;
 const String profileMetaId = '__xixi_user_profile__';

@@ -10,6 +10,8 @@ Sunland AI 的 Flutter 客户端。DeepSeek 对话继续通过
 - 应用 JWT 仍由现有登录 Worker 签发和刷新。
 - 客户端用应用 JWT 换取 15 分钟 Supabase 数据访问 Token，并在用户切换、
   退出登录或 401 后清除旧 Token 与订阅。
+- APK 只携带公开的 `sb_publishable_...` 项目 key；服务端
+  `sb_secret_...` 只存在于 Worker Secret。
 - Sunland 的知识、称呼记忆和语义 Context 只通过远程 AI API 访问。
 - 首次远程请求会幂等迁移旧本地状态；收到匹配回执后才删除旧数据，损坏数据
   会保留在设备上。

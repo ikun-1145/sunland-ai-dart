@@ -20,6 +20,7 @@ void main() {
 
   test('生产客户端不再加载本地 Core 或直写受保护账户字段', () {
     final coreSource = File('lib/sunland_ai_core.dart').readAsStringSync();
+    final mainSource = File('lib/main.dart').readAsStringSync();
     final pubspec = File('pubspec.yaml').readAsStringSync();
 
     expect(File('lib/sunland_core_client.dart').existsSync(), isFalse);
@@ -31,6 +32,10 @@ void main() {
     expect(File('assets/sunland-core.js').existsSync(), isFalse);
     expect(File('assets/sunland-core.manifest.json').existsSync(), isFalse);
     expect(pubspec, isNot(contains('assets/sunland-core.js')));
+    expect(coreSource, contains('sb_publishable_'));
+    expect(coreSource, isNot(contains('supabaseAnonKey')));
+    expect(mainSource, contains('publishableKey: supabasePublishableKey'));
+    expect(mainSource, isNot(contains('anonKey:')));
     expect(coreSource, isNot(contains("from('activation_codes')")));
     expect(coreSource, isNot(contains("rpc('increment_usage'")));
     expect(coreSource, isNot(contains("from('user_profiles').upsert")));

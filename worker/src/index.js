@@ -348,10 +348,7 @@ export default {
           const proRes = await fetch(
             `${supabaseUrl}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&select=code&limit=1`,
             {
-              headers: {
-                apikey: supabaseKey,
-                Authorization: `Bearer ${supabaseKey}`
-              }
+              headers: supabaseHeaders(env)
             }
           );
 
@@ -696,7 +693,9 @@ function supabaseHeaders(env, extra = {}) {
   const serverKey = supabaseServerKey(env);
   return {
     apikey: serverKey,
-    Authorization: `Bearer ${serverKey}`,
+    ...(serverKey?.startsWith("sb_secret_")
+      ? {}
+      : { Authorization: `Bearer ${serverKey}` }),
     ...extra
   };
 }
