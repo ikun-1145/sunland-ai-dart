@@ -4,6 +4,7 @@
 .pub/
 .pub-cache/
 build/
+.wrangler/
 
 # Flutter generated
 .flutter-plugins

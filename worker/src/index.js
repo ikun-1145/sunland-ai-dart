@@ -53,7 +53,12 @@ export default {
       }
 
       // 🔐 生成 sign_token（GeeTest 必需）
-      const sign_token = await hmacSha256Hex(lot_number, env.GEETEST_KEY);
+      const geetestServerKey = firstConfigured(env.GEETEST_SERVER_KEY, env.GEETEST_KEY);
+      if (!geetestServerKey) {
+        console.error("[GEETEST_CONFIG_MISSING]");
+        return { success: false, error: "service unavailable" };
+      }
+      const sign_token = await hmacSha256Hex(lot_number, geetestServerKey);
 
       try {
         const res = await fetch(`https://gcaptcha4.geetest.com/validate?captcha_id=${env.GEETEST_ID}`, {
@@ -114,11 +119,18 @@ export default {
 
       if (!verified) {
         console.warn(`[GEETEST_REJECTED] reason=${verifyResult.error}`);
-        return json({ error: "人机验证失败", detail: verifyResult.error }, 400, env);
+        const status = verifyResult.error === "service unavailable" ? 503 : 400;
+        return json({ error: status === 503 ? "验证码服务暂时不可用" : "人机验证失败" }, status, env);
       }
 
       if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
         return json({ error: "邮箱格式错误" }, 400, env);
+      }
+
+      const resendApiToken = firstConfigured(env.RESEND_API_TOKEN, env.RESEND_API_KEY);
+      if (!resendApiToken) {
+        console.error("[RESEND_CONFIG_MISSING]");
+        return json({ error: "邮件服务暂时不可用" }, 503, env);
       }
 
       const key = encodeURIComponent(email.toLowerCase().trim());
@@ -141,7 +153,7 @@ export default {
       const mailRes = await fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${env.RESEND_API_KEY}`,
+          Authorization: `Bearer ${resendApiToken}`,
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
@@ -221,7 +233,12 @@ export default {
       }
 
       // ===== 生成 JWT =====
-      const authToken = await signJWT({ email: normalizedEmail, id: userId }, env.JWT_SECRET);
+      const signingSecret = applicationSigningSecret(env);
+      if (!signingSecret) {
+        console.error("[JWT_SIGNING_CONFIG_MISSING]");
+        return json({ error: "Token service unavailable" }, 503, env);
+      }
+      const authToken = await signJWT({ email: normalizedEmail, id: userId }, signingSecret);
 
       return json({ token: authToken, user: { id: userId, email: normalizedEmail } }, 200, env);
     }
@@ -230,9 +247,14 @@ export default {
       if (!user) return json({ error: "Unauthorized" }, 401, env);
 
       // 签发新 token（重置7天有效期）
+      const signingSecret = applicationSigningSecret(env);
+      if (!signingSecret) {
+        console.error("[JWT_SIGNING_CONFIG_MISSING]");
+        return json({ error: "Token service unavailable" }, 503, env);
+      }
       const newToken = await signJWT(
         { email: user.email, id: user.id },
-        env.JWT_SECRET
+        signingSecret
       );
 
       return json({ token: newToken, user: { id: user.id, email: user.email } }, 200, env);
@@ -249,8 +271,12 @@ export default {
     // 🔐 短期 Supabase 数据访问 Token
     // =========================
     if (url.pathname === "/v1/database-token") {
-      if (!env.SUPABASE_JWT_SECRET) {
-        console.error("[DATABASE_TOKEN_ERROR] SUPABASE_JWT_SECRET is missing");
+      const databaseJwtSecret = firstConfigured(
+        env.SUPABASE_LEGACY_JWT_SECRET,
+        env.SUPABASE_JWT_SECRET
+      );
+      if (!databaseJwtSecret) {
+        console.error("[DATABASE_TOKEN_ERROR] database JWT secret is missing");
         return json({ error: "Token service unavailable" }, 503, env);
       }
       const token = await signJWT(
@@ -262,7 +288,7 @@ export default {
           aud: "authenticated",
           iss: "sunland-api"
         },
-        env.SUPABASE_JWT_SECRET,
+        databaseJwtSecret,
         15 * 60
       );
       return json({ token, expiresIn: 15 * 60 }, 200, env);
@@ -272,11 +298,20 @@ export default {
     // 🎟️ 服务端原子领取激活码
     // =========================
     if (url.pathname === "/v1/activation/claim") {
+      if (env.ACTIVATION_CLAIM_ENABLED === "false") {
+        return json({ error: "Activation service disabled" }, 503, env);
+      }
       const code = typeof body.code === "string" ? body.code.trim() : "";
       if (!/^[A-Za-z0-9_-]{4,64}$/.test(code)) {
         return json({ result: "invalid_code" }, 400, env);
       }
-      const claimResponse = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/sunland_claim_activation_code`, {
+      const supabaseUrl = supabaseProjectUrl(env);
+      const supabaseKey = supabaseServerKey(env);
+      if (!supabaseUrl || !supabaseKey) {
+        console.error("[SUPABASE_CONFIG_MISSING]");
+        return json({ error: "Activation service unavailable" }, 503, env);
+      }
+      const claimResponse = await fetch(`${supabaseUrl}/rest/v1/rpc/sunland_claim_activation_code`, {
         method: "POST",
         headers: supabaseHeaders(env, { "Content-Type": "application/json" }),
         body: JSON.stringify({ p_user_id: userId, p_code: code })
@@ -304,31 +339,37 @@ export default {
       isPro = true;
     } else if (kvPro !== "0") {
       // 缓存未命中 → 查 Supabase
-      try {
-        const proRes = await fetch(
-          `${env.SUPABASE_URL}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&select=code&limit=1`,
-          {
-            headers: {
-              apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-              Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`
+      const supabaseUrl = supabaseProjectUrl(env);
+      const supabaseKey = supabaseServerKey(env);
+      if (!supabaseUrl || !supabaseKey) {
+        console.error("[SUPABASE_CONFIG_MISSING]");
+      } else {
+        try {
+          const proRes = await fetch(
+            `${supabaseUrl}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&select=code&limit=1`,
+            {
+              headers: {
+                apikey: supabaseKey,
+                Authorization: `Bearer ${supabaseKey}`
+              }
             }
-          }
-        );
-
-        if (proRes.ok) {
-          const proData = await proRes.json();
-          isPro = proData.length > 0;
-
-          // 写入 KV 缓存（Pro 状态缓存 6 小时，非 Pro 缓存 30 分钟）
-          await env.USAGE_KV.put(
-            "pro:" + userId,
-            isPro ? "1" : "0",
-            { expirationTtl: isPro ? 21600 : 1800 }
           );
+
+          if (proRes.ok) {
+            const proData = await proRes.json();
+            isPro = proData.length > 0;
+
+            // 写入 KV 缓存（Pro 状态缓存 6 小时，非 Pro 缓存 30 分钟）
+            await env.USAGE_KV.put(
+              "pro:" + userId,
+              isPro ? "1" : "0",
+              { expirationTtl: isPro ? 21600 : 1800 }
+            );
+          }
+        } catch {
+          console.error("[PRO_CHECK_ERROR]");
+          // 查询失败时降级为非 Pro，不阻断服务
         }
-      } catch {
-        console.error("[PRO_CHECK_ERROR]");
-        // 查询失败时降级为非 Pro，不阻断服务
       }
     }
 
@@ -352,6 +393,12 @@ export default {
     else if (url.pathname === "/") {
       const { messages, deep = false, model } = body;
 
+      const deepseekApiKey = firstConfigured(env.DEEPSEEK_API_KEY, env.DEEPSEEK_KEY);
+      if (!deepseekApiKey) {
+        console.error("[DEEPSEEK_CONFIG_MISSING]");
+        return json({ error: "AI服务暂时不可用" }, 503, env);
+      }
+
       if (!Array.isArray(messages) || messages.length === 0) {
         return json({ error: "invalid messages" }, 400, env);
       }
@@ -372,7 +419,7 @@ export default {
             {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${env.DEEPSEEK_KEY}`,
+                Authorization: `Bearer ${deepseekApiKey}`,
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({
@@ -497,7 +544,7 @@ export default {
           {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${env.DEEPSEEK_KEY}`,
+              Authorization: `Bearer ${deepseekApiKey}`,
               "Content-Type": "application/json"
             },
             body: JSON.stringify({
@@ -526,7 +573,7 @@ export default {
             {
               method: "POST",
               headers: {
-                Authorization: `Bearer ${env.DEEPSEEK_KEY}`,
+                Authorization: `Bearer ${deepseekApiKey}`,
                 "Content-Type": "application/json"
               },
               body: JSON.stringify({
@@ -620,18 +667,49 @@ function corsHeaders(env) {
   };
 }
 
+function firstConfigured(...values) {
+  return values.find(value => typeof value === "string" && value.length > 0);
+}
+
+function applicationSigningSecret(env) {
+  // 桥接阶段保持旧密钥签发，避免旧客户端在轮换前被强制退出。
+  return firstConfigured(env.APP_JWT_LEGACY_SECRET, env.JWT_SECRET);
+}
+
+function applicationVerificationSecrets(env) {
+  return [...new Set([
+    env.APP_JWT_PRIMARY_SECRET,
+    env.APP_JWT_LEGACY_SECRET,
+    env.JWT_SECRET
+  ].filter(value => typeof value === "string" && value.length > 0))];
+}
+
+function supabaseProjectUrl(env) {
+  return firstConfigured(env.SUPABASE_PROJECT_URL, env.SUPABASE_URL);
+}
+
+function supabaseServerKey(env) {
+  return firstConfigured(env.SUPABASE_SECRET_KEY, env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
 function supabaseHeaders(env, extra = {}) {
+  const serverKey = supabaseServerKey(env);
   return {
-    apikey: env.SUPABASE_SERVICE_ROLE_KEY,
-    Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+    apikey: serverKey,
+    Authorization: `Bearer ${serverKey}`,
     ...extra
   };
 }
 
 // ⭐ 用户表已从废弃的 public.users 迁移到 public.user_profiles（email 统一小写）
 async function findUserIdByEmail(env, email) {
+  const projectUrl = supabaseProjectUrl(env);
+  if (!projectUrl || !supabaseServerKey(env)) {
+    console.error("[SUPABASE_CONFIG_MISSING]");
+    return null;
+  }
   const userRes = await fetch(
-    `${env.SUPABASE_URL}/rest/v1/user_profiles?email=eq.${encodeURIComponent(email)}&select=user_id&limit=1`,
+    `${projectUrl}/rest/v1/user_profiles?email=eq.${encodeURIComponent(email)}&select=user_id&limit=1`,
     { headers: supabaseHeaders(env) }
   );
 
@@ -645,11 +723,16 @@ async function findUserIdByEmail(env, email) {
 }
 
 async function getOrCreateUserId(env, email) {
+  const projectUrl = supabaseProjectUrl(env);
+  if (!projectUrl || !supabaseServerKey(env)) {
+    console.error("[SUPABASE_CONFIG_MISSING]");
+    return null;
+  }
   const existingId = await findUserIdByEmail(env, email);
   if (existingId) return existingId;
 
   const newUserId = crypto.randomUUID();
-  const insertRes = await fetch(`${env.SUPABASE_URL}/rest/v1/user_profiles`, {
+  const insertRes = await fetch(`${projectUrl}/rest/v1/user_profiles`, {
     method: "POST",
     headers: supabaseHeaders(env, {
       "Content-Type": "application/json",
@@ -844,12 +927,20 @@ async function getUserFromRequest(request, env) {
   if (!auth || !auth.startsWith("Bearer ")) return null;
 
   const jwtToken = auth.slice(7);
-  try {
-    return await verifyJWT(jwtToken, env.JWT_SECRET);
-  } catch {
-    console.warn("[JWT_VERIFY_FAILED]");
+  const secrets = applicationVerificationSecrets(env);
+  if (secrets.length === 0) {
+    console.error("[JWT_VERIFICATION_CONFIG_MISSING]");
     return null;
   }
+  for (const secret of secrets) {
+    try {
+      return await verifyJWT(jwtToken, secret);
+    } catch {
+      // Rotation bridge: try the next configured key before rejecting.
+    }
+  }
+  console.warn("[JWT_VERIFY_FAILED]");
+  return null;
 }
 
 async function verifyJWT(token, secret) {

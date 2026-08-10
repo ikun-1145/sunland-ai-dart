@@ -16,5 +16,27 @@
 	"kv_namespaces": [
 		{ "binding": "CODE_STORE", "id": "29b10d1dd6a647b9bd0bccff5a48719f" },
 		{ "binding": "USAGE_KV", "id": "29b10d1dd6a647b9bd0bccff5a48719f" }
-	]
+	],
+	"env": {
+		"staging": {
+			"name": "sunland-api-gateway-staging",
+			"workers_dev": false,
+			"routes": [
+				{
+					"pattern": "api-staging.sunland.dev",
+					"custom_domain": true
+				}
+			],
+			"vars": {
+				"ACTIVATION_CLAIM_ENABLED": "false",
+				"ALLOWED_ORIGIN": "https://sunland.dev",
+				"GEETEST_ID": "ad3a8126afe716ccd4541f35d428071e",
+				"SUPABASE_PROJECT_URL": "https://klyrasrqgxijwrxuoevj.supabase.co"
+			},
+			"kv_namespaces": [
+				{ "binding": "CODE_STORE", "id": "9599d92d600b4a19bf85fb29669cf4e2" },
+				{ "binding": "USAGE_KV", "id": "04fdebf1c3d4482ab31d8f31008033be" }
+			]
+		}
+	}
 }

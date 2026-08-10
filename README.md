@@ -31,9 +31,15 @@ cd worker
 npm test
 ```
 
-部署 Worker 时，`JWT_SECRET`、`SUPABASE_JWT_SECRET`、
-`SUPABASE_SERVICE_ROLE_KEY` 以及其他服务密钥必须使用 Cloudflare Secret，
-不得写入仓库或 APK。
+部署 Worker 时，使用 `APP_JWT_PRIMARY_SECRET`、
+`APP_JWT_LEGACY_SECRET`、`SUPABASE_LEGACY_JWT_SECRET`、
+`SUPABASE_SECRET_KEY`、`DEEPSEEK_API_KEY`、`GEETEST_SERVER_KEY` 和
+`RESEND_API_TOKEN` 等 Cloudflare Secret；`SUPABASE_PROJECT_URL`、
+`GEETEST_ID` 和 `ALLOWED_ORIGIN` 是普通变量。旧变量名仅作为无停机迁移兼容，
+不得把任何 Secret 写入仓库或 APK。
+
+`--env staging` 部署为独立的 `sunland-api-gateway-staging` Worker，使用独立
+KV，并通过 `ACTIVATION_CLAIM_ENABLED=false` 禁止 staging 消耗真实激活码。
 
 ## 发布门槛
 
