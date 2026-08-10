@@ -11,7 +11,20 @@
 		"enabled": true
 	},
 	"vars": {
-		"ALLOWED_ORIGIN": "https://sunland.dev"
+		"ALLOWED_ORIGIN": "https://sunland.dev",
+		"GEETEST_ID": "ad3a8126afe716ccd4541f35d428071e",
+		"SUPABASE_PROJECT_URL": "https://klyrasrqgxijwrxuoevj.supabase.co"
+	},
+	"secrets": {
+		"required": [
+			"APP_JWT_PRIMARY_SECRET",
+			"APP_JWT_LEGACY_SECRET",
+			"DEEPSEEK_API_KEY",
+			"GEETEST_SERVER_KEY",
+			"RESEND_API_TOKEN",
+			"SUPABASE_LEGACY_JWT_SECRET",
+			"SUPABASE_SECRET_KEY"
+		]
 	},
 	"kv_namespaces": [
 		{ "binding": "CODE_STORE", "id": "29b10d1dd6a647b9bd0bccff5a48719f" },
