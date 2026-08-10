@@ -24,6 +24,12 @@ void main() {
 
     expect(File('lib/sunland_core_client.dart').existsSync(), isFalse);
     expect(File('lib/sunland_local_provider.dart').existsSync(), isFalse);
+    expect(
+      File('lib/sunland_webview_runtime_adapter.dart').existsSync(),
+      isFalse,
+    );
+    expect(File('assets/sunland-core.js').existsSync(), isFalse);
+    expect(File('assets/sunland-core.manifest.json').existsSync(), isFalse);
     expect(pubspec, isNot(contains('assets/sunland-core.js')));
     expect(coreSource, isNot(contains("from('activation_codes')")));
     expect(coreSource, isNot(contains("rpc('increment_usage'")));
