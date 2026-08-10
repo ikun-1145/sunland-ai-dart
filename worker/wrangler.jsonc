@@ -9,8 +9,8 @@
 	"workers_dev": false,
 	"routes": [
 		{
-			"pattern": "api.sunland.dev",
-			"custom_domain": true
+			"pattern": "api.sunland.dev/*",
+			"zone_name": "sunland.dev"
 		}
 	],
 	"observability": {
