@@ -127,8 +127,8 @@ if [[ -z "$APKSIGNER" ]]; then
   echo "Android apksigner is required" >&2
   exit 1
 fi
-REFERENCE_CERT="$($APKSIGNER verify --print-certs "$REFERENCE_APK" | awk -F': ' '/Signer #1 certificate SHA-256 digest/{print $2; exit}')"
-RELEASE_CERT="$($APKSIGNER verify --print-certs "$APK_RELEASE" | awk -F': ' '/Signer #1 certificate SHA-256 digest/{print $2; exit}')"
+REFERENCE_CERT="$($APKSIGNER verify --print-certs "$REFERENCE_APK" | awk -F': ' '/certificate SHA-256 digest:/{print $NF; exit}')"
+RELEASE_CERT="$($APKSIGNER verify --print-certs "$APK_RELEASE" | awk -F': ' '/certificate SHA-256 digest:/{print $NF; exit}')"
 if [[ -z "$REFERENCE_CERT" || "$REFERENCE_CERT" != "$RELEASE_CERT" ]]; then
   echo "APK signing certificate does not match v1.2.1+27" >&2
   exit 1
