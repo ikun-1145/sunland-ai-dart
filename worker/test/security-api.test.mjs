@@ -160,6 +160,9 @@ test("activation claim uses the verified user and service-role RPC", async () =>
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
     return new Response(JSON.stringify("success"), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -172,10 +175,15 @@ test("activation claim uses the verified user and service-role RPC", async () =>
   );
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { result: "success" });
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://database.example/rest/v1/rpc/sunland_claim_activation_code");
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[0].url,
+    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned&limit=1",
+  );
   assert.equal(calls[0].init.headers.Authorization, "Bearer service-secret");
-  assert.deepEqual(JSON.parse(calls[0].init.body), {
+  assert.equal(calls[1].url, "https://database.example/rest/v1/rpc/sunland_claim_activation_code");
+  assert.equal(calls[1].init.headers.Authorization, "Bearer service-secret");
+  assert.deepEqual(JSON.parse(calls[1].init.body), {
     p_user_id: "user-a",
     p_code: "VALID_CODE",
   });
@@ -200,6 +208,9 @@ test("Supabase project and server-key aliases replace legacy names", async () =>
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
     return new Response(JSON.stringify("success"), {
       status: 200,
       headers: { "content-type": "application/json" },
@@ -215,9 +226,51 @@ test("Supabase project and server-key aliases replace legacy names", async () =>
     }),
   );
   assert.equal(response.status, 200);
-  assert.equal(calls[0].url, "https://database-alias.example/rest/v1/rpc/sunland_claim_activation_code");
+  assert.equal(
+    calls[0].url,
+    "https://database-alias.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned&limit=1",
+  );
   assert.equal(calls[0].init.headers.apikey, "sb_secret_server-alias");
   assert.equal(calls[0].init.headers.Authorization, undefined);
+  assert.equal(calls[1].url, "https://database-alias.example/rest/v1/rpc/sunland_claim_activation_code");
+  assert.equal(calls[1].init.headers.apikey, "sb_secret_server-alias");
+  assert.equal(calls[1].init.headers.Authorization, undefined);
+});
+
+test("banned users are rejected before the AI upstream request", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return Response.json([{ is_banned: true }]);
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello" }],
+      model: "deepseek-v4-flash",
+    }),
+    env(),
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "ACCOUNT_BANNED" });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].url, /\/rest\/v1\/user_profiles\?/);
+});
+
+test("user status failures fail closed on protected business routes", async () => {
+  globalThis.fetch = async () => Response.json(
+    { error: "database unavailable" },
+    { status: 503 },
+  );
+
+  const response = await worker.fetch(
+    request("/v1/activation/claim", { code: "VALID_CODE" }),
+    env(),
+  );
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "User status unavailable" });
 });
 
 test("invalid activation code is rejected without reaching Supabase", async () => {

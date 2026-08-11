@@ -294,17 +294,32 @@ export default {
       return json({ token, expiresIn: 15 * 60 }, 200, env);
     }
 
-    // =========================
-    // 🎟️ 服务端原子领取激活码
-    // =========================
+    let activationCode = null;
     if (url.pathname === "/v1/activation/claim") {
       if (env.ACTIVATION_CLAIM_ENABLED === "false") {
         return json({ error: "Activation service disabled" }, 503, env);
       }
-      const code = typeof body.code === "string" ? body.code.trim() : "";
-      if (!/^[A-Za-z0-9_-]{4,64}$/.test(code)) {
+      activationCode = typeof body.code === "string" ? body.code.trim() : "";
+      if (!/^[A-Za-z0-9_-]{4,64}$/.test(activationCode)) {
         return json({ result: "invalid_code" }, 400, env);
       }
+    }
+
+    // =========================
+    // 🚫 统一用户封禁校验（所有业务路由）
+    // =========================
+    const userStatus = await getUserBanStatus(env, userId);
+    if (!userStatus) {
+      return json({ error: "User status unavailable" }, 503, env);
+    }
+    if (userStatus.isBanned) {
+      return json({ error: "ACCOUNT_BANNED" }, 403, env);
+    }
+
+    // =========================
+    // 🎟️ 服务端原子领取激活码
+    // =========================
+    if (url.pathname === "/v1/activation/claim") {
       const supabaseUrl = supabaseProjectUrl(env);
       const supabaseKey = supabaseServerKey(env);
       if (!supabaseUrl || !supabaseKey) {
@@ -314,7 +329,7 @@ export default {
       const claimResponse = await fetch(`${supabaseUrl}/rest/v1/rpc/sunland_claim_activation_code`, {
         method: "POST",
         headers: supabaseHeaders(env, { "Content-Type": "application/json" }),
-        body: JSON.stringify({ p_user_id: userId, p_code: code })
+        body: JSON.stringify({ p_user_id: userId, p_code: activationCode })
       });
       if (!claimResponse.ok) {
         console.error("[ACTIVATION_CLAIM_ERROR]", claimResponse.status);
@@ -698,6 +713,40 @@ function supabaseHeaders(env, extra = {}) {
       : { Authorization: `Bearer ${serverKey}` }),
     ...extra
   };
+}
+
+async function getUserBanStatus(env, userId) {
+  const projectUrl = supabaseProjectUrl(env);
+  if (!projectUrl || !supabaseServerKey(env)) {
+    console.error("[SUPABASE_CONFIG_MISSING]");
+    return null;
+  }
+
+  try {
+    const response = await fetch(
+      `${projectUrl}/rest/v1/user_profiles?user_id=eq.${encodeURIComponent(userId)}&select=is_banned&limit=1`,
+      {
+        headers: supabaseHeaders(env),
+        signal: AbortSignal.timeout(7000)
+      }
+    );
+    if (!response.ok) {
+      console.error(`[USER_STATUS_ERROR] status=${response.status}`);
+      return null;
+    }
+
+    const rows = await response.json();
+    if (!Array.isArray(rows) || rows.length !== 1 ||
+        typeof rows[0]?.is_banned !== "boolean") {
+      console.error("[USER_STATUS_INVALID]");
+      return null;
+    }
+
+    return { isBanned: rows[0].is_banned };
+  } catch {
+    console.error("[USER_STATUS_REQUEST_ERROR]");
+    return null;
+  }
 }
 
 // ⭐ 用户表已从废弃的 public.users 迁移到 public.user_profiles（email 统一小写）

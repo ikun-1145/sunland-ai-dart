@@ -17,6 +17,10 @@ import 'update_service.dart';
 import 'furry_event_api.dart';
 import 'sunland_remote_provider.dart';
 import 'database_token_provider.dart';
+import 'ban_page.dart';
+import 'maintenance_page.dart';
+import 'services/app_config_service.dart';
+import 'services/user_status_service.dart';
 
 // ⭐ 全局 token 存储
 String? _authToken;
@@ -233,8 +237,179 @@ Future<ThemeMode> loadThemeMode() async {
   }
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class MyApp extends StatefulWidget {
+  const MyApp({
+    super.key,
+    this.appConfigService,
+    this.userStatusService,
+    this.resumeCheckInterval = const Duration(seconds: 45),
+  });
+
+  final AppConfigService? appConfigService;
+  final UserStatusService? userStatusService;
+  final Duration resumeCheckInterval;
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+enum _StartupState { loading, maintenance, banned, ready }
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  late final AppConfigService _appConfigService;
+  late final UserStatusService _userStatusService;
+  AppConfig _appConfig = AppConfig.defaults;
+  UserStatus _userStatus = UserStatus.active;
+  _StartupState _startupState = _StartupState.loading;
+  Future<void>? _startupCheckInProgress;
+  DateTime? _lastStartupCheckAt;
+  String? _observedUserId;
+  int _userIdentityGeneration = 0;
+  bool _pendingIdentityRecheck = false;
+  bool _isChecking = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _appConfigService = widget.appConfigService ?? AppConfigService();
+    _userStatusService =
+        widget.userStatusService ??
+        UserStatusService(
+          currentUserIdLoader: () async {
+            final token = await _readFreshAuthToken(notify: false);
+            return token == null ? null : userFromJwt(token)?.id;
+          },
+        );
+    _observedUserId = currentUserNotifier.value?.id;
+    currentUserNotifier.addListener(_handleCurrentUserChanged);
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_checkStartupState());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    currentUserNotifier.removeListener(_handleCurrentUserChanged);
+    super.dispose();
+  }
+
+  void _handleCurrentUserChanged() {
+    final userId = currentUserNotifier.value?.id;
+    if (userId == _observedUserId) return;
+
+    _observedUserId = userId;
+    _userIdentityGeneration++;
+    unawaited(_checkStartupState(identityChanged: true));
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+
+    final lastCheckAt = _lastStartupCheckAt;
+    if (lastCheckAt != null &&
+        DateTime.now().difference(lastCheckAt) < widget.resumeCheckInterval) {
+      return;
+    }
+    unawaited(_checkStartupState());
+  }
+
+  Future<void> _checkStartupState({
+    bool showProgress = false,
+    bool identityChanged = false,
+  }) {
+    final inProgress = _startupCheckInProgress;
+    if (inProgress != null) {
+      if (identityChanged) {
+        _pendingIdentityRecheck = true;
+      }
+      return showProgress ? _waitWithProgress(inProgress) : inProgress;
+    }
+
+    late final Future<void> request;
+    request = _runStartupChecks().whenComplete(() {
+      if (identical(_startupCheckInProgress, request)) {
+        _startupCheckInProgress = null;
+      }
+    });
+    _startupCheckInProgress = request;
+    return showProgress ? _waitWithProgress(request) : request;
+  }
+
+  Future<void> _waitWithProgress(Future<void> request) async {
+    if (mounted && !_isChecking) {
+      setState(() => _isChecking = true);
+    }
+    try {
+      await request;
+    } finally {
+      if (mounted && _isChecking) {
+        setState(() => _isChecking = false);
+      }
+    }
+  }
+
+  Future<void> _runStartupChecks() async {
+    do {
+      _pendingIdentityRecheck = false;
+      await _performStartupCheck();
+    } while (mounted && _pendingIdentityRecheck);
+  }
+
+  Future<void> _performStartupCheck() async {
+    _lastStartupCheckAt = DateTime.now();
+    final identityGeneration = _userIdentityGeneration;
+
+    try {
+      AppConfig config;
+      try {
+        config = await _appConfigService.fetchAppConfig();
+      } catch (error) {
+        debugPrint(
+          'Unexpected app config error; continuing in fail-open mode: $error',
+        );
+        config = AppConfig.defaults;
+      }
+      if (!mounted) return;
+      if (config.maintenanceEnabled) {
+        setState(() {
+          _appConfig = config;
+          _startupState = _StartupState.maintenance;
+        });
+        return;
+      }
+
+      if (identityGeneration != _userIdentityGeneration) return;
+
+      UserStatus status;
+      try {
+        status = await _userStatusService.fetchCurrentUserStatus();
+      } catch (error) {
+        debugPrint(
+          'Unexpected user status error; continuing in fail-open mode: $error',
+        );
+        status = UserStatus.active;
+      }
+      if (!mounted || identityGeneration != _userIdentityGeneration) return;
+      setState(() {
+        _appConfig = config;
+        _userStatus = status;
+        _startupState = status.isBanned
+            ? _StartupState.banned
+            : _StartupState.ready;
+      });
+    } catch (error) {
+      debugPrint(
+        'Unexpected startup check error; continuing in fail-open mode: $error',
+      );
+      if (!mounted || identityGeneration != _userIdentityGeneration) return;
+      setState(() {
+        _appConfig = AppConfig.defaults;
+        _userStatus = UserStatus.active;
+        _startupState = _StartupState.ready;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -271,10 +446,59 @@ class MyApp extends StatelessWidget {
               ),
               textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 15)),
             ),
+            builder: (context, child) {
+              switch (_startupState) {
+                case _StartupState.loading:
+                  return const _StartupLoadingPage();
+                case _StartupState.maintenance:
+                  return MaintenancePage(
+                    config: _appConfig,
+                    isChecking: _isChecking,
+                    onRetry: () => _checkStartupState(showProgress: true),
+                  );
+                case _StartupState.banned:
+                  return BanPage(
+                    status: _userStatus,
+                    isChecking: _isChecking,
+                    onRetry: () => _checkStartupState(showProgress: true),
+                  );
+                case _StartupState.ready:
+                  return child ?? const SizedBox.shrink();
+              }
+            },
             home: const RootPage(),
           ),
         );
       },
+    );
+  }
+}
+
+class _StartupLoadingPage extends StatelessWidget {
+  const _StartupLoadingPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Scaffold(
+      backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.white,
+      body: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset('assets/ailogo.png', width: 88),
+            const SizedBox(height: 24),
+            const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Color(0xFF22D3EE),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

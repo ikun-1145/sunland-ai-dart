@@ -5,6 +5,7 @@
 .pub-cache/
 build/
 .wrangler/
+worker/node_modules/
 
 # Flutter generated
 .flutter-plugins

@@ -9,12 +9,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:sunland_ai_app/main.dart';
+import 'package:sunland_ai_app/services/app_config_service.dart';
+import 'package:sunland_ai_app/services/user_status_service.dart';
 
 void main() {
   testWidgets('App shows splash screen', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+    await tester.pumpWidget(
+      MyApp(
+        appConfigService: AppConfigService(rowLoader: () async => null),
+        userStatusService: UserStatusService(
+          currentUserIdLoader: () async => null,
+        ),
+      ),
+    );
 
     expect(find.byType(Image), findsOneWidget);
+    await tester.pumpAndSettle();
   });
 }
