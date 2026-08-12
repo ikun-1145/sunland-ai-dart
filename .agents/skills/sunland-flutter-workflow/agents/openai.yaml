@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sunland Flutter Workflow"
+  short_description: "安全实施和验证 Sunland Flutter 客户端变更"
+  default_prompt: "Use $sunland-flutter-workflow to implement and verify a minimal Flutter client change."

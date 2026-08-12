@@ -8,6 +8,8 @@ import 'package:sunland_ai_app/maintenance_page.dart';
 import 'package:sunland_ai_app/services/app_config_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'test_helpers.dart';
+
 Map<String, dynamic> _configRow(bool maintenanceEnabled) {
   return <String, dynamic>{
     'maintenance_enabled': maintenanceEnabled,
@@ -45,7 +47,12 @@ void main() {
   ) async {
     final service = AppConfigService(rowLoader: () async => _configRow(false));
 
-    await tester.pumpWidget(MyApp(appConfigService: service));
+    await tester.pumpWidget(
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byType(MaintenancePage), findsNothing);
@@ -58,7 +65,12 @@ void main() {
   ) async {
     final service = AppConfigService(rowLoader: () async => _configRow(true));
 
-    await tester.pumpWidget(MyApp(appConfigService: service));
+    await tester.pumpWidget(
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+      ),
+    );
     await tester.pumpAndSettle();
 
     expect(find.byType(MaintenancePage), findsOneWidget);
@@ -75,7 +87,12 @@ void main() {
       rowLoader: () async => _configRow(maintenanceEnabled),
     );
 
-    await tester.pumpWidget(MyApp(appConfigService: service));
+    await tester.pumpWidget(
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.byType(MaintenancePage), findsOneWidget);
 
@@ -98,7 +115,12 @@ void main() {
       rowLoader: () async => _configRow(maintenanceEnabled),
     );
 
-    await tester.pumpWidget(MyApp(appConfigService: service));
+    await tester.pumpWidget(
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+      ),
+    );
     await tester.pumpAndSettle();
     expect(find.byType(MaintenancePage), findsOneWidget);
 
@@ -121,7 +143,11 @@ void main() {
     );
 
     await tester.pumpWidget(
-      MyApp(appConfigService: service, resumeCheckInterval: Duration.zero),
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+        resumeCheckInterval: Duration.zero,
+      ),
     );
     await tester.pumpAndSettle();
     expect(find.byType(LoginPage), findsOneWidget);
@@ -154,7 +180,11 @@ void main() {
     );
 
     await tester.pumpWidget(
-      MyApp(appConfigService: service, resumeCheckInterval: Duration.zero),
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+        resumeCheckInterval: Duration.zero,
+      ),
     );
     responses.single.complete(_configRow(true));
     await tester.pumpAndSettle();
@@ -192,7 +222,12 @@ void main() {
     final response = Completer<Map<String, dynamic>?>();
     final service = AppConfigService(rowLoader: () => response.future);
 
-    await tester.pumpWidget(MyApp(appConfigService: service));
+    await tester.pumpWidget(
+      MyApp(
+        appConfigService: service,
+        networkConnectivityService: onlineNetworkConnectivityService(),
+      ),
+    );
     await tester.pumpWidget(const SizedBox.shrink());
 
     response.complete(_configRow(true));

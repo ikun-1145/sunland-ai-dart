@@ -1,0 +1,6 @@
+interface:
+  display_name: "Sunland Release Workflow"
+  short_description: "按完整发布门槛验证、发布和提升 Sunland Android 版本"
+  default_prompt: "Use $sunland-release-workflow to prepare or validate a Sunland Android release."
+policy:
+  allow_implicit_invocation: false

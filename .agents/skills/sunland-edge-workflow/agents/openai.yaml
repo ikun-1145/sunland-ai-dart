@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sunland Edge Workflow"
+  short_description: "安全维护 Worker、Supabase 与 API 契约"
+  default_prompt: "Use $sunland-edge-workflow to analyze and implement a safe backend change."

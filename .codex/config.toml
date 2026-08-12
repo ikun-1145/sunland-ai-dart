@@ -1,0 +1,36 @@
+# Project-scoped Codex configuration. Keep credentials out of this file.
+
+# Version-pinned documentation lookup for Flutter, Dart, and library APIs.
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@4.0.2"]
+required = false
+startup_timeout_sec = 30
+tool_timeout_sec = 60
+default_tools_approval_mode = "auto"
+
+# Public Cloudflare documentation. This server does not need project credentials.
+[mcp_servers.cloudflare-docs]
+url = "https://docs.mcp.cloudflare.com/mcp"
+required = false
+tool_timeout_sec = 60
+default_tools_approval_mode = "auto"
+
+# Account observability uses OAuth. Every tool call remains approval-gated because
+# logs can contain operational or user-sensitive data.
+[mcp_servers.cloudflare-observability]
+url = "https://observability.mcp.cloudflare.com/mcp"
+auth = "oauth"
+required = false
+tool_timeout_sec = 90
+default_tools_approval_mode = "prompt"
+
+# Scope Supabase to this project and expose only docs, read-only database queries,
+# and debugging. Account, development, functions, storage, and branching tools are
+# intentionally excluded.
+[mcp_servers.supabase-readonly]
+url = "https://mcp.supabase.com/mcp?project_ref=klyrasrqgxijwrxuoevj&read_only=true&features=docs%2Cdatabase%2Cdebugging"
+auth = "oauth"
+required = false
+tool_timeout_sec = 90
+default_tools_approval_mode = "prompt"

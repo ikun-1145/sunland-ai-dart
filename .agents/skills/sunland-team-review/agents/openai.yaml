@@ -1,0 +1,4 @@
+interface:
+  display_name: "Sunland Team Review"
+  short_description: "编排专业只读子 Agent 完成并行生产级代码和安全审查"
+  default_prompt: "Use $sunland-team-review to review the current change with specialized subagents."

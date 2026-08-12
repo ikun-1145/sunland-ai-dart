@@ -1,0 +1,4 @@
+interface:
+  display_name: "Flutter Agent"
+  short_description: "Build, drive, and visually verify Flutter mobile apps"
+  default_prompt: "Use $flutter-agent to build the app, run it on a simulator, inspect screenshots, and fix regressions."

@@ -10,6 +10,8 @@ import 'package:sunland_ai_app/services/app_config_service.dart';
 import 'package:sunland_ai_app/services/user_status_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'test_helpers.dart';
+
 Map<String, dynamic> _configRow(bool maintenanceEnabled) {
   return <String, dynamic>{
     'maintenance_enabled': maintenanceEnabled,
@@ -54,6 +56,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),
@@ -75,6 +78,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),
@@ -104,6 +108,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(true),
         ),
@@ -128,6 +133,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(maintenanceEnabled),
         ),
@@ -159,6 +165,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),
@@ -191,6 +198,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),
@@ -213,6 +221,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),
@@ -234,6 +243,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),
@@ -274,6 +284,7 @@ void main() {
 
     await tester.pumpWidget(
       MyApp(
+        networkConnectivityService: onlineNetworkConnectivityService(),
         appConfigService: AppConfigService(
           rowLoader: () async => _configRow(false),
         ),

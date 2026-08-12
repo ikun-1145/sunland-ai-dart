@@ -1,0 +1,19 @@
+appId: com.liuxize.sunlandai
+name: iOS startup and login smoke
+tags:
+  - smoke
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible: "选择主题"
+    timeout: 30000
+- tapOn: "浅色模式"
+- extendedWaitUntil:
+    visible: "霜蓝 AI"
+    timeout: 30000
+- assertVisible: "邮箱"
+- assertVisible: "验证码"
+- assertVisible: "发送"
+- assertVisible: "登录"
+- takeScreenshot: "login-screen-ios"

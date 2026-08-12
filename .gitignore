@@ -7,6 +7,14 @@ build/
 .wrangler/
 worker/node_modules/
 
+# Cloudflare Worker local secrets
+worker/.dev.vars
+worker/.dev.vars.*
+worker/.env
+worker/.env.*
+!worker/.dev.vars.example
+!worker/.env.example
+
 # Flutter generated
 .flutter-plugins
 .flutter-plugins-dependencies

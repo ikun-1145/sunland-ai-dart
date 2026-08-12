@@ -19,7 +19,9 @@ import 'sunland_remote_provider.dart';
 import 'database_token_provider.dart';
 import 'ban_page.dart';
 import 'maintenance_page.dart';
+import 'network_unavailable_page.dart';
 import 'services/app_config_service.dart';
+import 'services/network_connectivity_service.dart';
 import 'services/user_status_service.dart';
 
 // ⭐ 全局 token 存储
@@ -241,11 +243,13 @@ class MyApp extends StatefulWidget {
   const MyApp({
     super.key,
     this.appConfigService,
+    this.networkConnectivityService,
     this.userStatusService,
     this.resumeCheckInterval = const Duration(seconds: 45),
   });
 
   final AppConfigService? appConfigService;
+  final NetworkConnectivityService? networkConnectivityService;
   final UserStatusService? userStatusService;
   final Duration resumeCheckInterval;
 
@@ -253,15 +257,17 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-enum _StartupState { loading, maintenance, banned, ready }
+enum _StartupState { loading, offline, maintenance, banned, ready }
 
 class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   late final AppConfigService _appConfigService;
+  late final NetworkConnectivityService _networkConnectivityService;
   late final UserStatusService _userStatusService;
   AppConfig _appConfig = AppConfig.defaults;
   UserStatus _userStatus = UserStatus.active;
   _StartupState _startupState = _StartupState.loading;
   Future<void>? _startupCheckInProgress;
+  Future<void>? _resumeNetworkCheckInProgress;
   DateTime? _lastStartupCheckAt;
   String? _observedUserId;
   int _userIdentityGeneration = 0;
@@ -272,6 +278,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     _appConfigService = widget.appConfigService ?? AppConfigService();
+    _networkConnectivityService =
+        widget.networkConnectivityService ?? NetworkConnectivityService();
     _userStatusService =
         widget.userStatusService ??
         UserStatusService(
@@ -309,9 +317,42 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     final lastCheckAt = _lastStartupCheckAt;
     if (lastCheckAt != null &&
         DateTime.now().difference(lastCheckAt) < widget.resumeCheckInterval) {
+      unawaited(_checkNetworkAfterResume());
       return;
     }
     unawaited(_checkStartupState());
+  }
+
+  Future<void> _checkNetworkAfterResume() {
+    final startupCheck = _startupCheckInProgress;
+    if (startupCheck != null) return startupCheck;
+
+    final inProgress = _resumeNetworkCheckInProgress;
+    if (inProgress != null) return inProgress;
+
+    late final Future<void> request;
+    request = _performResumeNetworkCheck().whenComplete(() {
+      if (identical(_resumeNetworkCheckInProgress, request)) {
+        _resumeNetworkCheckInProgress = null;
+      }
+    });
+    _resumeNetworkCheckInProgress = request;
+    return request;
+  }
+
+  Future<void> _performResumeNetworkCheck() async {
+    final hasInternetConnection = await _networkConnectivityService
+        .hasInternetConnection();
+    if (!mounted || _startupCheckInProgress != null) return;
+
+    if (!hasInternetConnection) {
+      setState(() => _startupState = _StartupState.offline);
+      return;
+    }
+
+    if (_startupState == _StartupState.offline) {
+      await _checkStartupState();
+    }
   }
 
   Future<void> _checkStartupState({
@@ -361,6 +402,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
     final identityGeneration = _userIdentityGeneration;
 
     try {
+      final hasInternetConnection = await _networkConnectivityService
+          .hasInternetConnection();
+      if (!mounted || identityGeneration != _userIdentityGeneration) return;
+      if (!hasInternetConnection) {
+        setState(() => _startupState = _StartupState.offline);
+        return;
+      }
+
       AppConfig config;
       try {
         config = await _appConfigService.fetchAppConfig();
@@ -450,6 +499,11 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
               switch (_startupState) {
                 case _StartupState.loading:
                   return const _StartupLoadingPage();
+                case _StartupState.offline:
+                  return NetworkUnavailablePage(
+                    isChecking: _isChecking,
+                    onRetry: () => _checkStartupState(showProgress: true),
+                  );
                 case _StartupState.maintenance:
                   return MaintenancePage(
                     config: _appConfig,

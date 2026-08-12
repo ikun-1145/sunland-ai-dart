@@ -45,6 +45,7 @@ flutter:
     - assets/studio.png
     - assets/ailogo_dark.png
     - assets/loading.gif
+    - assets/network_unavailable.jpg
 
 flutter_launcher_icons:
   android: true
