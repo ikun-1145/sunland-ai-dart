@@ -133,7 +133,7 @@ if [[ -z "$REFERENCE_CERT" || "$REFERENCE_CERT" != "$RELEASE_CERT" ]]; then
   echo "APK signing certificate does not match v1.2.1+27" >&2
   exit 1
 fi
-shasum -a 256 "$APK_RELEASE" > "$CHECKSUM"
+(cd "$(dirname "$APK_RELEASE")" && shasum -a 256 "$(basename "$APK_RELEASE")") > "$CHECKSUM"
 
 # Nothing is pushed until tests, release build, and historical-signature
 # verification have all succeeded.

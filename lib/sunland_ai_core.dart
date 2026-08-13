@@ -1157,7 +1157,7 @@ bool get supportsLocalImageOcr {
   return Platform.isAndroid || Platform.isIOS;
 }
 
-const String kOcrPrivacyTip = '图片仅在本地识别文字，原图不会上传到服务器。';
+const String kOcrPrivacyTip = '图片仅在本地识别，原图不会上传；识别出的文字会发送至 AI 服务，并随对话同步。';
 
 const String kOcrEmptyMarker = '（未识别到文字）';
 

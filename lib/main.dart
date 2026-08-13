@@ -3728,9 +3728,6 @@ class _ChatPageState extends State<ChatPage> {
         ocrBlock != null &&
         mounted) {
       final block = ocrBlock;
-      final preview = block.length > 120
-          ? '${block.characters.take(120)}…'
-          : block;
       final confirmed = await showDialog<bool>(
         context: context,
         builder: (ctx) => AlertDialog(
@@ -3740,10 +3737,7 @@ class _ChatPageState extends State<ChatPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  preview,
-                  style: const TextStyle(fontSize: 13, height: 1.4),
-                ),
+                Text(block, style: const TextStyle(fontSize: 13, height: 1.4)),
                 const SizedBox(height: 12),
                 Text(
                   kOcrPrivacyTip,
