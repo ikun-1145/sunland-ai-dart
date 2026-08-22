@@ -258,6 +258,115 @@ test("banned users are rejected before the AI upstream request", async () => {
   assert.match(calls[0].url, /\/rest\/v1\/user_profiles\?/);
 });
 
+test("AI route preserves a valid inline image and selects the DeepSeek vision model", async () => {
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+  let upstreamBody = null;
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
+    assert.equal(String(url), "https://api.deepseek.com/v1/chat/completions");
+    upstreamBody = JSON.parse(init.body);
+    return new Response("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n", {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+
+  const environment = env({ DEEPSEEK_API_KEY: "deepseek-secret" });
+  environment.USAGE_KV.values.set("pro:user-a", "0");
+  const response = await worker.fetch(
+    request("/", {
+      model: "deepseek-v4-flash",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image" },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${tinyPng}`,
+              detail: "original",
+            },
+          },
+        ],
+      }],
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-model"), "deepseek-v4-flash-vision-exp");
+  assert.equal(upstreamBody.model, "deepseek-v4-flash-vision-exp");
+  assert.equal(upstreamBody.messages[0].content[0].text, "Describe this image");
+  assert.equal(upstreamBody.messages[0].content[1].image_url.url, `data:image/png;base64,${tinyPng}`);
+});
+
+test("AI route never falls back to a text-only model when the vision request fails", async () => {
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
+  const upstreamModels = [];
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
+    assert.equal(String(url), "https://api.deepseek.com/v1/chat/completions");
+    upstreamModels.push(JSON.parse(init.body).model);
+    return Response.json({ error: "vision unavailable" }, { status: 503 });
+  };
+
+  const environment = env({ DEEPSEEK_API_KEY: "deepseek-secret" });
+  environment.USAGE_KV.values.set("pro:user-a", "0");
+  const response = await worker.fetch(
+    request("/", {
+      model: "deepseek-v4-pro",
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Describe this image without OCR" },
+          {
+            type: "image_url",
+            image_url: { url: `data:image/png;base64,${tinyPng}`, detail: "original" },
+          },
+        ],
+      }],
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 502);
+  assert.deepEqual(upstreamModels, ["deepseek-v4-flash-vision-exp"]);
+});
+
+test("AI route rejects an inline image whose declared MIME does not match its signature", async () => {
+  let deepseekCalled = false;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
+    deepseekCalled = true;
+    throw new Error("unexpected DeepSeek request");
+  };
+
+  const environment = env({ DEEPSEEK_API_KEY: "deepseek-secret" });
+  environment.USAGE_KV.values.set("pro:user-a", "0");
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{
+        role: "user",
+        content: [{
+          type: "image_url",
+          image_url: { url: "data:image/jpeg;base64,iVBORw0KGgoAAAANSUhEUg==" },
+        }],
+      }],
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "invalid image input" });
+  assert.equal(deepseekCalled, false);
+});
+
 test("user status failures fail closed on protected business routes", async () => {
   globalThis.fetch = async () => Response.json(
     { error: "database unavailable" },
