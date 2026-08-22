@@ -21,6 +21,8 @@ import 'ban_page.dart';
 import 'maintenance_page.dart';
 import 'network_unavailable_page.dart';
 import 'services/app_config_service.dart';
+import 'services/background_execution_service.dart';
+import 'services/image_attachment_service.dart';
 import 'services/network_connectivity_service.dart';
 import 'services/user_status_service.dart';
 
@@ -1414,6 +1416,8 @@ class _LoginPageState extends State<LoginPage>
   }
 }
 
+enum _ImageAttachmentSource { camera, gallery, files }
+
 class ChatPage extends StatefulWidget {
   const ChatPage({super.key});
 
@@ -1502,6 +1506,7 @@ class _ChatPageState extends State<ChatPage> {
 
     _cancelRequested = true;
     _generationSerial++;
+    unawaited(_endGenerationBackgroundTask());
 
     setState(() {
       isGenerating = false;
@@ -2907,8 +2912,30 @@ class _ChatPageState extends State<ChatPage> {
   int _generationSerial = 0;
   StreamSubscription<AiResponse>? _currentStreamSubscription;
   List<String> pickedImages = [];
+  final ImagePicker _imagePicker = ImagePicker();
+  final BackgroundExecutionService _backgroundExecution =
+      const BackgroundExecutionService();
+  int? _generationBackgroundTaskId;
   bool _ocrPrivacyTipShown = false;
   bool isUploadingAvatar = false;
+
+  Future<void> _beginGenerationBackgroundTask() async {
+    if (!Platform.isIOS || _generationBackgroundTaskId != null) return;
+    final taskId = await _backgroundExecution.begin(
+      name: 'Complete active AI response',
+    );
+    if (!mounted || !isGenerating) {
+      await _backgroundExecution.end(taskId);
+      return;
+    }
+    _generationBackgroundTaskId = taskId;
+  }
+
+  Future<void> _endGenerationBackgroundTask() async {
+    final taskId = _generationBackgroundTaskId;
+    _generationBackgroundTaskId = null;
+    await _backgroundExecution.end(taskId);
+  }
 
   Map<String, dynamic>? get _currentConversation {
     final id = currentConversationId;
@@ -3443,6 +3470,11 @@ class _ChatPageState extends State<ChatPage> {
     store = SunlandSessionStore();
     _initData();
     unawaited(_loadOcrPrivacyTipFlag());
+    if (Platform.isAndroid) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_recoverLostImagePickerData());
+      });
+    }
   }
 
   Future<void> _loadOcrPrivacyTipFlag() async {
@@ -3914,6 +3946,12 @@ class _ChatPageState extends State<ChatPage> {
     });
     scrollToBottom();
 
+    await _beginGenerationBackgroundTask();
+    if (!mounted || generationId != _generationSerial) {
+      await _endGenerationBackgroundTask();
+      return;
+    }
+
     try {
       // ===== 使用 Core 构建并发送 =====
       setState(() {
@@ -4253,6 +4291,7 @@ class _ChatPageState extends State<ChatPage> {
 
       rememberLocalMessages();
     } finally {
+      await _endGenerationBackgroundTask();
       if (mounted) {
         setState(() {
           // 防止"思考中..."卡住（用户主动停止时跳过）
@@ -4273,6 +4312,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void dispose() {
     _currentStreamSubscription?.cancel();
+    unawaited(_endGenerationBackgroundTask());
     apiClient.close();
     unawaited(sunlandProvider.dispose());
     controller.dispose();
@@ -4326,6 +4366,12 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> pickImage() async {
+    if (pickedImages.length >= maxImageAttachmentCount) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('最多添加 4 张图片')),
+      );
+      return;
+    }
     if (!_ocrPrivacyTipShown && mounted) {
       await _markOcrPrivacyTipShown();
       if (!mounted) return;
@@ -4337,54 +4383,188 @@ class _ChatPageState extends State<ChatPage> {
       );
     }
 
-    // 📱 移动端：使用 image_picker
-    if (Platform.isAndroid || Platform.isIOS) {
-      final picker = ImagePicker();
-      final picked = await picker.pickMultiImage();
+    try {
+      if (Platform.isAndroid || Platform.isIOS) {
+        final source = await showModalBottomSheet<_ImageAttachmentSource>(
+          context: context,
+          showDragHandle: true,
+          builder: (sheetContext) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.camera_alt_outlined),
+                  title: const Text('拍照'),
+                  onTap: () => Navigator.pop(
+                    sheetContext,
+                    _ImageAttachmentSource.camera,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.photo_library_outlined),
+                  title: const Text('从相册选择'),
+                  onTap: () => Navigator.pop(
+                    sheetContext,
+                    _ImageAttachmentSource.gallery,
+                  ),
+                ),
+                ListTile(
+                  leading: const Icon(Icons.folder_open_outlined),
+                  title: const Text('选择图片文件'),
+                  subtitle: const Text('可从系统文件或 iCloud Drive 中选择'),
+                  onTap: () => Navigator.pop(
+                    sheetContext,
+                    _ImageAttachmentSource.files,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+        if (!mounted || source == null) return;
 
-      if (!mounted) return;
-      if (picked.isEmpty) return;
-
-      setState(() {
-        for (var img in picked) {
-          if (pickedImages.length < 4) {
-            pickedImages.add(img.path);
-          }
+        switch (source) {
+          case _ImageAttachmentSource.camera:
+            final picked = await _imagePicker.pickImage(
+              source: ImageSource.camera,
+              imageQuality: 90,
+              requestFullMetadata: false,
+            );
+            if (picked != null) {
+              await _addImageAttachments([picked.path]);
+            }
+            break;
+          case _ImageAttachmentSource.gallery:
+            if (Platform.isIOS) {
+              // pickMultiImage uses PHPicker and requires iOS 14+. Keep the
+              // repository's iOS 13 deployment target working with single pick.
+              final picked = await _imagePicker.pickImage(
+                source: ImageSource.gallery,
+                imageQuality: 90,
+                requestFullMetadata: false,
+              );
+              if (picked != null) {
+                await _addImageAttachments([picked.path]);
+              }
+            } else {
+              final picked = await _imagePicker.pickMultiImage(
+                imageQuality: 90,
+                limit: maxImageAttachmentCount - pickedImages.length,
+                requestFullMetadata: false,
+              );
+              await _addImageAttachments(picked.map((image) => image.path));
+            }
+            break;
+          case _ImageAttachmentSource.files:
+            await _pickImageFiles();
+            break;
         }
-      });
-      return;
-    }
+        return;
+      }
 
-    // 💻 桌面端：使用 file_picker
+      await _pickImageFiles();
+    } on PlatformException catch (error) {
+      _showImagePickerError(error);
+    } on FileSystemException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('无法读取所选图片，请将文件下载到本机后重试')),
+      );
+    }
+  }
+
+  Future<void> _pickImageFiles() async {
     final result = await FilePicker.platform.pickFiles(
       allowMultiple: true,
       type: FileType.image,
     );
-
-    if (!mounted) return;
     if (result == null || result.files.isEmpty) return;
 
-    setState(() {
-      for (var file in result.files) {
-        if (file.path != null) {
-          if (pickedImages.length < 4) {
-            pickedImages.add(file.path!);
-          }
-        }
+    await _addImageAttachments(
+      result.files.map((file) => file.path).whereType<String>(),
+    );
+  }
+
+  Future<void> _recoverLostImagePickerData() async {
+    try {
+      final response = await _imagePicker.retrieveLostData();
+      if (response.isEmpty) return;
+      final files = response.files;
+      if (files != null && files.isNotEmpty) {
+        await _addImageAttachments(files.map((file) => file.path));
+        return;
       }
-    });
+      final exception = response.exception;
+      if (exception != null) {
+        _showImagePickerError(exception);
+      }
+    } on PlatformException catch (error) {
+      _showImagePickerError(error);
+    }
+  }
+
+  Future<void> _addImageAttachments(Iterable<String> paths) async {
+    final validation = await validateImageAttachments(
+      candidatePaths: paths,
+      existingPaths: pickedImages,
+    );
+    if (!mounted) return;
+
+    if (validation.acceptedPaths.isNotEmpty) {
+      setState(() => pickedImages.addAll(validation.acceptedPaths));
+    }
+    if (!validation.hasRejectedFiles) return;
+
+    final reasons = <String>[];
+    if (validation.limitExceededCount > 0) {
+      reasons.add('最多添加 $maxImageAttachmentCount 张图片');
+    }
+    if (validation.tooLargeCount > 0) {
+      reasons.add('单张图片不能超过 20 MB');
+    }
+    if (validation.unreadableCount > 0) {
+      reasons.add('部分图片无法读取');
+    }
+    if (validation.duplicateCount > 0) {
+      reasons.add('已忽略重复图片');
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(reasons.join('；'))));
+  }
+
+  void _showImagePickerError(PlatformException error) {
+    if (!mounted) return;
+    final code = error.code.toLowerCase();
+    final message = code.contains('camera_access')
+        ? '无法使用相机，请在系统设置中允许霜蓝AI访问相机'
+        : code.contains('photo_access')
+        ? '无法读取相册，请在系统设置中允许霜蓝AI访问照片'
+        : code.contains('camera_unavailable')
+        ? '当前设备没有可用相机'
+        : '无法打开图片选择器，请稍后重试';
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> pickAndUploadAvatar() async {
     final user = currentUserNotifier.value;
     if (user == null) return;
 
-    final picker = ImagePicker();
-    final picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: 80,
-    );
+    XFile? picked;
+    try {
+      picked = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 80,
+        requestFullMetadata: false,
+      );
+    } on PlatformException catch (error) {
+      _showImagePickerError(error);
+      return;
+    }
     if (picked == null) return;
+    if (!mounted) return;
 
     final file = File(picked.path);
 
@@ -4428,6 +4608,13 @@ class _ChatPageState extends State<ChatPage> {
     ).showSnackBar(const SnackBar(content: Text("头像上传中...")));
 
     final fileName = '${user.id}.png';
+    final backgroundTaskId = await _backgroundExecution.begin(
+      name: 'Upload profile image',
+    );
+    if (!mounted) {
+      await _backgroundExecution.end(backgroundTaskId);
+      return;
+    }
 
     try {
       await supabase.storage
@@ -4465,6 +4652,7 @@ class _ChatPageState extends State<ChatPage> {
         context,
       ).showSnackBar(SnackBar(content: Text("上传失败: $e")));
     } finally {
+      await _backgroundExecution.end(backgroundTaskId);
       if (mounted) {
         setState(() {
           isUploadingAvatar = false;
@@ -5313,10 +5501,12 @@ class _ChatPageState extends State<ChatPage> {
                               Row(
                                 children: [
                                   IconButton(
-                                    icon: const Icon(Icons.image),
+                                    icon: const Icon(
+                                      Icons.add_photo_alternate_outlined,
+                                    ),
                                     tooltip: isSunlandConversation
                                         ? 'Sunland AI 暂不支持文件上传'
-                                        : '上传图片',
+                                        : '拍照或选择图片',
                                     onPressed: isSunlandConversation
                                         ? null
                                         : pickImage,
