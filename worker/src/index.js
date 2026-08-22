@@ -473,6 +473,7 @@ export default {
                     content: lastUserMessage
                   }
                 ],
+                thinking: { type: "disabled" },
                 temperature: 0,
                 stream: false
               }),
@@ -543,7 +544,9 @@ export default {
       // 🧠 模型选择逻辑
       // =========================
       let finalModel;
-      const effectiveDeep = deep === true && !isVisionRequest;
+      const effectiveDeep = deep === true;
+      // DeepSeek V4 defaults to thinking mode when this field is omitted.
+      const thinkingMode = { type: effectiveDeep ? "enabled" : "disabled" };
 
       if (isVisionRequest) {
         finalModel = DEEPSEEK_VISION_MODEL;
@@ -586,7 +589,7 @@ export default {
               model: finalModel,
               messages: upstreamMessages,
               stream: true,
-              ...(effectiveDeep ? { thinking: { type: "enabled" } } : {}),
+              thinking: thinkingMode,
               temperature: temperature ?? 0.7,
               max_tokens: max_tokens ?? 2048
             })
@@ -615,7 +618,7 @@ export default {
                 model: "deepseek-v4-flash",
                 messages: upstreamMessages,
                 stream: true,
-                ...(effectiveDeep ? { thinking: { type: "enabled" } } : {}),
+                thinking: thinkingMode,
                 temperature: temperature ?? 0.7,
                 max_tokens: max_tokens ?? 2048
               })

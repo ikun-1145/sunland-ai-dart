@@ -301,11 +301,11 @@ test("image content is preserved and routed to the DeepSeek vision model", async
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-model"), "deepseek-v4-flash-vision-exp");
-  assert.equal(response.headers.get("x-deep"), "0");
+  assert.equal(response.headers.get("x-deep"), "1");
   assert.match(await response.text(), /看到了/);
   const upstreamBody = JSON.parse(calls[1].init.body);
   assert.equal(upstreamBody.model, "deepseek-v4-flash-vision-exp");
-  assert.equal(upstreamBody.thinking, undefined);
+  assert.deepEqual(upstreamBody.thinking, { type: "enabled" });
   assert.deepEqual(upstreamBody.messages[1].content[1], {
     type: "image_url",
     image_url: { url: imageDataUrl, detail: "auto" },
@@ -318,12 +318,16 @@ test("image content is preserved and routed to the DeepSeek vision model", async
 
 test("vision requests never fall back to a text-only model", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
-  const upstreamModels = [];
+  const upstreamRequests = [];
   globalThis.fetch = async (url, init = {}) => {
     if (String(url).includes("/rest/v1/user_profiles?")) {
       return Response.json([{ is_banned: false }]);
     }
-    upstreamModels.push(JSON.parse(init.body).model);
+    const upstreamBody = JSON.parse(init.body);
+    upstreamRequests.push({
+      model: upstreamBody.model,
+      thinking: upstreamBody.thinking,
+    });
     return Response.json({ error: "vision unavailable" }, { status: 503 });
   };
 
@@ -347,7 +351,10 @@ test("vision requests never fall back to a text-only model", async () => {
   );
 
   assert.equal(response.status, 502);
-  assert.deepEqual(upstreamModels, ["deepseek-v4-flash-vision-exp"]);
+  assert.deepEqual(upstreamRequests, [{
+    model: "deepseek-v4-flash-vision-exp",
+    thinking: { type: "disabled" },
+  }]);
 });
 
 test("inline image MIME must match the decoded file signature", async () => {
@@ -380,7 +387,7 @@ test("inline image MIME must match the decoded file signature", async () => {
   assert.equal(deepseekCalled, false);
 });
 
-test("text-only chat keeps the existing DeepSeek flash contract", async () => {
+test("text-only chat explicitly disables DeepSeek thinking by default", async () => {
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
   await environment.USAGE_KV.put("pro:user-a", "0");
@@ -399,7 +406,6 @@ test("text-only chat keeps the existing DeepSeek flash contract", async () => {
     request("/", {
       messages: [{ role: "user", content: "hello" }],
       model: "deepseek-v4-flash",
-      deep: false,
     }),
     environment,
   );
@@ -408,9 +414,86 @@ test("text-only chat keeps the existing DeepSeek flash contract", async () => {
   assert.equal(response.headers.get("x-model"), "deepseek-v4-flash");
   const upstreamBody = JSON.parse(calls[1].init.body);
   assert.equal(upstreamBody.model, "deepseek-v4-flash");
+  assert.deepEqual(upstreamBody.thinking, { type: "disabled" });
   assert.deepEqual(upstreamBody.messages, [
     { role: "user", content: "hello" },
   ]);
+});
+
+test("deep thinking stays enabled when the Pro model falls back to flash", async () => {
+  const upstreamBodies = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "1");
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
+    const upstreamBody = JSON.parse(init.body);
+    upstreamBodies.push(upstreamBody);
+    if (upstreamBody.model === "deepseek-v4-pro") {
+      return Response.json({ error: "temporary" }, { status: 503 });
+    }
+    return new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "think carefully" }],
+      model: "deepseek-v4-pro",
+      deep: true,
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-deep"), "1");
+  assert.deepEqual(
+    upstreamBodies.map(body => ({ model: body.model, thinking: body.thinking })),
+    [
+      { model: "deepseek-v4-pro", thinking: { type: "enabled" } },
+      { model: "deepseek-v4-flash", thinking: { type: "enabled" } },
+    ],
+  );
+});
+
+test("content moderation and ordinary replies both disable thinking", async () => {
+  const upstreamBodies = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "0");
+  globalThis.fetch = async (url, init) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
+    const upstreamBody = JSON.parse(init.body);
+    upstreamBodies.push(upstreamBody);
+    if (upstreamBody.stream === false) {
+      return Response.json({
+        choices: [{ message: { content: "ok" } }],
+      });
+    }
+    return new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "vpn" }],
+      model: "deepseek-v4-flash",
+      deep: false,
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(
+    upstreamBodies.map(body => body.thinking),
+    [{ type: "disabled" }, { type: "disabled" }],
+  );
 });
 
 test("image blocks are rejected outside user messages", async () => {
