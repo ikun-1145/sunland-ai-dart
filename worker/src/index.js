@@ -1,4 +1,10 @@
 // @ts-nocheck
+const DEFAULT_REQUEST_BYTES = 200 * 1024;
+const DEFAULT_PAYLOAD_BYTES = 500 * 1024;
+const MAX_AI_REQUEST_BYTES = 12 * 1024 * 1024;
+const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
+const DEEPSEEK_VISION_MODEL = "deepseek-v4-flash-vision-exp";
+
 export default {
 
   async fetch(request, env) {
@@ -12,16 +18,32 @@ export default {
       return json({ error: "Method not allowed" }, 405, env);
     }
 
+    // The AI route may contain a base64 image. Authenticate it before allocating
+    // the larger body budget so anonymous callers keep the original small limit.
+    const preauthenticatedUser = url.pathname === "/"
+      ? await getUserFromRequest(request, env)
+      : null;
+    if (url.pathname === "/" && !preauthenticatedUser) {
+      return json({ error: "Unauthorized" }, 401, env);
+    }
+
+    const maxRequestBytes = url.pathname === "/"
+      ? MAX_AI_REQUEST_BYTES
+      : DEFAULT_REQUEST_BYTES;
+    const maxPayloadBytes = url.pathname === "/"
+      ? MAX_AI_REQUEST_BYTES
+      : DEFAULT_PAYLOAD_BYTES;
+
     let body;
     try {
       const contentLength = request.headers.get("content-length");
-      if (contentLength && Number.parseInt(contentLength, 10) > 1024 * 200) {
+      if (contentLength && Number.parseInt(contentLength, 10) > maxRequestBytes) {
         return json({ error: "Request too large" }, 413, env);
       }
 
       body = await request.json();
 
-      if (JSON.stringify(body).length > 1024 * 500) {
+      if (new TextEncoder().encode(JSON.stringify(body)).byteLength > maxPayloadBytes) {
         return json({ error: "Payload too large" }, 413, env);
       }
     } catch {
@@ -262,7 +284,7 @@ export default {
     // =========================
     // 🔐 JWT 鉴权（所有后续路由都需要）
     // =========================
-    const user = await getUserFromRequest(request, env);
+    const user = preauthenticatedUser || await getUserFromRequest(request, env);
     if (!user) return json({ error: "Unauthorized" }, 401, env);
 
     const userId = user.id;
@@ -415,7 +437,14 @@ export default {
         return json({ error: "invalid messages" }, 400, env);
       }
 
-      const upstreamMessages = clampMessagesForUpstream(messages);
+      let upstreamMessages;
+      try {
+        upstreamMessages = clampMessagesForUpstream(messages);
+      } catch (error) {
+        console.warn(`[VISION_INPUT_REJECTED] reason=${error?.message || "invalid"}`);
+        return json({ error: "invalid image input" }, 400, env);
+      }
+      const hasVisionImage = hasImageInput(upstreamMessages);
       const lastUserEntry = [...upstreamMessages].reverse().find(m => m.role === "user");
       const lastUserMessage = getMessageText(lastUserEntry?.content);
       const keywords = await getBlockedKeywords(env);
@@ -526,17 +555,21 @@ export default {
       // =========================
       let finalModel;
 
-      switch (model) {
-        case "deepseek-v4-pro":
-          if (!isPro) {
-            return json({ error: "PRO_REQUIRED" }, 403, env);
-          }
-          finalModel = "deepseek-v4-pro";
-          break;
+      if (hasVisionImage) {
+        finalModel = DEEPSEEK_VISION_MODEL;
+      } else {
+        switch (model) {
+          case "deepseek-v4-pro":
+            if (!isPro) {
+              return json({ error: "PRO_REQUIRED" }, 403, env);
+            }
+            finalModel = "deepseek-v4-pro";
+            break;
 
-        case "deepseek-v4-flash":
-        default:
-          finalModel = "deepseek-v4-flash";
+          case "deepseek-v4-flash":
+          default:
+            finalModel = "deepseek-v4-flash";
+        }
       }
 
       try {
@@ -577,7 +610,7 @@ export default {
         // =========================
         // 🔁 fallback
         // =========================
-        if (!response.ok && finalModel !== "deepseek-v4-flash") {
+        if (!response.ok && finalModel === "deepseek-v4-pro") {
           console.warn("[FALLBACK] 主模型失败，降级到 flash");
 
           const fallback = await fetch(
@@ -844,18 +877,105 @@ function getMessageText(content) {
   return "";
 }
 
+function detectInlineImageMime(bytes) {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
+  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+      && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) {
+    return "image/png";
+  }
+  const prefix = String.fromCharCode(...bytes.slice(0, 12));
+  if (prefix.startsWith("GIF87a") || prefix.startsWith("GIF89a")) return "image/gif";
+  if (prefix.startsWith("RIFF") && prefix.slice(8, 12) === "WEBP") return "image/webp";
+  return "";
+}
+
+function normalizeInlineImagePart(part) {
+  const url = part?.image_url?.url;
+  if (typeof url !== "string") throw new Error("image_url missing");
+
+  const comma = url.indexOf(",");
+  if (comma < 0) throw new Error("image data URL malformed");
+  const header = url.slice(0, comma).toLowerCase();
+  const declaredMime = header.startsWith("data:") && header.endsWith(";base64")
+    ? header.slice(5, -7)
+    : "";
+  if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(declaredMime)) {
+    throw new Error("image MIME unsupported");
+  }
+
+  const base64 = url.slice(comma + 1);
+  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    throw new Error("image base64 invalid");
+  }
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const decodedBytes = (base64.length * 3 / 4) - padding;
+  if (decodedBytes <= 0 || decodedBytes > MAX_VISION_IMAGE_BYTES) {
+    throw new Error("image size invalid");
+  }
+
+  const prefixLength = Math.min(32, base64.length - (base64.length % 4));
+  const prefixBytes = Uint8Array.from(atob(base64.slice(0, prefixLength)), char => char.charCodeAt(0));
+  if (detectInlineImageMime(prefixBytes) !== declaredMime) {
+    throw new Error("image signature mismatch");
+  }
+
+  const detail = ["auto", "low", "high", "original"].includes(part.image_url.detail)
+    ? part.image_url.detail
+    : "original";
+  return {
+    type: "image_url",
+    image_url: { url, detail }
+  };
+}
+
 function clampMessagesForUpstream(messages, maxUserChars = 12000) {
   if (!Array.isArray(messages)) return messages;
+  let imageCount = 0;
   return messages.map((m) => {
-    if (!m || m.role !== "user") return m;
-    const text = getMessageText(m.content);
-    if (text.length <= maxUserChars) {
-      if (typeof m.content === "string") return m;
-      return { ...m, content: text };
+    if (!m || m.role !== "user") {
+      if (Array.isArray(m?.content) && m.content.some(part => part?.type === "image_url")) {
+        throw new Error("image must be in a user message");
+      }
+      return m;
     }
-    const clipped = text.slice(0, maxUserChars) + "\n\n（内容过长已截断）";
-    return { ...m, content: clipped };
+
+    if (!Array.isArray(m.content)) {
+      const text = getMessageText(m.content);
+      const content = text.length <= maxUserChars
+        ? text
+        : text.slice(0, maxUserChars) + "\n\n（内容过长已截断）";
+      return { ...m, content };
+    }
+
+    let remainingChars = maxUserChars;
+    let hasImage = false;
+    const content = [];
+    for (const part of m.content) {
+      if (part?.type === "image_url") {
+        if (imageCount >= 1) throw new Error("only one image is supported");
+        content.push(normalizeInlineImagePart(part));
+        hasImage = true;
+        imageCount += 1;
+        continue;
+      }
+      if (part?.type !== "text" || remainingChars <= 0) continue;
+      const text = String(part.text || "");
+      if (!text) continue;
+      const clipped = text.slice(0, remainingChars);
+      remainingChars -= clipped.length;
+      content.push({
+        type: "text",
+        text: clipped + (clipped.length < text.length ? "\n\n（内容过长已截断）" : "")
+      });
+    }
+    if (!hasImage) return { ...m, content: getMessageText(content) };
+    return { ...m, content };
   });
+}
+
+function hasImageInput(messages) {
+  return messages.some(message => Array.isArray(message?.content)
+    && message.content.some(part => part?.type === "image_url"));
 }
 
 function wrapStreamWithErrorLogging(body) {

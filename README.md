@@ -33,6 +33,11 @@ cd worker
 npm test
 ```
 
+AI 路由支持在最后一条 `user` 消息中提交 DeepSeek 兼容的 `image_url`
+data URL。当前只接受 JPG、PNG、GIF 或 WEBP，单次最多 1 张、原图最多 8 MiB；
+Worker 会验证文件签名并自动使用 `deepseek-v4-flash-vision-exp`，图片不会降级到
+纯文本模型。含图请求必须先通过应用 JWT 鉴权，JSON 请求上限为 12 MiB。
+
 部署 Worker 时，使用 `APP_JWT_PRIMARY_SECRET`、
 `APP_JWT_LEGACY_SECRET`、`SUPABASE_LEGACY_JWT_SECRET`、
 `SUPABASE_SECRET_KEY`、`DEEPSEEK_API_KEY`、`GEETEST_SERVER_KEY` 和
