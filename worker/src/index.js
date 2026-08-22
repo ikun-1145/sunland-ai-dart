@@ -1,8 +1,9 @@
 // @ts-nocheck
-const DEFAULT_REQUEST_BYTES = 200 * 1024;
-const DEFAULT_PAYLOAD_BYTES = 500 * 1024;
-const MAX_AI_REQUEST_BYTES = 12 * 1024 * 1024;
-const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_STANDARD_REQUEST_BYTES = 200 * 1024;
+const MAX_AI_REQUEST_BYTES = 16 * 1024 * 1024;
+const MAX_VISION_IMAGE_COUNT = 4;
+const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_VISION_TOTAL_BYTES = 12 * 1024 * 1024;
 const DEEPSEEK_VISION_MODEL = "deepseek-v4-flash-vision-exp";
 
 export default {
@@ -29,26 +30,15 @@ export default {
 
     const maxRequestBytes = url.pathname === "/"
       ? MAX_AI_REQUEST_BYTES
-      : DEFAULT_REQUEST_BYTES;
-    const maxPayloadBytes = url.pathname === "/"
-      ? MAX_AI_REQUEST_BYTES
-      : DEFAULT_PAYLOAD_BYTES;
-
-    let body;
-    try {
-      const contentLength = request.headers.get("content-length");
-      if (contentLength && Number.parseInt(contentLength, 10) > maxRequestBytes) {
-        return json({ error: "Request too large" }, 413, env);
-      }
-
-      body = await request.json();
-
-      if (new TextEncoder().encode(JSON.stringify(body)).byteLength > maxPayloadBytes) {
-        return json({ error: "Payload too large" }, 413, env);
-      }
-    } catch {
+      : MAX_STANDARD_REQUEST_BYTES;
+    const parsedBody = await readJsonBodyWithLimit(request, maxRequestBytes);
+    if (parsedBody.error === "too_large") {
+      return json({ error: "Request too large" }, 413, env);
+    }
+    if (parsedBody.error) {
       return json({ error: "Bad JSON" }, 400, env);
     }
+    const body = parsedBody.value;
 
     // =========================
     // 🔥 通用 GeeTest 验证函数
@@ -437,14 +427,13 @@ export default {
         return json({ error: "invalid messages" }, 400, env);
       }
 
-      let upstreamMessages;
-      try {
-        upstreamMessages = clampMessagesForUpstream(messages);
-      } catch (error) {
-        console.warn(`[VISION_INPUT_REJECTED] reason=${error?.message || "invalid"}`);
-        return json({ error: "invalid image input" }, 400, env);
+      const preparedMessages = prepareMessagesForUpstream(messages);
+      if (preparedMessages.error) {
+        console.warn(`[VISION_INPUT_REJECTED] reason=${preparedMessages.error}`);
+        return json({ error: preparedMessages.error }, 400, env);
       }
-      const hasVisionImage = hasImageInput(upstreamMessages);
+      const upstreamMessages = preparedMessages.messages;
+      const isVisionRequest = preparedMessages.hasImages;
       const lastUserEntry = [...upstreamMessages].reverse().find(m => m.role === "user");
       const lastUserMessage = getMessageText(lastUserEntry?.content);
       const keywords = await getBlockedKeywords(env);
@@ -554,8 +543,9 @@ export default {
       // 🧠 模型选择逻辑
       // =========================
       let finalModel;
+      const effectiveDeep = deep === true && !isVisionRequest;
 
-      if (hasVisionImage) {
+      if (isVisionRequest) {
         finalModel = DEEPSEEK_VISION_MODEL;
       } else {
         switch (model) {
@@ -596,7 +586,7 @@ export default {
               model: finalModel,
               messages: upstreamMessages,
               stream: true,
-              ...(deep ? { thinking: { type: "enabled" } } : {}),
+              ...(effectiveDeep ? { thinking: { type: "enabled" } } : {}),
               temperature: temperature ?? 0.7,
               max_tokens: max_tokens ?? 2048
             })
@@ -604,13 +594,13 @@ export default {
         );
 
         if (!response.ok) {
-          console.error(`[UPSTREAM_ERROR] status=${response.status} model=${finalModel} deep=${deep}`);
+          console.error(`[UPSTREAM_ERROR] status=${response.status} model=${finalModel} deep=${effectiveDeep}`);
         }
 
         // =========================
         // 🔁 fallback
         // =========================
-        if (!response.ok && finalModel === "deepseek-v4-pro") {
+        if (!response.ok && !isVisionRequest && finalModel !== "deepseek-v4-flash") {
           console.warn("[FALLBACK] 主模型失败，降级到 flash");
 
           const fallback = await fetch(
@@ -625,7 +615,7 @@ export default {
                 model: "deepseek-v4-flash",
                 messages: upstreamMessages,
                 stream: true,
-                ...(deep ? { thinking: { type: "enabled" } } : {}),
+                ...(effectiveDeep ? { thinking: { type: "enabled" } } : {}),
                 temperature: temperature ?? 0.7,
                 max_tokens: max_tokens ?? 2048
               })
@@ -642,13 +632,25 @@ export default {
         if (!response.ok) {
           const upstream = response.status;
 
-          const clientStatus = upstream === 402 ? 503 : upstream === 429 ? 429 : 502;
+          const clientStatus = upstream === 402
+            ? 503
+            : upstream === 429
+              ? 429
+              : isVisionRequest && (upstream === 400 || upstream === 413)
+                ? upstream
+                : 502;
           console.error(
             `[RETURN_${clientStatus}] upstream=${upstream} client=${clientStatus} model=${finalModel}`
           );
 
           if (upstream === 402) return json({ error: "服务暂时不可用" }, 503, env);
           if (upstream === 429) return json({ error: "AI服务繁忙，请稍后重试" }, 429, env);
+          if (isVisionRequest && upstream === 400) {
+            return json({ error: "图片无法被识别，请更换支持的图片后重试" }, 400, env);
+          }
+          if (isVisionRequest && upstream === 413) {
+            return json({ error: "图片请求过大，请减少图片数量后重试" }, 413, env);
+          }
 
           return json({ error: "AI服务异常" }, 502, env);
         }
@@ -669,7 +671,7 @@ export default {
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "x-model": finalModel,
-            "x-deep": deep ? "1" : "0",
+            "x-deep": effectiveDeep ? "1" : "0",
             "x-remain": isPro ? "-1" : String(limit - count - 1),
             ...corsHeaders(env)
           }
@@ -688,6 +690,47 @@ export default {
 // =========================
 // 工具函数
 // =========================
+
+async function readJsonBodyWithLimit(request, maxBytes) {
+  const contentLength = request.headers.get("content-length");
+  if (contentLength) {
+    const declaredBytes = Number.parseInt(contentLength, 10);
+    if (Number.isFinite(declaredBytes) && declaredBytes > maxBytes) {
+      return { error: "too_large" };
+    }
+  }
+
+  if (!request.body) return { error: "bad_json" };
+
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel("request body too large").catch(() => {});
+        return { error: "too_large" };
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+  } catch {
+    return { error: "bad_json" };
+  } finally {
+    reader.releaseLock();
+  }
+
+  try {
+    return { value: JSON.parse(chunks.join("")) };
+  } catch {
+    return { error: "bad_json" };
+  }
+}
 
 function json(data, status = 200, env) {
   return new Response(JSON.stringify(data), {
@@ -889,93 +932,143 @@ function detectInlineImageMime(bytes) {
   return "";
 }
 
-function normalizeInlineImagePart(part) {
-  const url = part?.image_url?.url;
-  if (typeof url !== "string") throw new Error("image_url missing");
-
-  const comma = url.indexOf(",");
-  if (comma < 0) throw new Error("image data URL malformed");
-  const header = url.slice(0, comma).toLowerCase();
-  const declaredMime = header.startsWith("data:") && header.endsWith(";base64")
-    ? header.slice(5, -7)
-    : "";
-  if (!["image/jpeg", "image/png", "image/gif", "image/webp"].includes(declaredMime)) {
-    throw new Error("image MIME unsupported");
+function prepareMessagesForUpstream(messages, maxUserChars = 12000) {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { error: "invalid messages" };
   }
 
-  const base64 = url.slice(comma + 1);
-  if (!base64 || base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
-    throw new Error("image base64 invalid");
-  }
-  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
-  const decodedBytes = (base64.length * 3 / 4) - padding;
-  if (decodedBytes <= 0 || decodedBytes > MAX_VISION_IMAGE_BYTES) {
-    throw new Error("image size invalid");
-  }
-
-  const prefixLength = Math.min(32, base64.length - (base64.length % 4));
-  const prefixBytes = Uint8Array.from(atob(base64.slice(0, prefixLength)), char => char.charCodeAt(0));
-  if (detectInlineImageMime(prefixBytes) !== declaredMime) {
-    throw new Error("image signature mismatch");
-  }
-
-  const detail = ["auto", "low", "high", "original"].includes(part.image_url.detail)
-    ? part.image_url.detail
-    : "original";
-  return {
-    type: "image_url",
-    image_url: { url, detail }
-  };
-}
-
-function clampMessagesForUpstream(messages, maxUserChars = 12000) {
-  if (!Array.isArray(messages)) return messages;
+  const prepared = [];
   let imageCount = 0;
-  return messages.map((m) => {
-    if (!m || m.role !== "user") {
-      if (Array.isArray(m?.content) && m.content.some(part => part?.type === "image_url")) {
-        throw new Error("image must be in a user message");
+  let totalImageBytes = 0;
+
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      return { error: "invalid message" };
+    }
+
+    const role = message.role;
+    if (role !== "system" && role !== "user" && role !== "assistant") {
+      return { error: "invalid message role" };
+    }
+
+    if (typeof message.content === "string") {
+      const content = role === "user" && message.content.length > maxUserChars
+        ? message.content.slice(0, maxUserChars) + "\n\n（内容过长已截断）"
+        : message.content;
+      prepared.push({ role, content });
+      continue;
+    }
+
+    if (role !== "user" || !Array.isArray(message.content)) {
+      return { error: "images are only allowed in user messages" };
+    }
+
+    const contentBlocks = [];
+    let remainingTextChars = maxUserChars;
+    let hasTextBlock = false;
+    let messageHasImage = false;
+
+    for (const part of message.content) {
+      if (!part || typeof part !== "object") {
+        return { error: "invalid message content" };
       }
-      return m;
-    }
 
-    if (!Array.isArray(m.content)) {
-      const text = getMessageText(m.content);
-      const content = text.length <= maxUserChars
-        ? text
-        : text.slice(0, maxUserChars) + "\n\n（内容过长已截断）";
-      return { ...m, content };
-    }
-
-    let remainingChars = maxUserChars;
-    let hasImage = false;
-    const content = [];
-    for (const part of m.content) {
-      if (part?.type === "image_url") {
-        if (imageCount >= 1) throw new Error("only one image is supported");
-        content.push(normalizeInlineImagePart(part));
-        hasImage = true;
-        imageCount += 1;
+      if (part.type === "text") {
+        if (typeof part.text !== "string") {
+          return { error: "invalid text content" };
+        }
+        if (remainingTextChars <= 0) continue;
+        const clipped = part.text.slice(0, remainingTextChars);
+        remainingTextChars -= clipped.length;
+        if (clipped.length > 0) {
+          contentBlocks.push({ type: "text", text: clipped });
+          hasTextBlock = true;
+        }
         continue;
       }
-      if (part?.type !== "text" || remainingChars <= 0) continue;
-      const text = String(part.text || "");
-      if (!text) continue;
-      const clipped = text.slice(0, remainingChars);
-      remainingChars -= clipped.length;
-      content.push({
-        type: "text",
-        text: clipped + (clipped.length < text.length ? "\n\n（内容过长已截断）" : "")
+
+      if (part.type !== "image_url") {
+        return { error: "unsupported message content" };
+      }
+
+      const validation = validateInlineImageDataUrl(part.image_url?.url);
+      if (!validation.ok) {
+        return { error: validation.error };
+      }
+
+      imageCount += 1;
+      totalImageBytes += validation.bytes;
+      if (imageCount > MAX_VISION_IMAGE_COUNT) {
+        return { error: `最多只能发送 ${MAX_VISION_IMAGE_COUNT} 张图片` };
+      }
+      if (totalImageBytes > MAX_VISION_TOTAL_BYTES) {
+        return { error: "图片总大小过大" };
+      }
+
+      const requestedDetail = part.image_url?.detail;
+      const detail = ["low", "high", "original", "auto"].includes(requestedDetail)
+        ? requestedDetail
+        : "auto";
+      contentBlocks.push({
+        type: "image_url",
+        image_url: { url: part.image_url.url, detail }
       });
+      messageHasImage = true;
     }
-    if (!hasImage) return { ...m, content: getMessageText(content) };
-    return { ...m, content };
-  });
+
+    if (messageHasImage && !hasTextBlock) {
+      contentBlocks.unshift({ type: "text", text: "请分析这些图片。" });
+    }
+    if (contentBlocks.length === 0) {
+      return { error: "empty message content" };
+    }
+
+    prepared.push({ role, content: contentBlocks });
+  }
+
+  return { messages: prepared, hasImages: imageCount > 0 };
 }
 
-function hasImageInput(messages) {
-  return messages.some(message => Array.isArray(message?.content)
-    && message.content.some(part => part?.type === "image_url"));
+function validateInlineImageDataUrl(value) {
+  if (typeof value !== "string") {
+    return { ok: false, error: "invalid image" };
+  }
+
+  const prefix = /^data:image\/(jpeg|png|gif|webp);base64,/i.exec(value);
+  if (!prefix) {
+    return { ok: false, error: "only inline JPEG, PNG, GIF, or WebP images are allowed" };
+  }
+
+  const base64 = value.slice(prefix[0].length);
+  const maxEncodedLength = Math.ceil(MAX_VISION_IMAGE_BYTES / 3) * 4 + 4;
+  if (base64.length === 0 || base64.length > maxEncodedLength) {
+    return { ok: false, error: "image too large" };
+  }
+  if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) {
+    return { ok: false, error: "invalid image data" };
+  }
+
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const bytes = Math.floor(base64.length * 3 / 4) - padding;
+  if (bytes <= 0 || bytes > MAX_VISION_IMAGE_BYTES) {
+    return { ok: false, error: "image too large" };
+  }
+
+  const declaredMime = `image/${prefix[1].toLowerCase()}`;
+  const prefixLength = Math.min(32, base64.length);
+  try {
+    const prefixBytes = Uint8Array.from(
+      atob(base64.slice(0, prefixLength)),
+      character => character.charCodeAt(0)
+    );
+    if (detectInlineImageMime(prefixBytes) !== declaredMime) {
+      return { ok: false, error: "image signature mismatch" };
+    }
+  } catch {
+    return { ok: false, error: "invalid image data" };
+  }
+
+  return { ok: true, bytes };
 }
 
 function wrapStreamWithErrorLogging(body) {

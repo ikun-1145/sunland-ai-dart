@@ -3661,10 +3661,13 @@ class _ChatPageState extends State<ChatPage> {
     final isRegenerate = text.isNotEmpty && text == _lastUserText;
     final imagePaths = List<String>.from(pickedImages);
 
-    // ===== 本地 OCR（发送前完成）=====
+    // ===== DeepSeek 视觉图片准备 + 可选本地 OCR（发送前完成）=====
+    List<String> deepSeekImageDataUrls = const <String>[];
     ImageOcrResult? ocrResult;
-    if (hasImages && supportsLocalImageOcr) {
+    var preparationDialogShown = false;
+    if (hasImages) {
       if (mounted) {
+        preparationDialogShown = true;
         showDialog<void>(
           context: context,
           barrierDismissible: false,
@@ -3679,7 +3682,7 @@ class _ChatPageState extends State<ChatPage> {
                     children: [
                       CircularProgressIndicator(),
                       SizedBox(height: 12),
-                      Text('正在识别图片文字…'),
+                      Text('正在准备图片…'),
                     ],
                   ),
                 ),
@@ -3689,69 +3692,65 @@ class _ChatPageState extends State<ChatPage> {
         );
       }
       try {
-        ocrResult = await extractTextFromImages(
-          imagePaths,
-        ).timeout(const Duration(seconds: 12));
+        deepSeekImageDataUrls = await prepareDeepSeekVisionImages(
+          imagePaths: imagePaths,
+        ).timeout(const Duration(seconds: 20));
+
+        if (supportsLocalImageOcr) {
+          try {
+            ocrResult = await extractTextFromImages(imagePaths)
+                .timeout(const Duration(seconds: 8));
+          } catch (e) {
+            debugPrint('Optional OCR skipped: $e');
+            ocrResult = const ImageOcrResult(block: '', hasUsableText: false);
+          }
+        }
       } on TimeoutException {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('图片识别超时，请换清晰图片或补充文字说明'),
+              content: Text('图片处理超时，请减少图片数量后重试'),
               duration: Duration(seconds: 3),
             ),
           );
           setState(() => isGenerating = false);
         }
         return;
-      } catch (e) {
-        debugPrint('OCR error: $e');
-        ocrResult = const ImageOcrResult(block: '', hasUsableText: false);
-      } finally {
+      } on ImagePreparationException catch (e) {
         if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(e.message)));
+          setState(() => isGenerating = false);
+        }
+        return;
+      } catch (e) {
+        debugPrint('Image preparation error: $e');
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('图片处理失败，请重新选择后再试')));
+          setState(() => isGenerating = false);
+        }
+        return;
+      } finally {
+        if (mounted && preparationDialogShown) {
           Navigator.of(context, rootNavigator: true).pop();
         }
       }
     }
 
-    if (generationId != _generationSerial) {
+    if (!mounted || generationId != _generationSerial) {
       if (mounted) setState(() => isGenerating = false);
       return;
     }
 
     final ocrBlock = ocrResult?.hasUsableText == true ? ocrResult!.block : null;
-    final apiContent = buildApiMessageWithOcr(
+    final mergedApiContent = buildApiMessageWithOcr(
       userText: text,
       ocrBlock: ocrBlock,
     );
-
-    if (hasImages && !supportsLocalImageOcr && text.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('当前平台不支持本地识图，请补充文字说明，或使用移动端发送图片'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      setState(() => isGenerating = false);
-      return;
-    }
-
-    if (hasImages &&
-        supportsLocalImageOcr &&
-        !ocrBlockHasUsableText(ocrBlock) &&
-        text.isEmpty) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('未识别到图片文字，请换清晰图片或输入文字说明'),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      setState(() => isGenerating = false);
-      return;
-    }
+    final apiContent = mergedApiContent.isNotEmpty
+        ? mergedApiContent
+        : '请分析这些图片。';
 
     if (hasImages &&
         supportsLocalImageOcr &&
@@ -3794,12 +3793,12 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
       if (confirmed != true) {
-        setState(() => isGenerating = false);
+        if (mounted) setState(() => isGenerating = false);
         return;
       }
     }
 
-    if (generationId != _generationSerial) {
+    if (!mounted || generationId != _generationSerial) {
       if (mounted) setState(() => isGenerating = false);
       return;
     }
@@ -3818,6 +3817,7 @@ class _ChatPageState extends State<ChatPage> {
 
     // ✅ 记录最后一条用户消息（用于重新生成）
     _lastUserText = text;
+    final requestUsesDeepThinking = !hasImages && isActivated && useDeep;
 
     // ── 兽聚查询：与 AI 并行获取活动数据 ─────────────────────────────────
     // 查询范围由 AI 解析（_resolveFurryQueryParams），失败自动回退本地正则。
@@ -3860,7 +3860,7 @@ class _ChatPageState extends State<ChatPage> {
       if (furryFuture != null) {
         messages.add({"isFurryCard": true, "isLoading": true, "isUser": false});
       }
-      final isDeepMode = isActivated && useDeep;
+      final isDeepMode = requestUsesDeepThinking;
       messages.add({
         "text": isDeepMode ? "深度思考中..." : "思考中...",
         "isUser": false,
@@ -4055,13 +4055,13 @@ class _ChatPageState extends State<ChatPage> {
         flushStreamingMessage(force: true);
       } else {
         // ===== 自动模型策略 + Pro 权限校验 =====
-        String requestModel = _resolveModel();
+        String requestModel = hasImages ? 'deepseek-v4-flash' : _resolveModel();
         if (!isActivated) {
           useDeep = false;
         }
 
         // 自动策略：长文本/关键词触发 pro（仅 Pro 用户生效）
-        if (isActivated && requestModel != 'deepseek-v4-pro') {
+        if (!hasImages && isActivated && requestModel != 'deepseek-v4-pro') {
           final lower = text.toLowerCase();
           final needsPro =
               text.length > 300 ||
@@ -4096,7 +4096,8 @@ class _ChatPageState extends State<ChatPage> {
                     client: apiClient,
                     rawMessages: messages,
                     model: requestModel,
-                    deep: isActivated ? useDeep : false,
+                    deep: requestUsesDeepThinking,
+                    imageDataUrls: deepSeekImageDataUrls,
                     onRemainUpdated: (remain) {
                       final normalized = remain < 0
                           ? freeDailyLimit
@@ -4111,7 +4112,7 @@ class _ChatPageState extends State<ChatPage> {
                     },
                   )
                   .timeout(
-                    const Duration(seconds: 30),
+                    Duration(seconds: hasImages ? 60 : 30),
                     onTimeout: (sink) {
                       streamTimedOut = true;
                       sink.close();
@@ -4128,7 +4129,7 @@ class _ChatPageState extends State<ChatPage> {
                       }
 
                       responseContent = chunk.content;
-                      if (useDeep &&
+                      if (requestUsesDeepThinking &&
                           chunk.reasoning != null &&
                           chunk.reasoning!.isNotEmpty) {
                         responseReasoning = chunk.reasoning!;
@@ -4168,7 +4169,7 @@ class _ChatPageState extends State<ChatPage> {
             setState(() {
               final last = messages.last;
               if (last["isUser"] != true) {
-                last["text"] = (isActivated && useDeep) ? "深度思考中..." : "思考中...";
+                last["text"] = requestUsesDeepThinking ? "深度思考中..." : "思考中...";
                 last["reasoning"] = "";
               }
             });
@@ -5796,21 +5797,6 @@ class _ChatPageState extends State<ChatPage> {
                                               ).showSnackBar(
                                                 const SnackBar(
                                                   content: Text("请输入内容"),
-                                                ),
-                                              );
-                                              return;
-                                            }
-
-                                            if (text.isEmpty &&
-                                                pickedImages.isNotEmpty &&
-                                                !supportsLocalImageOcr) {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text(
-                                                    '当前平台不支持仅发图片，请补充文字说明',
-                                                  ),
                                                 ),
                                               );
                                               return;

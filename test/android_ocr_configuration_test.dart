@@ -5,9 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   test('Android bundles the Chinese ML Kit model used by local OCR', () {
     final coreSource = File('lib/sunland_ai_core.dart').readAsStringSync();
-    final androidBuild = File(
-      'android/app/build.gradle.kts',
-    ).readAsStringSync();
+    final androidBuild = File('android/app/build.gradle.kts')
+        .readAsStringSync();
 
     expect(
       coreSource,
@@ -27,6 +26,7 @@ void main() {
 
     expect(mainSource, isNot(contains('final preview = block.length > 120')));
     expect(mainSource, contains('Text(block, style:'));
-    expect(coreSource, contains('识别出的文字会发送至 AI 服务，并随对话同步'));
+    expect(coreSource, contains('发送给 DeepSeek 进行视觉理解'));
+    expect(coreSource, contains('识别结果随对话同步'));
   });
 }

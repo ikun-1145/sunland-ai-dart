@@ -258,58 +258,71 @@ test("banned users are rejected before the AI upstream request", async () => {
   assert.match(calls[0].url, /\/rest\/v1\/user_profiles\?/);
 });
 
-test("AI route preserves a valid inline image and selects the DeepSeek vision model", async () => {
-  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
-  let upstreamBody = null;
-  globalThis.fetch = async (url, init = {}) => {
+test("image content is preserved and routed to the DeepSeek vision model", async () => {
+  const calls = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "0");
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
     if (String(url).includes("/rest/v1/user_profiles?")) {
       return Response.json([{ is_banned: false }]);
     }
-    assert.equal(String(url), "https://api.deepseek.com/v1/chat/completions");
-    upstreamBody = JSON.parse(init.body);
-    return new Response("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n", {
-      status: 200,
-      headers: { "content-type": "text/event-stream" },
-    });
+    return new Response(
+      'data: {"choices":[{"delta":{"content":"看到了"}}]}\n\ndata: [DONE]\n\n',
+      { status: 200, headers: { "content-type": "text/event-stream" } },
+    );
   };
 
-  const environment = env({ DEEPSEEK_API_KEY: "deepseek-secret" });
-  environment.USAGE_KV.values.set("pro:user-a", "0");
+  const imageDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
   const response = await worker.fetch(
     request("/", {
-      model: "deepseek-v4-flash",
-      messages: [{
-        role: "user",
-        content: [
-          { type: "text", text: "Describe this image" },
-          {
-            type: "image_url",
-            image_url: {
-              url: `data:image/png;base64,${tinyPng}`,
-              detail: "original",
+      messages: [
+        { role: "system", content: "Be helpful" },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "这张图片里有什么？" },
+            {
+              type: "image_url",
+              image_url: { url: imageDataUrl, detail: "auto" },
             },
-          },
-        ],
-      }],
+            {
+              type: "image_url",
+              image_url: { url: imageDataUrl, detail: "low" },
+            },
+          ],
+        },
+      ],
+      model: "deepseek-v4-pro",
+      deep: true,
     }),
     environment,
   );
 
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-model"), "deepseek-v4-flash-vision-exp");
+  assert.equal(response.headers.get("x-deep"), "0");
+  assert.match(await response.text(), /看到了/);
+  const upstreamBody = JSON.parse(calls[1].init.body);
   assert.equal(upstreamBody.model, "deepseek-v4-flash-vision-exp");
-  assert.equal(upstreamBody.messages[0].content[0].text, "Describe this image");
-  assert.equal(upstreamBody.messages[0].content[1].image_url.url, `data:image/png;base64,${tinyPng}`);
+  assert.equal(upstreamBody.thinking, undefined);
+  assert.deepEqual(upstreamBody.messages[1].content[1], {
+    type: "image_url",
+    image_url: { url: imageDataUrl, detail: "auto" },
+  });
+  assert.deepEqual(upstreamBody.messages[1].content[2], {
+    type: "image_url",
+    image_url: { url: imageDataUrl, detail: "low" },
+  });
 });
 
-test("AI route never falls back to a text-only model when the vision request fails", async () => {
+test("vision requests never fall back to a text-only model", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
   const upstreamModels = [];
   globalThis.fetch = async (url, init = {}) => {
     if (String(url).includes("/rest/v1/user_profiles?")) {
       return Response.json([{ is_banned: false }]);
     }
-    assert.equal(String(url), "https://api.deepseek.com/v1/chat/completions");
     upstreamModels.push(JSON.parse(init.body).model);
     return Response.json({ error: "vision unavailable" }, { status: 503 });
   };
@@ -337,7 +350,7 @@ test("AI route never falls back to a text-only model when the vision request fai
   assert.deepEqual(upstreamModels, ["deepseek-v4-flash-vision-exp"]);
 });
 
-test("AI route rejects an inline image whose declared MIME does not match its signature", async () => {
+test("inline image MIME must match the decoded file signature", async () => {
   let deepseekCalled = false;
   globalThis.fetch = async (url) => {
     if (String(url).includes("/rest/v1/user_profiles?")) {
@@ -363,8 +376,108 @@ test("AI route rejects an inline image whose declared MIME does not match its si
   );
 
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), { error: "invalid image input" });
+  assert.deepEqual(await response.json(), { error: "image signature mismatch" });
   assert.equal(deepseekCalled, false);
+});
+
+test("text-only chat keeps the existing DeepSeek flash contract", async () => {
+  const calls = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "0");
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false }]);
+    }
+    return new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello" }],
+      model: "deepseek-v4-flash",
+      deep: false,
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-model"), "deepseek-v4-flash");
+  const upstreamBody = JSON.parse(calls[1].init.body);
+  assert.equal(upstreamBody.model, "deepseek-v4-flash");
+  assert.deepEqual(upstreamBody.messages, [
+    { role: "user", content: "hello" },
+  ]);
+});
+
+test("image blocks are rejected outside user messages", async () => {
+  const calls = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "0");
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return Response.json([{ is_banned: false }]);
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image_url",
+              image_url: { url: "data:image/jpeg;base64,/9j/2Q==" },
+            },
+          ],
+        },
+      ],
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    error: "images are only allowed in user messages",
+  });
+  assert.equal(calls.length, 1);
+});
+
+test("external image URLs are rejected by the app gateway", async () => {
+  const calls = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "0");
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    return Response.json([{ is_banned: false }]);
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "看看这张图" },
+            {
+              type: "image_url",
+              image_url: { url: "https://example.com/image.jpg" },
+            },
+          ],
+        },
+      ],
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), {
+    error: "only inline JPEG, PNG, GIF, or WebP images are allowed",
+  });
+  assert.equal(calls.length, 1);
 });
 
 test("user status failures fail closed on protected business routes", async () => {
