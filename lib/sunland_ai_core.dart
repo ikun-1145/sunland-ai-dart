@@ -163,6 +163,7 @@ class ChatMessage {
   const ChatMessage({
     required this.role,
     required this.content,
+    this.imageDataUrls = const <String>[],
     this.reasoning,
     this.furryEvents,
     this.furryQuery,
@@ -173,6 +174,8 @@ class ChatMessage {
 
   final String role;
   final String content;
+  // 仅用于当前 DeepSeek 请求，不写入本地或云端会话，避免持久化大体积 Base64。
+  final List<String> imageDataUrls;
   final String? reasoning;
   // 兽聚卡片数据（仅本地/云端持久化用，不发送给模型）
   final List<dynamic>? furryEvents;
@@ -185,6 +188,7 @@ class ChatMessage {
   bool get isUser => role == 'user';
   bool get isSystem => role == 'system';
   bool get hasReasoning => reasoning != null && reasoning!.trim().isNotEmpty;
+  bool get hasImages => role == 'user' && imageDataUrls.isNotEmpty;
 
   Map<String, dynamic> toJson() {
     return {
@@ -200,8 +204,19 @@ class ChatMessage {
     };
   }
 
-  Map<String, String> toApiJson() {
-    return {'role': role, 'content': content};
+  Map<String, dynamic> toApiJson() {
+    if (!hasImages) return {'role': role, 'content': content};
+
+    final blocks = <Map<String, dynamic>>[
+      {'type': 'text', 'text': content.trim().isEmpty ? '请分析这些图片。' : content},
+      for (final dataUrl in imageDataUrls)
+        if (dataUrl.isNotEmpty)
+          {
+            'type': 'image_url',
+            'image_url': {'url': dataUrl, 'detail': 'auto'},
+          },
+    ];
+    return {'role': role, 'content': blocks};
   }
 
   factory ChatMessage.fromJson(Map<String, dynamic> json) {
@@ -835,6 +850,10 @@ Exception _exceptionForApiError(int statusCode, String bodyText) {
     return const ApiException('Pro 功能需要激活后才能使用');
   }
 
+  if (statusCode == 413) {
+    return const ApiException('图片请求过大，请减少图片数量或裁剪后重试', statusCode: 413);
+  }
+
   if (statusCode == 429) {
     // 统一解析不同类型的429错误
     if (error == 'Too Many Requests' || error == 'RATE_LIMIT') {
@@ -1157,7 +1176,8 @@ bool get supportsLocalImageOcr {
   return Platform.isAndroid || Platform.isIOS;
 }
 
-const String kOcrPrivacyTip = '图片仅在本地识别，原图不会上传；识别出的文字会发送至 AI 服务，并随对话同步。';
+const String kOcrPrivacyTip =
+    '图片会经压缩后上传至 Sunland API，并发送给 DeepSeek 进行视觉理解；设备支持时会在本地提取文字，识别结果随对话同步。';
 
 const String kOcrEmptyMarker = '（未识别到文字）';
 
@@ -1197,6 +1217,7 @@ class ImageOcrResult {
 List<ChatMessage> buildChatHistory({
   required List<Map<String, dynamic>> rawMessages,
   required int maxHistory,
+  List<String> currentImageDataUrls = const <String>[],
 }) {
   final history = <ChatMessage>[
     const ChatMessage(role: 'system', content: deepSeekSystemPrompt),
@@ -1239,6 +1260,19 @@ List<ChatMessage> buildChatHistory({
     );
   }
 
+  if (currentImageDataUrls.isNotEmpty) {
+    final lastUserIndex = history.lastIndexWhere((message) => message.isUser);
+    if (lastUserIndex != -1) {
+      final lastUser = history[lastUserIndex];
+      history[lastUserIndex] = ChatMessage(
+        role: lastUser.role,
+        content: lastUser.content,
+        imageDataUrls: List<String>.unmodifiable(currentImageDataUrls),
+        reasoning: lastUser.reasoning,
+      );
+    }
+  }
+
   return history;
 }
 
@@ -1248,8 +1282,13 @@ Future<AiResponse> sendSmartChat({
   required List<Map<String, dynamic>> rawMessages,
   required String model,
   required bool deep,
+  List<String> imageDataUrls = const <String>[],
 }) async {
-  final history = buildChatHistory(rawMessages: rawMessages, maxHistory: 20);
+  final history = buildChatHistory(
+    rawMessages: rawMessages,
+    maxHistory: 20,
+    currentImageDataUrls: imageDataUrls,
+  );
 
   return await client.sendChat(messages: history, model: model, deep: deep);
 }
@@ -1263,9 +1302,14 @@ Stream<AiResponse> sendSmartChatStream({
   required List<Map<String, dynamic>> rawMessages,
   required String model,
   required bool deep,
+  List<String> imageDataUrls = const <String>[],
   void Function(int remain)? onRemainUpdated,
 }) {
-  final history = buildChatHistory(rawMessages: rawMessages, maxHistory: 20);
+  final history = buildChatHistory(
+    rawMessages: rawMessages,
+    maxHistory: 20,
+    currentImageDataUrls: imageDataUrls,
+  );
   return client.sendChatStream(
     messages: history,
     model: model,

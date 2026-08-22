@@ -27,9 +27,9 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>用于拍摄图片并在发送前于设备上识别其中的文字。</string>
+	<string>用于拍摄图片，并在你确认后发送给 DeepSeek 进行视觉理解。</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>用于选择图片并在发送前于设备上识别其中的文字。</string>
+	<string>用于选择图片，并在你确认后发送给 DeepSeek 进行视觉理解。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -8,14 +8,13 @@ void main() {
 
     expect(infoPlist, contains('<key>NSCameraUsageDescription</key>'));
     expect(infoPlist, contains('<key>NSPhotoLibraryUsageDescription</key>'));
-    expect(infoPlist, contains('用于拍摄图片并在发送前于设备上识别其中的文字'));
-    expect(infoPlist, contains('用于选择图片并在发送前于设备上识别其中的文字'));
+    expect(infoPlist, contains('用于拍摄图片，并在你确认后发送给 DeepSeek 进行视觉理解'));
+    expect(infoPlist, contains('用于选择图片，并在你确认后发送给 DeepSeek 进行视觉理解'));
   });
 
   test('Android uses system pickers without broad media permissions', () {
-    final manifest = File(
-      'android/app/src/main/AndroidManifest.xml',
-    ).readAsStringSync();
+    final manifest = File('android/app/src/main/AndroidManifest.xml')
+        .readAsStringSync();
 
     expect(manifest, contains('android.permission.INTERNET'));
     expect(manifest, isNot(contains('android.permission.CAMERA')));
@@ -30,12 +29,12 @@ void main() {
     expect(mainSource, contains('FilePicker.platform.pickFiles'));
     expect(mainSource, contains('retrieveLostData()'));
     expect(mainSource, contains('requestFullMetadata: false'));
+    expect(mainSource, contains('prepareDeepSeekVisionImages'));
+    expect(mainSource, isNot(contains('当前平台不支持仅发图片')));
   });
 
   test('iOS background tasks are registered and always endable', () {
-    final appDelegate = File(
-      'ios/Runner/AppDelegate.swift',
-    ).readAsStringSync();
+    final appDelegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
 
     expect(appDelegate, contains('sunland.ai/background_execution'));
     expect(appDelegate, contains('beginBackgroundTask(withName:'));
