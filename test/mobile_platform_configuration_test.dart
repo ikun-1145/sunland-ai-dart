@@ -18,6 +18,7 @@ void main() {
 
     expect(manifest, contains('android.permission.INTERNET'));
     expect(manifest, isNot(contains('android.permission.CAMERA')));
+    expect(manifest, isNot(contains('android.permission.VIBRATE')));
     expect(manifest, isNot(contains('READ_EXTERNAL_STORAGE')));
     expect(manifest, isNot(contains('WRITE_EXTERNAL_STORAGE')));
   });
@@ -43,5 +44,27 @@ void main() {
       appDelegate,
       contains('engineBridge.applicationRegistrar.messenger()'),
     );
+  });
+
+  test('AI haptics are isolated to the iOS Core Haptics bridge', () {
+    final appDelegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
+    final hapticManager = File(
+      'ios/Runner/AIHapticManager.swift',
+    ).readAsStringSync();
+    final hapticService = File(
+      'lib/services/ai_haptic_service.dart',
+    ).readAsStringSync();
+    final androidManifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
+
+    expect(appDelegate, contains('sunland.ai/ai_haptics'));
+    expect(hapticManager, contains('import CoreHaptics'));
+    expect(hapticManager, contains('eventType: .hapticTransient'));
+    expect(hapticManager, contains('stoppedHandler'));
+    expect(hapticManager, contains('resetHandler'));
+    expect(hapticService, contains('Platform.isIOS'));
+    expect(hapticService, isNot(contains('HapticFeedback')));
+    expect(androidManifest, isNot(contains('android.permission.VIBRATE')));
   });
 }

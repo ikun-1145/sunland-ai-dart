@@ -4,6 +4,8 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var backgroundExecutionChannel: FlutterMethodChannel?
+  private var aiHapticChannel: FlutterMethodChannel?
+  private var aiHapticManager: AIHapticManager?
   private var nextBackgroundTaskToken = 1
   private var backgroundTasks: [Int: UIBackgroundTaskIdentifier] = [:]
 
@@ -39,6 +41,29 @@ import UIKit
         if let taskId = taskId {
           self.finishBackgroundTask(taskId)
         }
+        result(nil)
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+
+    let hapticManager = AIHapticManager()
+    let hapticChannel = FlutterMethodChannel(
+      name: "sunland.ai/ai_haptics",
+      binaryMessenger: engineBridge.applicationRegistrar.messenger()
+    )
+    aiHapticManager = hapticManager
+    aiHapticChannel = hapticChannel
+    hapticChannel.setMethodCallHandler { call, result in
+      switch call.method {
+      case "aiStarted":
+        hapticManager.play(.aiStarted)
+        result(nil)
+      case "answerStarted":
+        hapticManager.play(.answerStarted)
+        result(nil)
+      case "answerCompleted":
+        hapticManager.play(.answerCompleted)
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
