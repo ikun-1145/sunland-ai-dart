@@ -20,6 +20,7 @@ import 'database_token_provider.dart';
 import 'ban_page.dart';
 import 'maintenance_page.dart';
 import 'network_unavailable_page.dart';
+import 'services/ai_haptic_service.dart';
 import 'services/app_config_service.dart';
 import 'services/background_execution_service.dart';
 import 'services/image_attachment_service.dart';
@@ -2915,6 +2916,7 @@ class _ChatPageState extends State<ChatPage> {
   final ImagePicker _imagePicker = ImagePicker();
   final BackgroundExecutionService _backgroundExecution =
       const BackgroundExecutionService();
+  final AiHapticService _aiHaptics = AiHapticService();
   int? _generationBackgroundTaskId;
   bool _ocrPrivacyTipShown = false;
   bool isUploadingAvatar = false;
@@ -3818,6 +3820,9 @@ class _ChatPageState extends State<ChatPage> {
     // ✅ 记录最后一条用户消息（用于重新生成）
     _lastUserText = text;
     final requestUsesDeepThinking = !hasImages && isActivated && useDeep;
+    final hapticRequest = _aiHaptics.beginRequest(
+      deepThinking: requestUsesDeepThinking,
+    );
 
     // ── 兽聚查询：与 AI 并行获取活动数据 ─────────────────────────────────
     // 查询范围由 AI 解析（_resolveFurryQueryParams），失败自动回退本地正则。
@@ -3964,6 +3969,7 @@ class _ChatPageState extends State<ChatPage> {
           "expanded": false, // ✅ 保持一致
         });
       });
+      unawaited(hapticRequest.aiStarted());
 
       String responseContent = "";
       String responseReasoning = "";
@@ -4051,6 +4057,9 @@ class _ChatPageState extends State<ChatPage> {
             ).showSnackBar(SnackBar(content: Text(result.migrationWarning!)));
           }
         }
+        if (responseContent.trim().isNotEmpty) {
+          unawaited(hapticRequest.answerStarted());
+        }
         streamActive = false;
         flushStreamingMessage(force: true);
       } else {
@@ -4129,6 +4138,9 @@ class _ChatPageState extends State<ChatPage> {
                       }
 
                       responseContent = chunk.content;
+                      if (responseContent.trim().isNotEmpty) {
+                        unawaited(hapticRequest.answerStarted());
+                      }
                       if (requestUsesDeepThinking &&
                           chunk.reasoning != null &&
                           chunk.reasoning!.isNotEmpty) {
@@ -4224,10 +4236,17 @@ class _ChatPageState extends State<ChatPage> {
       rememberLocalMessages();
       if (user != null) await _saveToCloud();
 
-      if (!mounted) return;
+      if (!mounted ||
+          _cancelRequested ||
+          generationId != _generationSerial) {
+        return;
+      }
       setState(() {
         isGenerating = false;
       });
+      if (responseContent.trim().isNotEmpty) {
+        unawaited(hapticRequest.answerCompleted());
+      }
 
       scrollToBottom();
     } catch (e) {
