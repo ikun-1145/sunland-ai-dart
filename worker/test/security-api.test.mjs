@@ -178,7 +178,7 @@ test("activation claim uses the verified user and service-role RPC", async () =>
   assert.equal(calls.length, 2);
   assert.equal(
     calls[0].url,
-    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned&limit=1",
+    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro&limit=1",
   );
   assert.equal(calls[0].init.headers.Authorization, "Bearer service-secret");
   assert.equal(calls[1].url, "https://database.example/rest/v1/rpc/sunland_claim_activation_code");
@@ -187,7 +187,7 @@ test("activation claim uses the verified user and service-role RPC", async () =>
     p_user_id: "user-a",
     p_code: "VALID_CODE",
   });
-  assert.equal(environment.USAGE_KV.values.get("pro:user-a"), "1");
+  assert.equal(environment.USAGE_KV.values.has("pro:user-a"), false);
 });
 
 test("staging safety switch blocks activation writes", async () => {
@@ -228,7 +228,7 @@ test("Supabase project and server-key aliases replace legacy names", async () =>
   assert.equal(response.status, 200);
   assert.equal(
     calls[0].url,
-    "https://database-alias.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned&limit=1",
+    "https://database-alias.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro&limit=1",
   );
   assert.equal(calls[0].init.headers.apikey, "sb_secret_server-alias");
   assert.equal(calls[0].init.headers.Authorization, undefined);
@@ -258,10 +258,69 @@ test("banned users are rejected before the AI upstream request", async () => {
   assert.match(calls[0].url, /\/rest\/v1\/user_profiles\?/);
 });
 
-test("image content is preserved and routed to the DeepSeek vision model", async () => {
+test("Pro model uses user_profiles.pro despite a stale negative KV entry", async () => {
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
   await environment.USAGE_KV.put("pro:user-a", "0");
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false, pro: true }]);
+    }
+    return new Response('data: [DONE]\n\n', {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello from Pro" }],
+      model: "deepseek-v4-pro",
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-model"), "deepseek-v4-pro");
+  assert.equal(response.headers.get("x-remain"), "-1");
+  assert.equal(calls.length, 2);
+  assert.equal(
+    calls[0].url,
+    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro&limit=1",
+  );
+  assert.equal(calls.some(call => call.url.includes("/activation_codes?")), false);
+  assert.equal(JSON.parse(calls[1].init.body).model, "deepseek-v4-pro");
+});
+
+test("legacy positive KV cannot grant Pro when user_profiles.pro is false", async () => {
+  let deepseekCalled = false;
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  await environment.USAGE_KV.put("pro:user-a", "1");
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false, pro: false }]);
+    }
+    deepseekCalled = true;
+    throw new Error("unexpected DeepSeek request");
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello" }],
+      model: "deepseek-v4-pro",
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "PRO_REQUIRED" });
+  assert.equal(deepseekCalled, false);
+});
+
+test("image content is preserved and routed to the DeepSeek vision model", async () => {
+  const calls = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
     if (String(url).includes("/rest/v1/user_profiles?")) {
@@ -332,7 +391,6 @@ test("vision requests never fall back to a text-only model", async () => {
   };
 
   const environment = env({ DEEPSEEK_API_KEY: "deepseek-secret" });
-  environment.USAGE_KV.values.set("pro:user-a", "0");
   const response = await worker.fetch(
     request("/", {
       model: "deepseek-v4-pro",
@@ -368,7 +426,6 @@ test("inline image MIME must match the decoded file signature", async () => {
   };
 
   const environment = env({ DEEPSEEK_API_KEY: "deepseek-secret" });
-  environment.USAGE_KV.values.set("pro:user-a", "0");
   const response = await worker.fetch(
     request("/", {
       messages: [{
@@ -390,7 +447,6 @@ test("inline image MIME must match the decoded file signature", async () => {
 test("text-only chat explicitly disables DeepSeek thinking by default", async () => {
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
-  await environment.USAGE_KV.put("pro:user-a", "0");
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
     if (String(url).includes("/rest/v1/user_profiles?")) {
@@ -423,10 +479,9 @@ test("text-only chat explicitly disables DeepSeek thinking by default", async ()
 test("deep thinking stays enabled when the Pro model falls back to flash", async () => {
   const upstreamBodies = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
-  await environment.USAGE_KV.put("pro:user-a", "1");
   globalThis.fetch = async (url, init) => {
     if (String(url).includes("/rest/v1/user_profiles?")) {
-      return Response.json([{ is_banned: false }]);
+      return Response.json([{ is_banned: false, pro: true }]);
     }
     const upstreamBody = JSON.parse(init.body);
     upstreamBodies.push(upstreamBody);
@@ -462,7 +517,6 @@ test("deep thinking stays enabled when the Pro model falls back to flash", async
 test("content moderation and ordinary replies both disable thinking", async () => {
   const upstreamBodies = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
-  await environment.USAGE_KV.put("pro:user-a", "0");
   globalThis.fetch = async (url, init) => {
     if (String(url).includes("/rest/v1/user_profiles?")) {
       return Response.json([{ is_banned: false }]);
@@ -499,7 +553,6 @@ test("content moderation and ordinary replies both disable thinking", async () =
 test("image blocks are rejected outside user messages", async () => {
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
-  await environment.USAGE_KV.put("pro:user-a", "0");
   globalThis.fetch = async (url) => {
     calls.push(String(url));
     return Response.json([{ is_banned: false }]);
@@ -532,7 +585,6 @@ test("image blocks are rejected outside user messages", async () => {
 test("external image URLs are rejected by the app gateway", async () => {
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
-  await environment.USAGE_KV.put("pro:user-a", "0");
   globalThis.fetch = async (url) => {
     calls.push(String(url));
     return Response.json([{ is_banned: false }]);

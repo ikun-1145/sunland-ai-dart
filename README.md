@@ -8,6 +8,7 @@ Sunland AI 的 Flutter 客户端。DeepSeek 对话继续通过
 ## 数据与身份
 
 - 应用 JWT 仍由现有登录 Worker 签发和刷新。
+- Pro 权限以 `user_profiles.pro` 为唯一真值源，Worker 与客户端读取同一字段。
 - 客户端用应用 JWT 换取 15 分钟 Supabase 数据访问 Token，并在用户切换、
   退出登录或 401 后清除旧 Token 与订阅。
 - APK 只携带公开的 `sb_publishable_...` 项目 key；服务端
