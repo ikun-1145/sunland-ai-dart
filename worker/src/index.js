@@ -320,7 +320,7 @@ export default {
     // =========================
     // 🚫 统一用户封禁校验（所有业务路由）
     // =========================
-    const userStatus = await getUserBanStatus(env, userId);
+    const userStatus = await getUserStatus(env, userId);
     if (!userStatus) {
       return json({ error: "User status unavailable" }, 503, env);
     }
@@ -348,54 +348,15 @@ export default {
         return json({ error: "Activation service unavailable" }, 503, env);
       }
       const result = await claimResponse.json();
-      if (result === "success" || result === "already_activated") {
-        await env.USAGE_KV.put("pro:" + userId, "1", { expirationTtl: 21600 });
-      }
       return json({ result }, result === "invalid_code" ? 400 : 200, env);
     }
 
     // =========================
-    // 💎 Pro 检测（查 Supabase activation_codes 表）
+    // 💎 Pro 检测
     // =========================
-    let isPro = false;
-
-    // 先查 KV 缓存（减少 Supabase 请求）
-    const kvPro = await env.USAGE_KV.get("pro:" + userId);
-
-    if (kvPro === "1") {
-      isPro = true;
-    } else if (kvPro !== "0") {
-      // 缓存未命中 → 查 Supabase
-      const supabaseUrl = supabaseProjectUrl(env);
-      const supabaseKey = supabaseServerKey(env);
-      if (!supabaseUrl || !supabaseKey) {
-        console.error("[SUPABASE_CONFIG_MISSING]");
-      } else {
-        try {
-          const proRes = await fetch(
-            `${supabaseUrl}/rest/v1/activation_codes?used_by=eq.${encodeURIComponent(userId)}&select=code&limit=1`,
-            {
-              headers: supabaseHeaders(env)
-            }
-          );
-
-          if (proRes.ok) {
-            const proData = await proRes.json();
-            isPro = proData.length > 0;
-
-            // 写入 KV 缓存（Pro 状态缓存 6 小时，非 Pro 缓存 30 分钟）
-            await env.USAGE_KV.put(
-              "pro:" + userId,
-              isPro ? "1" : "0",
-              { expirationTtl: isPro ? 21600 : 1800 }
-            );
-          }
-        } catch {
-          console.error("[PRO_CHECK_ERROR]");
-          // 查询失败时降级为非 Pro，不阻断服务
-        }
-      }
-    }
+    // user_profiles.pro 是网页、Flutter 客户端与付款回调的唯一真值源。
+    // 与封禁状态同次读取，避免已弃用的 activation_codes 和 KV 负缓存误拒 Pro。
+    const isPro = userStatus.isPro;
 
     // =========================
     // 📊 限额逻辑（KV，每日自动重置）
@@ -794,7 +755,7 @@ function supabaseHeaders(env, extra = {}) {
   };
 }
 
-async function getUserBanStatus(env, userId) {
+async function getUserStatus(env, userId) {
   const projectUrl = supabaseProjectUrl(env);
   if (!projectUrl || !supabaseServerKey(env)) {
     console.error("[SUPABASE_CONFIG_MISSING]");
@@ -803,7 +764,7 @@ async function getUserBanStatus(env, userId) {
 
   try {
     const response = await fetch(
-      `${projectUrl}/rest/v1/user_profiles?user_id=eq.${encodeURIComponent(userId)}&select=is_banned&limit=1`,
+      `${projectUrl}/rest/v1/user_profiles?user_id=eq.${encodeURIComponent(userId)}&select=is_banned,pro&limit=1`,
       {
         headers: supabaseHeaders(env),
         signal: AbortSignal.timeout(7000)
@@ -821,7 +782,10 @@ async function getUserBanStatus(env, userId) {
       return null;
     }
 
-    return { isBanned: rows[0].is_banned };
+    return {
+      isBanned: rows[0].is_banned,
+      isPro: rows[0].pro === true
+    };
   } catch {
     console.error("[USER_STATUS_REQUEST_ERROR]");
     return null;
