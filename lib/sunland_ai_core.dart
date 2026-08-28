@@ -781,12 +781,17 @@ class SunlandApiClient {
               final r = (delta['reasoning_content'] ?? delta['reasoning'])
                   ?.toString();
 
-              // 先累加 reasoning，再输出，避免 UI 慢一拍
+              var changed = false;
               if (r != null && r.isNotEmpty) {
                 reasoning = (reasoning ?? '') + r;
+                changed = true;
               }
               if (piece.isNotEmpty) {
                 textBuffer.write(piece);
+                changed = true;
+              }
+              // reasoning-only delta 也要立即通知 UI，避免思考阶段空白。
+              if (changed) {
                 yield AiResponse(
                   content: textBuffer.toString(),
                   reasoning: reasoning,
@@ -800,7 +805,7 @@ class SunlandApiClient {
 
     // 兜底
     final finalText = textBuffer.toString();
-    if (finalText.isNotEmpty) {
+    if (finalText.isNotEmpty || (reasoning?.isNotEmpty ?? false)) {
       yield AiResponse(content: finalText, reasoning: reasoning);
     }
   }

@@ -26,6 +26,7 @@ import 'services/background_execution_service.dart';
 import 'services/image_attachment_service.dart';
 import 'services/network_connectivity_service.dart';
 import 'services/user_status_service.dart';
+import 'widgets/assistant_reasoning_panel.dart';
 
 // ⭐ 全局 token 存储
 String? _authToken;
@@ -1497,6 +1498,109 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  Widget _normalThinkingIndicator(bool isDark) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: isDark
+              ? const Color(0xFF111827).withOpacity(0.6)
+              : Colors.white.withOpacity(0.6),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TweenAnimationBuilder<double>(
+              tween: Tween(begin: 0.8, end: 1.2),
+              duration: const Duration(milliseconds: 1200),
+              curve: Curves.easeInOut,
+              builder: (context, value, child) {
+                return Transform.scale(
+                  scale: value,
+                  child: Opacity(opacity: 0.7 + (value - 0.8), child: child),
+                );
+              },
+              onEnd: () {
+                if (mounted) setState(() {});
+              },
+              child: Image.asset('assets/ailogo.png', width: 40, height: 40),
+            ),
+            const SizedBox(width: 10),
+            TweenAnimationBuilder<int>(
+              tween: IntTween(begin: 0, end: 3),
+              duration: const Duration(milliseconds: 900),
+              builder: (context, value, child) {
+                return Row(
+                  children: [
+                    Text(
+                      '思考中${'.' * value}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: isDark ? Colors.white70 : Colors.black54,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      '加载中',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: isDark ? Colors.white38 : Colors.black38,
+                      ),
+                    ),
+                  ],
+                );
+              },
+              onEnd: () {
+                if (mounted) setState(() {});
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _reasoningResponse(
+    Map<String, dynamic> msg, {
+    required String text,
+    required String reasoning,
+    required bool isStreaming,
+    required bool isDark,
+  }) {
+    final expanded = msg['expanded'] == true;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 4, 16, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AssistantReasoningPanel(
+            reasoning: reasoning,
+            expanded: expanded,
+            isStreaming: isStreaming,
+            isDark: isDark,
+            onToggle: () {
+              setState(() => msg['expanded'] = !expanded);
+            },
+          ),
+          if (text.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            MarkdownBody(
+              data: text,
+              styleSheet: _assistantMarkdownStyle(isDark),
+            ),
+          ],
+          if (msg['furryEvents'] != null)
+            _buildFurryEventCards(msg['furryEvents'] as List, isDark),
+          _stoppedHintWidget(msg, isDark),
+        ],
+      ),
+    );
+  }
+
   void cancelGeneration() {
     if (!isGenerating) return;
 
@@ -1625,206 +1729,58 @@ class _ChatPageState extends State<ChatPage> {
       return _buildFurryEventCards([], isDark);
     }
 
-    if (msg["text"] == "思考中..." || msg["text"] == "深度思考中...") {
-      final isDeep = msg["text"] == "深度思考中...";
-      return Align(
-        alignment: Alignment.centerLeft,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: isDeep
-                ? (isDark ? const Color(0xFF1E293B) : const Color(0xFFE0F2FE))
-                : (isDark
-                      ? const Color(0xFF111827).withOpacity(0.6)
-                      : Colors.white.withOpacity(0.6)),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // 🌟 呼吸动画 Logo（去掉旋转，只保留呼吸效果）
-              TweenAnimationBuilder<double>(
-                tween: Tween(begin: 0.8, end: 1.2),
-                duration: const Duration(milliseconds: 1200),
-                curve: Curves.easeInOut,
-                builder: (context, value, child) {
-                  return Transform.scale(
-                    scale: value,
-                    child: Opacity(opacity: 0.7 + (value - 0.8), child: child),
-                  );
-                },
-                onEnd: () {
-                  if (mounted) setState(() {});
-                },
-                child: Image.asset('assets/ailogo.png', width: 40, height: 40),
-              ),
-              const SizedBox(width: 10),
-              // ✨ 动态思考文字（波浪感）
-              TweenAnimationBuilder<int>(
-                tween: IntTween(begin: 0, end: 3),
-                duration: const Duration(milliseconds: 900),
-                builder: (context, value, child) {
-                  final dots = '.' * value;
-                  return Row(
-                    children: [
-                      Text(
-                        isDeep ? "深度思考中" : "思考中",
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: isDeep
-                              ? FontWeight.w500
-                              : FontWeight.normal,
-                          color: isDeep
-                              ? const Color(0xFF22D3EE)
-                              : (isDark ? Colors.white70 : Colors.black54),
-                        ),
-                      ),
-                      AnimatedOpacity(
-                        opacity: value == 0 ? 0.2 : 1,
-                        duration: const Duration(milliseconds: 300),
-                        child: Text(
-                          dots,
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: isDark ? Colors.white70 : Colors.black54,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Text(
-                        "加载中",
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isDark ? Colors.white38 : Colors.black38,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-                onEnd: () {
-                  if (mounted) setState(() {});
-                },
-              ),
-            ],
-          ),
-        ),
+    var text = (msg['text'] ?? '').toString();
+    var reasoning = (msg['reasoning'] ?? '').toString();
+    if (reasoning.isEmpty && text.startsWith('🧠 ')) {
+      final parts = text.split('\n\n');
+      reasoning = parts.first.replaceFirst('🧠 ', '');
+      text = parts.length > 1 ? parts.sublist(1).join('\n\n') : '';
+    }
+
+    final isStreaming = msg['isStreaming'] == true;
+    final isDeepThinking = msg['deepThinking'] == true || text == '深度思考中...';
+    if (text == '思考中...' || text == '深度思考中...') {
+      text = '';
+    }
+
+    if (isDeepThinking && (isStreaming || reasoning.trim().isNotEmpty)) {
+      return _reasoningResponse(
+        msg,
+        text: text,
+        reasoning: reasoning,
+        isStreaming: isStreaming,
+        isDark: isDark,
       );
     }
 
-    final mdStyle = _assistantMarkdownStyle(isDark);
+    if (isStreaming && text.trim().isEmpty && reasoning.trim().isEmpty) {
+      return _normalThinkingIndicator(isDark);
+    }
+
+    if (reasoning.trim().isNotEmpty) {
+      return _reasoningResponse(
+        msg,
+        text: text,
+        reasoning: reasoning,
+        isStreaming: false,
+        isDark: isDark,
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(0, 8, 16, 6),
-      child: Builder(
-        builder: (_) {
-          var text = (msg["text"] ?? "").toString();
-          var reasoning = (msg["reasoning"] ?? "").toString();
-
-          if (reasoning.isEmpty && text.startsWith("🧠 ")) {
-            final parts = text.split("\n\n");
-            reasoning = parts.first.replaceFirst("🧠 ", "");
-            text = parts.length > 1 ? parts.sublist(1).join("\n\n") : "";
-          }
-
-          if (reasoning.trim().isNotEmpty) {
-            final content = text;
-
-            bool expanded = msg["expanded"] == true;
-
-            return Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // 🧠 折叠卡片（带状态持久）
-                GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      msg["expanded"] = !expanded;
-                    });
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 8,
-                    ),
-                    decoration: BoxDecoration(
-                      color: isDark
-                          ? Colors.white.withOpacity(0.05)
-                          : Colors.black.withOpacity(0.04),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(
-                          expanded
-                              ? Icons.keyboard_arrow_down
-                              : Icons.keyboard_arrow_right,
-                          size: 16,
-                          color: Colors.grey,
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          "思考过程",
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: Colors.grey.shade600,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-
-                AnimatedSize(
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeInOut,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 6),
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 150),
-                        child: SingleChildScrollView(
-                          physics: expanded
-                              ? const BouncingScrollPhysics()
-                              : const NeverScrollableScrollPhysics(),
-                          child: Text(
-                            reasoning,
-                            maxLines: expanded ? null : 3,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 12,
-                              color: Colors.grey,
-                              height: 1.4,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-
-                if (content.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  MarkdownBody(data: content, styleSheet: mdStyle),
-                ],
-                if (msg['furryEvents'] != null)
-                  _buildFurryEventCards(msg['furryEvents'] as List, isDark),
-                _stoppedHintWidget(msg, isDark),
-              ],
-            );
-          }
-
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (text.isNotEmpty)
-                MarkdownBody(data: text, styleSheet: mdStyle),
-              if (msg['furryEvents'] != null)
-                _buildFurryEventCards(msg['furryEvents'] as List, isDark),
-              _stoppedHintWidget(msg, isDark),
-            ],
-          );
-        },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (text.isNotEmpty)
+            MarkdownBody(
+              data: text,
+              styleSheet: _assistantMarkdownStyle(isDark),
+            ),
+          if (msg['furryEvents'] != null)
+            _buildFurryEventCards(msg['furryEvents'] as List, isDark),
+          _stoppedHintWidget(msg, isDark),
+        ],
       ),
     );
   }
@@ -3518,15 +3474,14 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _loadModelPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     final savedModel = prefs.getString('currentModel');
-    final savedDeep = prefs.getBool('useDeep');
+    // 深度思考是单次会话中的显式选择，不应沿用上次启动的状态。
+    await prefs.remove('useDeep');
     if (mounted) {
       setState(() {
         if (savedModel != null && savedModel.isNotEmpty) {
           currentModel = savedModel;
         }
-        if (savedDeep != null) {
-          useDeep = savedDeep;
-        }
+        useDeep = false;
         if (_isSunlandConversation) {
           useDeep = false;
           pickedImages.clear();
@@ -3542,7 +3497,6 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _saveModelPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('currentModel', currentModel);
-    await prefs.setBool('useDeep', useDeep);
   }
 
   String _resolveModel() {
@@ -3819,7 +3773,8 @@ class _ChatPageState extends State<ChatPage> {
 
     // ✅ 记录最后一条用户消息（用于重新生成）
     _lastUserText = text;
-    final requestUsesDeepThinking = !hasImages && isActivated && useDeep;
+    // 视觉模型与文本模型共用同一个显式思考开关；Sunland AI 不走此链路。
+    final requestUsesDeepThinking = !isSunlandRequest && isActivated && useDeep;
     final hapticRequest = _aiHaptics.beginRequest(
       deepThinking: requestUsesDeepThinking,
     );
@@ -3870,6 +3825,7 @@ class _ChatPageState extends State<ChatPage> {
         "text": isDeepMode ? "深度思考中..." : "思考中...",
         "isUser": false,
         "isStreaming": true,
+        "deepThinking": isDeepMode,
         "expanded": false,
       });
     });
@@ -3966,6 +3922,7 @@ class _ChatPageState extends State<ChatPage> {
           "reasoning": "",
           "isUser": false,
           "isStreaming": true,
+          "deepThinking": requestUsesDeepThinking,
           "expanded": false, // ✅ 保持一致
         });
       });
