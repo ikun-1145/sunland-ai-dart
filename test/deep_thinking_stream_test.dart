@@ -26,7 +26,9 @@ void main() {
               '',
             ].join('\n'),
             200,
-            headers: const {'content-type': 'text/event-stream'},
+            headers: const {
+              'content-type': 'text/event-stream; charset=utf-8',
+            },
           );
         }),
       );
