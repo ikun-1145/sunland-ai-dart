@@ -5,14 +5,25 @@ const MAX_VISION_IMAGE_COUNT = 4;
 const MAX_VISION_IMAGE_BYTES = 4 * 1024 * 1024;
 const MAX_VISION_TOTAL_BYTES = 12 * 1024 * 1024;
 const DEEPSEEK_VISION_MODEL = "deepseek-v4-flash-vision-exp";
+const RELEASE_REPO = "ikun-1145/sunland-ai-dart";
+const DOWNLOAD_PATH_PREFIX = "/v1/download/";
+const DOWNLOAD_CACHE_CONTROL = "public, max-age=31536000, immutable";
+const DOWNLOAD_TYPES = {
+  apk: "application/vnd.android.package-archive",
+  ipa: "application/octet-stream"
+};
 
 export default {
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders(env) });
+    }
+
+    if (url.pathname.startsWith(DOWNLOAD_PATH_PREFIX)) {
+      return handleReleaseDownload(request, env, ctx, url);
     }
 
     if (request.method !== "POST") {
@@ -655,6 +666,151 @@ export default {
 // 工具函数
 // =========================
 
+async function handleReleaseDownload(request, env, ctx, url) {
+  const platform = url.pathname.slice(DOWNLOAD_PATH_PREFIX.length);
+  if (!Object.hasOwn(DOWNLOAD_TYPES, platform) || platform.includes("/")) {
+    return json({ error: "Download not found" }, 404, env);
+  }
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    const response = json({ error: "Method not allowed" }, 405, env);
+    response.headers.set("Allow", "GET, HEAD");
+    return response;
+  }
+
+  const version = url.searchParams.get("v");
+  if (!version || !/^\d+\.\d+\.\d+\+\d+$/.test(version)) {
+    return json({ error: "Invalid download version" }, 400, env);
+  }
+
+  const filename = `sunland-ai-${version}.${platform}`;
+  const cacheRequest = downloadCacheRequest(request, url, platform, version);
+  const bypassCache = Boolean(request.headers.get("If-Range"));
+  if (!bypassCache && typeof caches !== "undefined") {
+    try {
+      const cached = await caches.default.match(cacheRequest);
+      if (cached) {
+        return downloadResponse(cached, env, filename, platform, {
+          cacheStatus: "HIT",
+          headOnly: request.method === "HEAD"
+        });
+      }
+    } catch (error) {
+      console.error(JSON.stringify({
+        event: "download_cache_match_failed",
+        platform,
+        version,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    }
+  }
+
+  const upstreamHeaders = new Headers({
+    "Accept": "application/octet-stream",
+    "Accept-Encoding": "identity",
+    "User-Agent": "SunlandAI-Worker/1.0"
+  });
+  for (const header of ["Range", "If-Range", "If-Modified-Since", "If-None-Match"]) {
+    const value = request.headers.get(header);
+    if (value) upstreamHeaders.set(header, value);
+  }
+
+  const releaseUrl = `https://github.com/${RELEASE_REPO}/releases/download/${encodeURIComponent(`v${version}`)}/${encodeURIComponent(filename)}`;
+  let upstream;
+  try {
+    upstream = await fetch(releaseUrl, {
+      method: request.method,
+      headers: upstreamHeaders,
+      redirect: "follow"
+    });
+  } catch (error) {
+    console.error(JSON.stringify({
+      event: "download_upstream_failed",
+      platform,
+      version,
+      error: error instanceof Error ? error.message : String(error)
+    }));
+    return json({ error: "Download temporarily unavailable" }, 502, env);
+  }
+
+  if (!upstream.ok) {
+    if (upstream.status === 304 || upstream.status === 416) {
+      return downloadResponse(upstream, env, filename, platform, {
+        cacheStatus: "BYPASS",
+        headOnly: true
+      });
+    }
+    const status = upstream.status === 404 ? 404 : 502;
+    return json({
+      error: status === 404 ? "Release asset not found" : "Download temporarily unavailable"
+    }, status, env);
+  }
+
+  const isFullDownload = request.method === "GET" && upstream.status === 200 &&
+    !request.headers.has("Range") && typeof caches !== "undefined";
+  const cacheUpstream = isFullDownload ? upstream.clone() : null;
+  const response = downloadResponse(upstream, env, filename, platform, {
+    cacheStatus: "MISS",
+    headOnly: request.method === "HEAD"
+  });
+  if (isFullDownload) {
+    const cacheResponse = downloadResponse(cacheUpstream, env, filename, platform, {
+      headOnly: false
+    });
+    const cacheWrite = caches.default.put(cacheRequest, cacheResponse).catch(error => {
+      console.error(JSON.stringify({
+        event: "download_cache_put_failed",
+        platform,
+        version,
+        error: error instanceof Error ? error.message : String(error)
+      }));
+    });
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(cacheWrite);
+    } else {
+      await cacheWrite;
+    }
+  }
+
+  return response;
+}
+
+function downloadCacheRequest(request, url, platform, version) {
+  const cacheUrl = new URL(url.origin);
+  cacheUrl.pathname = `${DOWNLOAD_PATH_PREFIX}${platform}`;
+  cacheUrl.searchParams.set("v", version);
+  const headers = new Headers();
+  for (const header of ["Range", "If-Modified-Since", "If-None-Match"]) {
+    const value = request.headers.get(header);
+    if (value) headers.set(header, value);
+  }
+  return new Request(cacheUrl, { method: "GET", headers });
+}
+
+function downloadResponse(upstream, env, filename, platform, {
+  cacheStatus,
+  headOnly = false
+} = {}) {
+  const headers = new Headers({
+    "Accept-Ranges": "bytes",
+    "Access-Control-Expose-Headers": "Content-Length, Content-Range, ETag, Last-Modified, X-Sunland-Cache",
+    "Cache-Control": upstream.ok ? DOWNLOAD_CACHE_CONTROL : "no-store",
+    "Content-Disposition": `attachment; filename="${filename}"`,
+    "Content-Type": DOWNLOAD_TYPES[platform],
+    "X-Content-Type-Options": "nosniff",
+    ...corsHeaders(env)
+  });
+  for (const header of ["Content-Length", "Content-Range", "ETag", "Last-Modified"]) {
+    const value = upstream.headers.get(header);
+    if (value) headers.set(header, value);
+  }
+  if (cacheStatus) headers.set("X-Sunland-Cache", cacheStatus);
+
+  return new Response(headOnly ? null : upstream.body, {
+    status: upstream.status,
+    headers
+  });
+}
+
 async function readJsonBodyWithLimit(request, maxBytes) {
   const contentLength = request.headers.get("content-length");
   if (contentLength) {
@@ -715,7 +871,7 @@ function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "POST, OPTIONS"
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS"
   };
 }
 
