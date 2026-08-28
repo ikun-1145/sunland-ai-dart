@@ -717,11 +717,19 @@ async function handleReleaseDownload(request, env, ctx, url) {
   const releaseUrl = `https://github.com/${RELEASE_REPO}/releases/download/${encodeURIComponent(`v${version}`)}/${encodeURIComponent(filename)}`;
   let upstream;
   try {
-    upstream = await fetch(releaseUrl, {
+    const upstreamInit = {
       method: request.method,
       headers: upstreamHeaders,
       redirect: "follow"
-    });
+    };
+    if (request.method === "GET") {
+      upstreamInit.cf = {
+        cacheEverything: true,
+        cacheKey: releaseUrl,
+        cacheTtl: 31536000
+      };
+    }
+    upstream = await fetch(releaseUrl, upstreamInit);
   } catch (error) {
     console.error(JSON.stringify({
       event: "download_upstream_failed",

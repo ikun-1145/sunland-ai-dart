@@ -146,6 +146,11 @@ test("download proxy streams a full asset and schedules a cache write", async ()
     await runtime.finish();
     assert.equal(runtime.upstreamRequests.length, 1);
     assert.match(runtime.upstreamRequests[0].input, /releases\/download\/v1\.4\.2%2B31\/sunland-ai-1\.4\.2%2B31\.ipa/u);
+    assert.deepEqual(runtime.upstreamRequests[0].init.cf, {
+      cacheEverything: true,
+      cacheKey: runtime.upstreamRequests[0].input,
+      cacheTtl: 31536000,
+    });
     assert.equal(runtime.cachePuts.length, 1);
     assert.deepEqual(runtime.cachePuts[0].body, payload);
     assert.equal(runtime.cachePuts[0].response.headers.get("cache-control"), "public, max-age=31536000, immutable");
@@ -243,6 +248,7 @@ test("download proxy answers HEAD with metadata and no body", async () => {
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("content-length"), "29198469");
     assert.equal(await response.text(), "");
+    assert.equal(runtime.upstreamRequests[0].init.cf, undefined);
   } finally {
     await runtime.finish();
   }
