@@ -41,6 +41,7 @@ ios/.symlinks/
 *.driveupload
 .tmp.driveupload/
 deploy.log
+bump_version.sh
 
 # ===== Claude Code =====
 .claude/
