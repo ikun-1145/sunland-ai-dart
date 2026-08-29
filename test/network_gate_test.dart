@@ -6,6 +6,7 @@ import 'package:sunland_ai_app/network_unavailable_page.dart';
 import 'package:sunland_ai_app/services/app_config_service.dart';
 import 'package:sunland_ai_app/services/network_connectivity_service.dart';
 import 'package:sunland_ai_app/services/user_status_service.dart';
+import 'package:sunland_ai_app/theme/sunland_theme.dart';
 
 Map<String, dynamic> _activeConfigRow() {
   return <String, dynamic>{
@@ -30,9 +31,7 @@ void main() {
     themeNotifier.value = ThemeMode.system;
   });
 
-  testWidgets('offline startup shows the full-screen white retry page', (
-    tester,
-  ) async {
+  testWidgets('offline startup follows the selected theme', (tester) async {
     var configRequestCount = 0;
 
     await tester.pumpWidget(
@@ -66,7 +65,7 @@ void main() {
         matching: find.byType(Scaffold),
       ),
     );
-    expect(pageScaffold.backgroundColor, Colors.white);
+    expect(pageScaffold.backgroundColor, SunlandTheme.dark.colorScheme.surface);
 
     final image = tester.widget<Image>(
       find.descendant(
