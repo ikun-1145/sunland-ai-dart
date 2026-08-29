@@ -20,6 +20,25 @@ class SettingsResult {
   final bool? activated;
 }
 
+Future<void> performLogoutCleanup({
+  Future<void> Function()? signOutRemoteSession,
+  required Future<void> Function() clearLocalData,
+  required void Function() clearApplicationState,
+  required void Function() clearCurrentUser,
+}) async {
+  if (signOutRemoteSession != null) {
+    try {
+      await signOutRemoteSession();
+    } catch (error) {
+      debugPrint('Supabase sign-out failed; continuing local logout: $error');
+    }
+  }
+
+  await clearLocalData();
+  clearApplicationState();
+  clearCurrentUser();
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key, this.openProPurchaseOnStart = false});
 
@@ -509,28 +528,25 @@ class _SettingsPageState extends State<SettingsPage>
       },
     );
 
-    if (confirmed != true) return;
+    if (!mounted || confirmed != true) return;
 
     try {
-      // 1. Supabase 退出登录
-      await Supabase.instance.client.auth.signOut();
-
-      // 2. 清除本地登录状态
-      await _store.clearSession();
-      clearApplicationAuthState();
-      // 2.1 清除本地历史记录缓存（退出后不保留本地对话）
-      try {
-        await _store.clearAll(); // 若你的实现中没有该方法，请确保删除本地聊天/缓存数据
-      } catch (_) {}
-
-      // 3. 清空全局用户状态
-      currentUserNotifier.value = null;
+      final supabaseAuth = Supabase.instance.client.auth;
+      await performLogoutCleanup(
+        signOutRemoteSession: supabaseAuth.currentSession == null
+            ? null
+            : () => supabaseAuth.signOut(),
+        clearLocalData: _store.clearAll,
+        clearApplicationState: clearApplicationAuthState,
+        clearCurrentUser: () => currentUserNotifier.value = null,
+      );
 
       if (!mounted) return;
 
-      // 4. 返回 ChatPage，由其处理跳转到登录页
+      // 返回 ChatPage，由其处理跳转到登录页
       Navigator.of(context).pop(const SettingsResult(loggedOut: true));
-    } catch (e) {
+    } catch (error) {
+      debugPrint('Local logout cleanup failed: $error');
       _showSnack('退出失败，请重试');
     }
   }

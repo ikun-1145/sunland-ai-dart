@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+
+const String _captchaResultChannel = 'CaptchaResult';
 
 const String _captchaHtml = '''
 <!DOCTYPE html>
@@ -87,12 +91,10 @@ const String _captchaHtml = '''
         document.querySelector('.spinner').style.display = 'none';
 
         const result = captchaObj.getValidate();
-        console.log("GeeTest success:", result);
+        if (!result) return;
 
         const token = JSON.stringify(result);
-
-        window.location.href =
-          "sunland://captcha?token=" + encodeURIComponent(token);
+        CaptchaResult.postMessage(token);
       });
 
     });
@@ -100,6 +102,29 @@ const String _captchaHtml = '''
 </body>
 </html>
 ''';
+
+String? validateCaptchaResult(String token) {
+  try {
+    final decoded = jsonDecode(token);
+    if (decoded is! Map) return null;
+
+    for (final field in const <String>[
+      'lot_number',
+      'captcha_output',
+      'pass_token',
+      'gen_time',
+    ]) {
+      final value = decoded[field];
+      if (value is! String || value.isEmpty) return null;
+    }
+
+    final genTime = decoded['gen_time'] as String;
+    if (!RegExp(r'^\d+$').hasMatch(genTime)) return null;
+    return token;
+  } on FormatException {
+    return null;
+  }
+}
 
 class CaptchaPage extends StatefulWidget {
   const CaptchaPage({super.key});
@@ -109,6 +134,22 @@ class CaptchaPage extends StatefulWidget {
 }
 
 class _CaptchaPageState extends State<CaptchaPage> {
+  void _handleCaptchaResult(String message) {
+    if (_handled) return;
+
+    final token = validateCaptchaResult(message);
+    if (token == null) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('验证结果异常，请重试')));
+      _reloadCaptcha();
+      return;
+    }
+
+    _handled = true;
+    Navigator.pop(context, token);
+  }
+
   void _reloadCaptcha() {
     setState(() {
       _pageLoaded = false;
@@ -127,8 +168,11 @@ class _CaptchaPageState extends State<CaptchaPage> {
 
     controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setUserAgent(
-        "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1",
+      ..addJavaScriptChannel(
+        _captchaResultChannel,
+        onMessageReceived: (message) {
+          if (mounted) _handleCaptchaResult(message.message);
+        },
       )
       ..setOnConsoleMessage((JavaScriptConsoleMessage message) {
         debugPrint("JS Console [${message.level}]: ${message.message}");
@@ -146,25 +190,6 @@ class _CaptchaPageState extends State<CaptchaPage> {
             debugPrint(
               'WebView error ${error.errorCode}: ${error.description}',
             );
-          },
-          onNavigationRequest: (request) {
-            debugPrint("WebView URL: ${request.url}");
-
-            if (request.url.startsWith("sunland://captcha")) {
-              if (_handled) return NavigationDecision.prevent;
-              _handled = true;
-
-              final uri = Uri.parse(request.url);
-              final token = uri.queryParameters['token'];
-
-              debugPrint("Captcha token received: $token");
-
-              if (mounted) Navigator.pop(context, token);
-
-              return NavigationDecision.prevent;
-            }
-
-            return NavigationDecision.navigate;
           },
         ),
       )
