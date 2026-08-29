@@ -12,8 +12,9 @@ class NetworkUnavailablePage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: colorScheme.surface,
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -31,29 +32,35 @@ class NetworkUnavailablePage extends StatelessWidget {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Image.asset(
-                          'assets/network_unavailable.jpg',
-                          width: 300,
-                          fit: BoxFit.contain,
-                          semanticLabel: '网络连接异常提示图',
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(24),
+                          child: ColoredBox(
+                            color: Colors.white,
+                            child: Image.asset(
+                              'assets/network_unavailable.jpg',
+                              width: 300,
+                              fit: BoxFit.contain,
+                              semanticLabel: '网络连接异常提示图',
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 24),
-                        const Text(
+                        Text(
                           '网络连接异常',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Color(0xFF0F172A),
+                            color: colorScheme.onSurface,
                             fontSize: 24,
                             height: 1.25,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
                         const SizedBox(height: 12),
-                        const Text(
+                        Text(
                           '请检查网络设置，连接正常后再刷新。',
                           textAlign: TextAlign.center,
                           style: TextStyle(
-                            color: Color(0xFF64748B),
+                            color: colorScheme.onSurfaceVariant,
                             fontSize: 15,
                             height: 1.6,
                           ),

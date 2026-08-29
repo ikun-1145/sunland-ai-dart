@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 import 'package:sunland_ai_app/services/image_attachment_service.dart';
 
 void main() {
@@ -57,4 +58,37 @@ void main() {
     expect(result.tooLargeCount, 1);
     expect(result.limitExceededCount, 1);
   });
+
+  test(
+    'stages picker files so previews survive source cache removal',
+    () async {
+      final pickerCache = Directory('${tempDirectory.path}/picker-cache')
+        ..createSync();
+      final attachmentDirectory = Directory(
+        '${tempDirectory.path}/chat-attachments',
+      );
+      final sourceBytes = img.encodePng(img.Image(width: 2, height: 2));
+      final source = File('${pickerCache.path}/selected.PNG')
+        ..writeAsBytesSync(sourceBytes);
+
+      final result = await stageImageAttachments(
+        candidatePaths: [source.path],
+        existingPaths: const [],
+        destinationDirectory: attachmentDirectory,
+      );
+
+      expect(result.acceptedPaths, hasLength(1));
+      expect(result.acceptedPaths.single, isNot(source.path));
+      expect(result.acceptedPaths.single, endsWith('.png'));
+      source.deleteSync();
+      expect(
+        await File(result.acceptedPaths.single).readAsBytes(),
+        sourceBytes,
+      );
+      expect(
+        await prepareDeepSeekVisionImages(imagePaths: result.acceptedPaths),
+        hasLength(1),
+      );
+    },
+  );
 }

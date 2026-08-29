@@ -178,9 +178,12 @@ class _SettingsPageState extends State<SettingsPage> {
                       onChanged: (_) => setStateDialog(() {}),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       '仅支持中英文、数字，最多20字符',
-                      style: TextStyle(fontSize: 12, color: Colors.black45),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -490,7 +493,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   width: 42,
                   height: 4,
                   decoration: BoxDecoration(
-                    color: Colors.black12,
+                    color: Theme.of(context).colorScheme.outlineVariant,
                     borderRadius: BorderRadius.circular(99),
                   ),
                 ),
@@ -500,10 +503,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 8),
-                const Text(
+                Text(
                   '一次付费，永久无限使用。支付后发送截图至 sunlandccc@outlook.com 获取激活码。',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.black54, height: 1.5),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    height: 1.5,
+                  ),
                 ),
                 const SizedBox(height: 18),
                 Row(
@@ -879,6 +885,7 @@ class _AvatarHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final avatarUrl = user?.avatarUrl;
+    final colorScheme = Theme.of(context).colorScheme;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
@@ -939,13 +946,17 @@ class _AvatarHeader extends StatelessWidget {
           decoration: BoxDecoration(
             color: activated
                 ? const Color(0xFFA78BFA).withValues(alpha: 0.18)
-                : Colors.black.withValues(alpha: 0.06),
+                : colorScheme.onSurface.withValues(alpha: 0.07),
             borderRadius: BorderRadius.circular(99),
           ),
           child: Text(
             activated ? 'Pro 会员' : '普通用户',
             style: TextStyle(
-              color: activated ? const Color(0xFF7C3AED) : Colors.black54,
+              color: activated
+                  ? (Theme.of(context).brightness == Brightness.dark
+                        ? const Color(0xFFC4B5FD)
+                        : const Color(0xFF7C3AED))
+                  : colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
               fontSize: 12,
             ),
@@ -1102,6 +1113,7 @@ class _ProPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     if (activated) {
       return Container(
         padding: const EdgeInsets.all(18),
@@ -1112,22 +1124,29 @@ class _ProPanel extends StatelessWidget {
             color: Theme.of(context).dividerColor.withOpacity(0.18),
           ),
         ),
-        child: const Row(
+        child: Row(
           children: [
-            Icon(Icons.workspace_premium, color: Color(0xFF7C3AED), size: 30),
-            SizedBox(width: 12),
+            const Icon(
+              Icons.workspace_premium,
+              color: Color(0xFF7C3AED),
+              size: 30,
+            ),
+            const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     '已是 Pro 会员',
                     style: TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  SizedBox(height: 3),
+                  const SizedBox(height: 3),
                   Text(
                     '深度思考与无限对话已解锁',
-                    style: TextStyle(color: Colors.black54, fontSize: 12),
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                    ),
                   ),
                 ],
               ),
@@ -1149,16 +1168,26 @@ class _ProPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Row(
+          Row(
             children: [
-              Icon(Icons.diamond_outlined, color: Color(0xFF7C3AED), size: 30),
-              SizedBox(width: 12),
+              const Icon(
+                Icons.diamond_outlined,
+                color: Color(0xFF7C3AED),
+                size: 30,
+              ),
+              const SizedBox(width: 12),
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('霜蓝 Pro', style: TextStyle(fontWeight: FontWeight.w700)),
-                  SizedBox(height: 3),
-                  Text('一次付费，永久解锁', style: TextStyle(color: Colors.black54)),
+                  const Text(
+                    '霜蓝 Pro',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    '一次付费，永久解锁',
+                    style: TextStyle(color: colorScheme.onSurfaceVariant),
+                  ),
                 ],
               ),
             ],
@@ -1230,10 +1259,11 @@ class _FeatureChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.72),
+        color: colorScheme.onSurface.withValues(alpha: 0.07),
         borderRadius: BorderRadius.circular(99),
       ),
       child: Row(
@@ -1241,7 +1271,10 @@ class _FeatureChip extends StatelessWidget {
         children: [
           const Icon(Icons.check_circle, size: 14, color: Color(0xFF22C55E)),
           const SizedBox(width: 5),
-          Text(text, style: const TextStyle(fontSize: 12)),
+          Text(
+            text,
+            style: TextStyle(fontSize: 12, color: colorScheme.onSurface),
+          ),
         ],
       ),
     );

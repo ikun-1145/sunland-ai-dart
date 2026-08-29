@@ -9,6 +9,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'sunland_ai_core.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'captcha_page.dart';
@@ -26,7 +27,9 @@ import 'services/background_execution_service.dart';
 import 'services/image_attachment_service.dart';
 import 'services/network_connectivity_service.dart';
 import 'services/user_status_service.dart';
+import 'theme/sunland_theme.dart';
 import 'widgets/assistant_reasoning_panel.dart';
+import 'widgets/streaming_markdown_body.dart';
 
 // ⭐ 全局 token 存储
 String? _authToken;
@@ -475,30 +478,8 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
             debugShowCheckedModeBanner: false,
             title: '霜蓝AI',
             themeMode: mode,
-            theme: ThemeData(
-              brightness: Brightness.light,
-              scaffoldBackgroundColor: const Color(0xFFF6F8FC),
-              cardColor: Colors.white,
-              dividerColor: Colors.black12,
-              appBarTheme: const AppBarTheme(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                foregroundColor: Colors.black87,
-              ),
-              textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 15)),
-            ),
-            darkTheme: ThemeData(
-              brightness: Brightness.dark,
-              scaffoldBackgroundColor: const Color(0xFF0B0F1A),
-              cardColor: const Color(0xFF111827),
-              dividerColor: Colors.white12,
-              appBarTheme: const AppBarTheme(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                foregroundColor: Colors.white,
-              ),
-              textTheme: const TextTheme(bodyMedium: TextStyle(fontSize: 15)),
-            ),
+            theme: SunlandTheme.light,
+            darkTheme: SunlandTheme.dark,
             builder: (context, child) {
               switch (_startupState) {
                 case _StartupState.loading:
@@ -1588,9 +1569,10 @@ class _ChatPageState extends State<ChatPage> {
           ),
           if (text.isNotEmpty) ...[
             const SizedBox(height: 6),
-            MarkdownBody(
+            StreamingMarkdownBody(
               data: text,
               styleSheet: _assistantMarkdownStyle(isDark),
+              isStreaming: isStreaming,
             ),
           ],
           if (msg['furryEvents'] != null)
@@ -1773,9 +1755,10 @@ class _ChatPageState extends State<ChatPage> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (text.isNotEmpty)
-            MarkdownBody(
+            StreamingMarkdownBody(
               data: text,
               styleSheet: _assistantMarkdownStyle(isDark),
+              isStreaming: isStreaming,
             ),
           if (msg['furryEvents'] != null)
             _buildFurryEventCards(msg['furryEvents'] as List, isDark),
@@ -2870,6 +2853,7 @@ class _ChatPageState extends State<ChatPage> {
   StreamSubscription<AiResponse>? _currentStreamSubscription;
   List<String> pickedImages = [];
   final ImagePicker _imagePicker = ImagePicker();
+  late final Future<Directory> _imageAttachmentDirectory;
   final BackgroundExecutionService _backgroundExecution =
       const BackgroundExecutionService();
   final AiHapticService _aiHaptics = AiHapticService();
@@ -2893,6 +2877,22 @@ class _ChatPageState extends State<ChatPage> {
     final taskId = _generationBackgroundTaskId;
     _generationBackgroundTaskId = null;
     await _backgroundExecution.end(taskId);
+  }
+
+  Future<Directory> _prepareImageAttachmentDirectory() async {
+    final supportDirectory = await getApplicationSupportDirectory();
+    final directory = Directory(
+      '${supportDirectory.path}${Platform.pathSeparator}chat_image_attachments',
+    );
+    try {
+      if (await directory.exists()) {
+        await directory.delete(recursive: true);
+      }
+    } on FileSystemException catch (error) {
+      debugPrint('Unable to clear stale image attachments: $error');
+    }
+    await directory.create(recursive: true);
+    return directory;
   }
 
   Map<String, dynamic>? get _currentConversation {
@@ -3426,6 +3426,7 @@ class _ChatPageState extends State<ChatPage> {
           _readFreshAuthToken(forceRefresh: forceRefresh),
     );
     store = SunlandSessionStore();
+    _imageAttachmentDirectory = _prepareImageAttachmentDirectory();
     _initData();
     unawaited(_loadOcrPrivacyTipFlag());
     if (Platform.isAndroid) {
@@ -3654,8 +3655,9 @@ class _ChatPageState extends State<ChatPage> {
 
         if (supportsLocalImageOcr) {
           try {
-            ocrResult = await extractTextFromImages(imagePaths)
-                .timeout(const Duration(seconds: 8));
+            ocrResult = await extractTextFromImages(
+              imagePaths,
+            ).timeout(const Duration(seconds: 8));
           } catch (e) {
             debugPrint('Optional OCR skipped: $e');
             ocrResult = const ImageOcrResult(block: '', hasUsableText: false);
@@ -3674,16 +3676,18 @@ class _ChatPageState extends State<ChatPage> {
         return;
       } on ImagePreparationException catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(SnackBar(content: Text(e.message)));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(SnackBar(content: Text(e.message)));
           setState(() => isGenerating = false);
         }
         return;
       } catch (e) {
         debugPrint('Image preparation error: $e');
         if (mounted) {
-          ScaffoldMessenger.of(context)
-              .showSnackBar(const SnackBar(content: Text('图片处理失败，请重新选择后再试')));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('图片处理失败，请重新选择后再试')));
           setState(() => isGenerating = false);
         }
         return;
@@ -4193,9 +4197,7 @@ class _ChatPageState extends State<ChatPage> {
       rememberLocalMessages();
       if (user != null) await _saveToCloud();
 
-      if (!mounted ||
-          _cancelRequested ||
-          generationId != _generationSerial) {
+      if (!mounted || _cancelRequested || generationId != _generationSerial) {
         return;
       }
       setState(() {
@@ -4344,9 +4346,9 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> pickImage() async {
     if (pickedImages.length >= maxImageAttachmentCount) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('最多添加 4 张图片')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('最多添加 4 张图片')));
       return;
     }
     if (!_ocrPrivacyTipShown && mounted) {
@@ -4389,10 +4391,8 @@ class _ChatPageState extends State<ChatPage> {
                   leading: const Icon(Icons.folder_open_outlined),
                   title: const Text('选择图片文件'),
                   subtitle: const Text('可从系统文件或 iCloud Drive 中选择'),
-                  onTap: () => Navigator.pop(
-                    sheetContext,
-                    _ImageAttachmentSource.files,
-                  ),
+                  onTap: () =>
+                      Navigator.pop(sheetContext, _ImageAttachmentSource.files),
                 ),
               ],
             ),
@@ -4444,9 +4444,9 @@ class _ChatPageState extends State<ChatPage> {
       _showImagePickerError(error);
     } on FileSystemException {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('无法读取所选图片，请将文件下载到本机后重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('无法读取所选图片，请将文件下载到本机后重试')));
     }
   }
 
@@ -4481,9 +4481,10 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _addImageAttachments(Iterable<String> paths) async {
-    final validation = await validateImageAttachments(
+    final validation = await stageImageAttachments(
       candidatePaths: paths,
       existingPaths: pickedImages,
+      destinationDirectory: await _imageAttachmentDirectory,
     );
     if (!mounted) return;
 
@@ -5425,6 +5426,15 @@ class _ChatPageState extends State<ChatPage> {
                                                 width: 70,
                                                 height: 70,
                                                 fit: BoxFit.cover,
+                                                errorBuilder: (_, _, _) =>
+                                                    const SizedBox(
+                                                      width: 70,
+                                                      height: 70,
+                                                      child: Icon(
+                                                        Icons.broken_image,
+                                                        size: 20,
+                                                      ),
+                                                    ),
                                               ),
                                             ),
                                           ),

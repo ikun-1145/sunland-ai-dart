@@ -102,6 +102,82 @@ Future<ImageAttachmentValidationResult> validateImageAttachments({
   );
 }
 
+/// Copies validated picker results into an app-owned directory before the UI
+/// starts depending on them. Picker paths can point at files managed by the
+/// platform or plugin cache, so keeping those paths directly can leave both
+/// the composer preview and the sent-message thumbnail without a readable
+/// file.
+Future<ImageAttachmentValidationResult> stageImageAttachments({
+  required Iterable<String> candidatePaths,
+  required Iterable<String> existingPaths,
+  required Directory destinationDirectory,
+  int maxCount = maxImageAttachmentCount,
+  int maxBytes = maxImageAttachmentBytes,
+}) async {
+  final validation = await validateImageAttachments(
+    candidatePaths: candidatePaths,
+    existingPaths: existingPaths,
+    maxCount: maxCount,
+    maxBytes: maxBytes,
+  );
+  if (validation.acceptedPaths.isEmpty) return validation;
+
+  try {
+    await destinationDirectory.create(recursive: true);
+  } on FileSystemException {
+    return ImageAttachmentValidationResult(
+      acceptedPaths: const [],
+      duplicateCount: validation.duplicateCount,
+      limitExceededCount: validation.limitExceededCount,
+      tooLargeCount: validation.tooLargeCount,
+      unreadableCount:
+          validation.unreadableCount + validation.acceptedPaths.length,
+    );
+  }
+
+  final stagedPaths = <String>[];
+  var unreadableCount = validation.unreadableCount;
+  for (var index = 0; index < validation.acceptedPaths.length; index++) {
+    final sourcePath = validation.acceptedPaths[index];
+    final source = File(sourcePath);
+    final extension = _safeImageExtension(sourcePath);
+    final uniquePart = DateTime.now().microsecondsSinceEpoch;
+    final destination = File(
+      '${destinationDirectory.path}${Platform.pathSeparator}'
+      '$uniquePart-$index$extension',
+    );
+    try {
+      final copied = await source.copy(destination.path);
+      if (await copied.length() <= 0) {
+        await copied.delete();
+        unreadableCount++;
+        continue;
+      }
+      stagedPaths.add(copied.path);
+    } on FileSystemException {
+      unreadableCount++;
+    }
+  }
+
+  return ImageAttachmentValidationResult(
+    acceptedPaths: List.unmodifiable(stagedPaths),
+    duplicateCount: validation.duplicateCount,
+    limitExceededCount: validation.limitExceededCount,
+    tooLargeCount: validation.tooLargeCount,
+    unreadableCount: unreadableCount,
+  );
+}
+
+String _safeImageExtension(String path) {
+  final fileName = path.split(RegExp(r'[/\\]')).last;
+  final dotIndex = fileName.lastIndexOf('.');
+  if (dotIndex <= 0) return '.image';
+  final extension = fileName.substring(dotIndex).toLowerCase();
+  return RegExp(r'^\.[a-z0-9]{1,10}$').hasMatch(extension)
+      ? extension
+      : '.image';
+}
+
 /// 将本地图片转换为 DeepSeek 视觉接口接受的内联 JPEG Data URL。
 ///
 /// DeepSeek 会在推理前缩放图片，因此先在设备端限制尺寸和体积，可以避免
