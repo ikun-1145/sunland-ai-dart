@@ -543,20 +543,44 @@ class _StartupLoadingPage extends StatelessWidget {
 }
 
 class RootPage extends StatefulWidget {
-  const RootPage({super.key});
+  const RootPage({super.key, this.loginRestorer});
+
+  final Future<void> Function()? loginRestorer;
 
   @override
   State<RootPage> createState() => _RootPageState();
 }
 
 class _RootPageState extends State<RootPage> {
+  late final bool _wasRestoringLoginRequired;
+  bool _isRestoringLogin = false;
+
   @override
   void initState() {
     super.initState();
+    _wasRestoringLoginRequired = currentUserNotifier.value == null;
+    _isRestoringLogin = _wasRestoringLoginRequired;
     _restoreLogin();
   }
 
   Future<void> _restoreLogin() async {
+    try {
+      final loginRestorer = widget.loginRestorer;
+      if (loginRestorer != null) {
+        await loginRestorer();
+      } else {
+        await _restorePersistedLogin();
+      }
+    } catch (e) {
+      debugPrint('restore login failed: $e');
+    } finally {
+      if (mounted && _wasRestoringLoginRequired) {
+        setState(() => _isRestoringLogin = false);
+      }
+    }
+  }
+
+  Future<void> _restorePersistedLogin() async {
     final token = await _readFreshAuthToken(notify: false);
     final user = await _sessionStore.readUser();
 
@@ -603,7 +627,7 @@ class _RootPageState extends State<RootPage> {
 
     if (!chosen) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _showThemeDialog();
+        if (mounted) _showThemeDialog();
       });
     }
   }
@@ -614,6 +638,10 @@ class _RootPageState extends State<RootPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isRestoringLogin) {
+      return const _StartupLoadingPage();
+    }
+
     return ValueListenableBuilder<User?>(
       valueListenable: currentUserNotifier,
       builder: (context, user, _) {
@@ -4759,6 +4787,7 @@ class _ChatPageState extends State<ChatPage> {
     bool selected = false,
     bool locked = false,
     String assetPath = 'assets/deepseek.png',
+    double logoSize = 16,
     String? label,
     String? description,
     required VoidCallback onTap,
@@ -4778,9 +4807,9 @@ class _ChatPageState extends State<ChatPage> {
           children: [
             Image.asset(
               assetPath,
-              width: 18,
-              height: 18,
-              fit: BoxFit.cover,
+              width: logoSize,
+              height: logoSize,
+              fit: BoxFit.contain,
               errorBuilder: (_, _, _) => const SizedBox(),
             ),
             const SizedBox(width: 8),
@@ -5224,17 +5253,17 @@ class _ChatPageState extends State<ChatPage> {
               ],
             ),
             const SizedBox(height: 4),
-            // 第二行：状态信息
-            Text(
-              !isActivated ? "今日剩余 $_remainingCount 次" : "💎 Pro · 无限使用",
-              style: TextStyle(
-                fontSize: 11,
-                color: !isActivated
-                    ? (isDark ? Colors.white54 : Colors.black45)
-                    : const Color(0xFF22D3EE),
+            if (!isActivated) ...[
+              // 第二行：免费用户额度
+              Text(
+                "今日剩余 $_remainingCount 次",
+                style: TextStyle(
+                  fontSize: 11,
+                  color: isDark ? Colors.white54 : Colors.black45,
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
+              const SizedBox(height: 6),
+            ],
           ],
         ),
       ),
@@ -5515,14 +5544,19 @@ class _ChatPageState extends State<ChatPage> {
                                             _saveModelPrefs();
                                           },
                                     child: Container(
-                                      padding: const EdgeInsets.all(8),
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 7,
+                                      ),
                                       decoration: BoxDecoration(
                                         color: useDeep
                                             ? const Color(
                                                 0xFF22D3EE,
                                               ).withOpacity(0.2)
                                             : Colors.transparent,
-                                        borderRadius: BorderRadius.circular(10),
+                                        borderRadius: BorderRadius.circular(
+                                          999,
+                                        ),
                                         border: useDeep
                                             ? Border.all(
                                                 color: const Color(0xFF22D3EE),
@@ -5530,19 +5564,44 @@ class _ChatPageState extends State<ChatPage> {
                                               )
                                             : null,
                                       ),
-                                      child: Image.asset(
-                                        isDark
-                                            ? 'assets/ailogo_dark.png'
-                                            : 'assets/ailogo.png',
-                                        width: 28,
-                                        height: 28,
-                                        color:
-                                            isSunlandConversation ||
-                                                !isActivated
-                                            ? Colors.grey
-                                            : (useDeep
-                                                  ? const Color(0xFF22D3EE)
-                                                  : null),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Image.asset(
+                                            isDark
+                                                ? 'assets/ailogo_dark.png'
+                                                : 'assets/ailogo.png',
+                                            width: 22,
+                                            height: 22,
+                                            color:
+                                                isSunlandConversation ||
+                                                    !isActivated
+                                                ? Colors.grey
+                                                : (useDeep
+                                                      ? const Color(0xFF22D3EE)
+                                                      : null),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Text(
+                                            '深度思考',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w600,
+                                              color:
+                                                  isSunlandConversation ||
+                                                      !isActivated
+                                                  ? Colors.grey
+                                                  : (useDeep
+                                                        ? const Color(
+                                                            0xFF0891B2,
+                                                          )
+                                                        : (isDark
+                                                              ? Colors.white70
+                                                              : Colors
+                                                                    .black54)),
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ),
@@ -5621,6 +5680,7 @@ class _ChatPageState extends State<ChatPage> {
                                                           "云端符号推理，不使用 DeepSeek",
                                                       assetPath:
                                                           'assets/studio.png',
+                                                      logoSize: 24,
                                                       locked: !sunlandProvider
                                                           .isSupported,
                                                       selected:
