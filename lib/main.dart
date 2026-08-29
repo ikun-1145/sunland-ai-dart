@@ -5951,14 +5951,24 @@ class _FurryEventCarousel extends StatefulWidget {
 
 class _FurryEventCarouselState extends State<_FurryEventCarousel> {
   late final PageController _pageController;
+  int _currentPage = 0;
 
   @override
   void initState() {
     super.initState();
-    _pageController = PageController(
-      viewportFraction: 0.9,
-      initialPage: 1000, // ⭐ 实现"无限循环"
-    );
+    _pageController = PageController(viewportFraction: 0.9);
+  }
+
+  @override
+  void didUpdateWidget(covariant _FurryEventCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (identical(oldWidget.events, widget.events)) return;
+
+    _currentPage = 0;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_pageController.hasClients) return;
+      _pageController.jumpToPage(0);
+    });
   }
 
   @override
@@ -5971,6 +5981,11 @@ class _FurryEventCarouselState extends State<_FurryEventCarousel> {
   Widget build(BuildContext context) {
     final events = widget.events;
     final isDark = widget.isDark;
+    final lastPage = events.length - 1;
+    final sliderMax = lastPage > 0 ? lastPage.toDouble() : 1.0;
+    final sliderValue = lastPage > 0
+        ? _currentPage.clamp(0, lastPage).toDouble()
+        : 0.0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -5988,10 +6003,13 @@ class _FurryEventCarouselState extends State<_FurryEventCarousel> {
           height: 280,
           child: PageView.builder(
             controller: _pageController,
-            itemCount: events.isEmpty ? 0 : 2000, // ⭐ 假无限循环
+            itemCount: events.length,
+            onPageChanged: (page) {
+              if (_currentPage == page) return;
+              setState(() => _currentPage = page);
+            },
             itemBuilder: (context, index) {
-              final realIndex = index % events.length;
-              final e = Map<String, dynamic>.from(events[realIndex] as Map);
+              final e = Map<String, dynamic>.from(events[index] as Map);
               // 动态焦点缩放 + 居中吸附效果
               return AnimatedBuilder(
                 animation: _pageController,
@@ -6028,6 +6046,64 @@ class _FurryEventCarouselState extends State<_FurryEventCarousel> {
               );
             },
           ),
+        ),
+        const SizedBox(height: 4),
+        Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: 32,
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    trackHeight: 3,
+                    activeTrackColor: const Color(0xFF22D3EE),
+                    inactiveTrackColor: isDark
+                        ? Colors.white12
+                        : Colors.black12,
+                    thumbColor: const Color(0xFF0891B2),
+                    thumbShape: const RoundSliderThumbShape(
+                      enabledThumbRadius: 6,
+                    ),
+                    overlayShape: const RoundSliderOverlayShape(
+                      overlayRadius: 12,
+                    ),
+                  ),
+                  child: Slider(
+                    value: sliderValue,
+                    min: 0,
+                    max: sliderMax,
+                    divisions: lastPage > 0 ? lastPage : null,
+                    onChanged: lastPage > 0
+                        ? (value) {
+                            final page = value.round();
+                            if (page == _currentPage) return;
+                            setState(() => _currentPage = page);
+                            _pageController.animateToPage(
+                              page,
+                              duration: const Duration(milliseconds: 220),
+                              curve: Curves.easeOutCubic,
+                            );
+                          }
+                        : null,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 44,
+              child: Text(
+                '${_currentPage + 1} / ${events.length}',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white60 : Colors.black45,
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+          ],
         ),
       ],
     );
