@@ -4667,11 +4667,11 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _openSettings({bool openActivation = false}) async {
+  Future<void> _openSettings({bool openProPurchase = false}) async {
     final result = await Navigator.push<SettingsResult>(
       context,
       MaterialPageRoute(
-        builder: (_) => SettingsPage(openActivationOnStart: openActivation),
+        builder: (_) => SettingsPage(openProPurchaseOnStart: openProPurchase),
       ),
     );
 
@@ -4755,11 +4755,8 @@ class _ChatPageState extends State<ChatPage> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _openSettings(openActivation: true);
-                        },
-                        child: const Text("输入激活码"),
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text("稍后再说"),
                       ),
                     ),
                     const SizedBox(width: 14),
@@ -4767,7 +4764,7 @@ class _ChatPageState extends State<ChatPage> {
                       child: FilledButton(
                         onPressed: () {
                           Navigator.pop(context);
-                          _openSettings(openActivation: true);
+                          _openSettings(openProPurchase: true);
                         },
                         child: const Text("升级 Pro"),
                       ),
@@ -5200,7 +5197,7 @@ class _ChatPageState extends State<ChatPage> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: TextButton.icon(
-                      onPressed: () => _openSettings(openActivation: true),
+                      onPressed: () => _openSettings(openProPurchase: true),
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(
                           horizontal: 9,

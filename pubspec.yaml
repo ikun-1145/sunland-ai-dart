@@ -39,8 +39,6 @@ flutter:
     - assets/icons/google.png
     - assets/icons/github.svg
     - assets/ailogo.png
-    - assets/ten_wx.webp
-    - assets/ten_zfb.webp
     - assets/deepseek.png
     - assets/studio.png
     - assets/ailogo_dark.png

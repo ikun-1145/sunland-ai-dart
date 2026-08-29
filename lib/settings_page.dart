@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'main.dart';
 
+import 'pro_purchase.dart';
 import 'sunland_ai_core.dart';
 
 class SettingsResult {
@@ -20,15 +21,16 @@ class SettingsResult {
 }
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, this.openActivationOnStart = false});
+  const SettingsPage({super.key, this.openProPurchaseOnStart = false});
 
-  final bool openActivationOnStart;
+  final bool openProPurchaseOnStart;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
-class _SettingsPageState extends State<SettingsPage> {
+class _SettingsPageState extends State<SettingsPage>
+    with WidgetsBindingObserver {
   late final SunlandSessionStore _store = SunlandSessionStore();
   late final SupabaseAiRepository _repository = SupabaseAiRepository(
     tokenProvider: ({bool forceRefresh = false}) =>
@@ -41,13 +43,18 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _uploadingAvatar = false;
   String? _avatarStatus;
   String? _nickname;
-  bool _openedInitialActivation = false;
+  bool _openedInitialProPurchase = false;
   String _version = '';
   Timer? _avatarStatusTimer;
+  Timer? _proActivationPollingTimer;
+  DateTime? _proActivationPollingDeadline;
+  bool _awaitingProActivation = false;
+  bool _checkingProActivation = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     final rawUser = currentUserNotifier.value;
     if (rawUser != null) {
       _user = SunlandUser(id: rawUser.id, email: rawUser.email ?? '');
@@ -108,12 +115,12 @@ class _SettingsPageState extends State<SettingsPage> {
         _loading = false;
         _nickname = nickname;
       });
-      _openInitialActivationIfNeeded();
+      _openInitialProPurchaseIfNeeded();
     } catch (e) {
       debugPrint('Settings load error: $e');
       if (!mounted) return;
       setState(() => _loading = false);
-      _openInitialActivationIfNeeded();
+      _openInitialProPurchaseIfNeeded();
     }
   }
 
@@ -259,16 +266,16 @@ class _SettingsPageState extends State<SettingsPage> {
     controller.dispose();
   }
 
-  void _openInitialActivationIfNeeded() {
-    if (_openedInitialActivation ||
-        !widget.openActivationOnStart ||
+  void _openInitialProPurchaseIfNeeded() {
+    if (_openedInitialProPurchase ||
+        !widget.openProPurchaseOnStart ||
         _isActivated ||
         _user == null) {
       return;
     }
-    _openedInitialActivation = true;
+    _openedInitialProPurchase = true;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _activate();
+      if (mounted) _startProPurchase();
     });
   }
 
@@ -351,8 +358,17 @@ class _SettingsPageState extends State<SettingsPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _avatarStatusTimer?.cancel();
+    _proActivationPollingTimer?.cancel();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _awaitingProActivation) {
+      unawaited(_checkPurchasedPro());
+    }
   }
 
   User _userFromSunland(SunlandUser user) {
@@ -376,173 +392,100 @@ class _SettingsPageState extends State<SettingsPage> {
     })!;
   }
 
-  Future<void> _activate() async {
+  Future<void> _startProPurchase() async {
     final user = _user;
     if (user == null) {
       _showSnack('请先登录');
       return;
     }
 
-    final controller = TextEditingController();
-    var submitting = false;
-    await showDialog<void>(
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text('输入激活码'),
-              content: TextField(
-                controller: controller,
-                textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(
-                  hintText: 'SL-XXXX-XXXX',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: submitting
-                      ? null
-                      : () {
-                          Navigator.pop(dialogContext);
-                          _showPaySheet();
-                        },
-                  child: const Text('扫码支付'),
-                ),
-                FilledButton(
-                  onPressed: submitting
-                      ? null
-                      : () async {
-                          final code = controller.text.trim().toUpperCase();
-                          if (code.isEmpty) {
-                            _showSnack('请输入激活码');
-                            return;
-                          }
-                          setDialogState(() => submitting = true);
-                          try {
-                            final result = await _repository.activateCode(
-                              userId: user.id,
-                              code: code,
-                            );
-                            if (!mounted) return;
-                            switch (result) {
-                              case ActivationResult.success:
-                              case ActivationResult.alreadyActivated:
-                                setState(() => _isActivated = true);
-                                if (dialogContext.mounted) {
-                                  Navigator.pop(dialogContext);
-                                }
-                                _showSnack('激活成功，Pro 已解锁');
-                                break;
-
-                              case ActivationResult.invalidCode:
-                                _showSnack('激活码无效');
-                                break;
-
-                              case ActivationResult.usedByOther:
-                                _showSnack('这个激活码已被使用');
-                                break;
-
-                              case ActivationResult.raceLost:
-                                _showSnack('激活失败，可能刚被使用');
-                                break;
-                            }
-                          } catch (_) {
-                            _showSnack('激活失败，请稍后再试');
-                          } finally {
-                            if (mounted) {
-                              setDialogState(() => submitting = false);
-                            }
-                          }
-                        },
-                  child: submitting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(
-                              Colors.white,
-                            ),
-                          ),
-                        )
-                      : const Text('激活'),
-                ),
-              ],
-            );
-          },
+        return AlertDialog(
+          title: const Text('前往爱发电开通 Pro？'),
+          content: const Text(
+            '请选择“月付”方案（¥10 / 月）即可。付款成功后将自动开通永久 Pro，'
+            '无需多选月份，多付不会增加权益。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('前往支付'),
+            ),
+          ],
         );
       },
     );
-    controller.dispose();
+    if (!mounted || confirmed != true) return;
+
+    final uri = buildProPurchaseUri(user.id);
+    try {
+      final opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!mounted) return;
+      if (!opened) {
+        _showSnack('暂时无法打开爱发电，请稍后再试');
+        return;
+      }
+      _startProActivationPolling();
+    } catch (error) {
+      debugPrint('Open Pro purchase error: $error');
+      if (mounted) _showSnack('暂时无法打开爱发电，请稍后再试');
+    }
   }
 
-  void _showPaySheet() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 42,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.outlineVariant,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                const Text(
-                  '解锁 Pro · 永久使用',
-                  style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  '一次付费，永久无限使用。支付后发送截图至 sunlandccc@outlook.com 获取激活码。',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    height: 1.5,
-                  ),
-                ),
-                const SizedBox(height: 18),
-                Row(
-                  children: [
-                    Expanded(
-                      child: _PaymentQr(
-                        label: '微信',
-                        asset: 'assets/ten_wx.webp',
-                      ),
-                    ),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: _PaymentQr(
-                        label: '支付宝',
-                        asset: 'assets/ten_zfb.webp',
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                    _activate();
-                  },
-                  child: const Text('我已有激活码'),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
+  void _startProActivationPolling() {
+    _proActivationPollingTimer?.cancel();
+    _awaitingProActivation = true;
+    _proActivationPollingDeadline = DateTime.now().add(
+      const Duration(minutes: 3),
     );
+    unawaited(_checkPurchasedPro());
+    _proActivationPollingTimer = Timer.periodic(const Duration(seconds: 3), (
+      timer,
+    ) {
+      final deadline = _proActivationPollingDeadline;
+      if (deadline == null || DateTime.now().isAfter(deadline)) {
+        timer.cancel();
+        _proActivationPollingTimer = null;
+        _awaitingProActivation = false;
+        if (mounted) {
+          _showSnack('开通处理中，付款成功后约 1-2 分钟自动生效，可稍后刷新');
+        }
+        return;
+      }
+      unawaited(_checkPurchasedPro());
+    });
+  }
+
+  Future<void> _checkPurchasedPro() async {
+    if (!_awaitingProActivation || _checkingProActivation) return;
+    final user = _user;
+    if (user == null) return;
+
+    _checkingProActivation = true;
+    try {
+      final activated = await _repository.isActivated(user.id);
+      if (!mounted ||
+          !_awaitingProActivation ||
+          _user?.id != user.id ||
+          !activated) {
+        return;
+      }
+      _proActivationPollingTimer?.cancel();
+      _proActivationPollingTimer = null;
+      _awaitingProActivation = false;
+      setState(() => _isActivated = true);
+      _showSnack('支付成功，Pro 已解锁');
+    } catch (error) {
+      debugPrint('Refresh Pro status error: $error');
+    } finally {
+      _checkingProActivation = false;
+    }
   }
 
   Future<void> _logout() async {
@@ -806,8 +749,7 @@ class _SettingsPageState extends State<SettingsPage> {
                         _SectionTitle('会员'),
                         _ProPanel(
                           activated: _isActivated,
-                          onActivate: _activate,
-                          onPay: _showPaySheet,
+                          onPurchase: _startProPurchase,
                         ),
                         const SizedBox(height: 10),
                         _SectionTitle('其他'),
@@ -1101,15 +1043,10 @@ class _ActionRow extends StatelessWidget {
 }
 
 class _ProPanel extends StatelessWidget {
-  const _ProPanel({
-    required this.activated,
-    required this.onActivate,
-    required this.onPay,
-  });
+  const _ProPanel({required this.activated, required this.onPurchase});
 
   final bool activated;
-  final VoidCallback onActivate;
-  final VoidCallback onPay;
+  final VoidCallback onPurchase;
 
   @override
   Widget build(BuildContext context) {
@@ -1227,7 +1164,7 @@ class _ProPanel extends StatelessWidget {
                     color: Colors.transparent,
                     child: InkWell(
                       borderRadius: BorderRadius.circular(12),
-                      onTap: onActivate,
+                      onTap: onPurchase,
                       child: const Padding(
                         padding: EdgeInsets.symmetric(vertical: 12),
                         child: Center(
@@ -1277,31 +1214,6 @@ class _FeatureChip extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _PaymentQr extends StatelessWidget {
-  const _PaymentQr({required this.label, required this.asset});
-
-  final String label;
-  final String asset;
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Column(
-      children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(14),
-          child: Image.asset(asset, fit: BoxFit.cover),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: TextStyle(color: isDark ? Colors.white54 : Colors.black54),
-        ),
-      ],
     );
   }
 }
