@@ -807,14 +807,41 @@ class SunlandApiClient {
   }
 
   Future<String?> generateTitle({
+    required String conversationId,
     required String userMessage,
     required String aiMessage,
   }) async {
-    final title = userMessage.trim().replaceAll('\n', ' ');
-    if (title.length < 3) return null;
+    if (conversationId.trim().isEmpty ||
+        userMessage.trim().isEmpty ||
+        aiMessage.trim().isEmpty) {
+      return null;
+    }
 
-    final chars = title.characters;
-    return chars.length > 12 ? '${chars.take(12)}…' : title;
+    final token = await tokenProvider();
+    if (token == null || token.isEmpty) throw const AuthExpiredException();
+
+    final response = await client
+        .post(
+          Uri.parse('$sunlandApiBase/v1/conversation-title'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer $token',
+          },
+          body: jsonEncode({
+            'conversationId': conversationId,
+            'userMessage': userMessage,
+            'aiMessage': aiMessage,
+          }),
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode == 401) throw const AuthExpiredException();
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _exceptionForApiError(response.statusCode, response.body);
+    }
+
+    final body = _tryDecodeJsonObject(response.body);
+    return normalizeConversationTitle((body['title'] ?? '').toString());
   }
 
   /// 新增：尝试解析 JSON 行
@@ -1435,6 +1462,39 @@ String buildConversationTitle(String text) {
 
   final chars = trimmed.characters;
   return chars.length > 15 ? '${chars.take(15)}…' : trimmed;
+}
+
+bool shouldGenerateConversationTitle({
+  required int userMessageCount,
+  required bool titleGenerated,
+  required String userMessage,
+  required String aiMessage,
+}) {
+  return userMessageCount == 1 &&
+      !titleGenerated &&
+      userMessage.trim().isNotEmpty &&
+      aiMessage.trim().isNotEmpty;
+}
+
+String? normalizeConversationTitle(String text) {
+  var title = text
+      .trim()
+      .replaceFirst(RegExp(r'^```[^\n]*\n?'), '')
+      .replaceFirst(RegExp(r'\n?```$'), '')
+      .split(RegExp(r'\r?\n'))
+      .first
+      .replaceFirst(RegExp(r'^(?:对话)?标题\s*[:：]\s*'), '')
+      .replaceFirst(RegExp(r'''^[“”"'「」『』]+'''), '')
+      .replaceFirst(RegExp(r'''[“”"'「」『』]+$'''), '')
+      .replaceAll(RegExp(r'[\s　]+'), ' ')
+      .trim()
+      .replaceFirst(RegExp(r'[。.!?！？,，;；:：]+$'), '')
+      .trim();
+  if (title.isEmpty) return null;
+
+  final chars = title.characters;
+  if (chars.length > 15) title = chars.take(15).toString();
+  return title.isEmpty ? null : title;
 }
 
 class ModerationResult {

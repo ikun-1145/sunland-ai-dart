@@ -258,6 +258,68 @@ test("banned users are rejected before the AI upstream request", async () => {
   assert.match(calls[0].url, /\/rest\/v1\/user_profiles\?/);
 });
 
+test("conversation title summarizes only the supplied first exchange without consuming chat quota", async () => {
+  const calls = [];
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  const cst = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const today = cst.toISOString().slice(0, 10);
+  const chatUsageKey = `usage:user-a:${today}`;
+  await environment.USAGE_KV.put(chatUsageKey, "20");
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false, pro: false }]);
+    }
+    return Response.json({
+      choices: [{ message: { content: "「缓存一致性修复。」" } }],
+    });
+  };
+
+  const response = await worker.fetch(
+    request("/v1/conversation-title", {
+      conversationId: "conversation-1",
+      userMessage: "用户第一次提问",
+      aiMessage: "AI 第一次回复",
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { title: "缓存一致性修复" });
+  assert.equal(calls.length, 2);
+  const upstreamBody = JSON.parse(calls[1].init.body);
+  assert.equal(upstreamBody.model, "deepseek-v4-flash");
+  assert.equal(upstreamBody.stream, false);
+  assert.deepEqual(upstreamBody.thinking, { type: "disabled" });
+  assert.match(upstreamBody.messages[1].content, /用户第一次提问/u);
+  assert.match(upstreamBody.messages[1].content, /AI 第一次回复/u);
+  const usageKeys = [...environment.USAGE_KV.values.keys()];
+  assert.equal(environment.USAGE_KV.values.get(chatUsageKey), "20");
+  const titleUsageKey = usageKeys.find(key => key.startsWith("title_usage:user-a:"));
+  assert.equal(environment.USAGE_KV.values.get(titleUsageKey), "1");
+});
+
+test("conversation title rejects incomplete exchanges before the AI request", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return Response.json([{ is_banned: false, pro: false }]);
+  };
+
+  const response = await worker.fetch(
+    request("/v1/conversation-title", {
+      conversationId: "conversation-1",
+      userMessage: "只有用户消息",
+      aiMessage: "   ",
+    }),
+    env({ DEEPSEEK_API_KEY: "test-deepseek-key" }),
+  );
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: "invalid conversation exchange" });
+  assert.equal(calls.length, 1);
+});
+
 test("Pro model uses user_profiles.pro despite a stale negative KV entry", async () => {
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });

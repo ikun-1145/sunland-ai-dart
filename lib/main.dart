@@ -3367,6 +3367,7 @@ class _ChatPageState extends State<ChatPage> {
             'model': model.model,
             if (model.userId != null) 'userId': model.userId,
             'createdAt': model.createdAt,
+            if (model.autoTitle) '_autoTitle': true,
           };
           merged[model.id] = cloudConversation;
         }
@@ -4242,6 +4243,14 @@ class _ChatPageState extends State<ChatPage> {
         setState(() => pickedImages.clear());
       }
 
+      ({
+        String conversationId,
+        String userId,
+        String userMessage,
+        String aiMessage,
+        String fallbackTitle,
+      })?
+      pendingTitleRequest;
       final activeIndex = conversations.indexWhere(
         (c) => c['id'] == currentConversationId,
       );
@@ -4253,16 +4262,44 @@ class _ChatPageState extends State<ChatPage> {
         final titleGenerated =
             conversations[activeIndex]['titleGenerated'] ?? false;
         final userMsgCount = messages.where((m) => m["isUser"] == true).length;
-        if (userMsgCount == 1 && !titleGenerated) {
-          conversations[activeIndex]['title'] = buildConversationTitle(
-            displayedUserText,
-          );
+        if (shouldGenerateConversationTitle(
+          userMessageCount: userMsgCount,
+          titleGenerated: titleGenerated,
+          userMessage: displayedUserText,
+          aiMessage: responseContent,
+        )) {
+          final conversationId =
+              conversations[activeIndex]['id']?.toString() ?? '';
+          final fallbackTitle = buildConversationTitle(displayedUserText);
+          conversations[activeIndex]['title'] = fallbackTitle;
           conversations[activeIndex]['titleGenerated'] = true;
+          if (user != null && conversationId.isNotEmpty) {
+            pendingTitleRequest = (
+              conversationId: conversationId,
+              userId: user.id,
+              userMessage: displayedUserText,
+              aiMessage: responseContent,
+              fallbackTitle: fallbackTitle,
+            );
+          }
         }
       }
 
       rememberLocalMessages();
       if (user != null) await _saveToCloud();
+
+      final titleRequest = pendingTitleRequest;
+      if (titleRequest != null) {
+        unawaited(
+          _generateFirstConversationTitle(
+            conversationId: titleRequest.conversationId,
+            requestUserId: titleRequest.userId,
+            userMessage: titleRequest.userMessage,
+            aiMessage: titleRequest.aiMessage,
+            fallbackTitle: titleRequest.fallbackTitle,
+          ),
+        );
+      }
 
       if (!mounted || _cancelRequested || generationId != _generationSerial) {
         return;
@@ -4353,6 +4390,55 @@ class _ChatPageState extends State<ChatPage> {
         });
       }
     }
+  }
+
+  Future<void> _generateFirstConversationTitle({
+    required String conversationId,
+    required String requestUserId,
+    required String userMessage,
+    required String aiMessage,
+    required String fallbackTitle,
+  }) async {
+    if (currentUserNotifier.value?.id != requestUserId) return;
+
+    String? aiTitle;
+    try {
+      aiTitle = await apiClient.generateTitle(
+        conversationId: conversationId,
+        userMessage: userMessage,
+        aiMessage: aiMessage,
+      );
+    } catch (e) {
+      debugPrint('Conversation title generation skipped: $e');
+      return;
+    }
+
+    if (!mounted ||
+        aiTitle == null ||
+        aiTitle.isEmpty ||
+        currentUserNotifier.value?.id != requestUserId) {
+      return;
+    }
+
+    final index = conversations.indexWhere(
+      (conversation) => conversation['id']?.toString() == conversationId,
+    );
+    if (index == -1 ||
+        conversations[index]['titleGenerated'] != true ||
+        conversations[index]['title']?.toString() != fallbackTitle) {
+      return;
+    }
+
+    final previousUpdatedAt =
+        int.tryParse(conversations[index]['updatedAt']?.toString() ?? '') ?? 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    setState(() {
+      conversations[index]['title'] = aiTitle;
+      conversations[index]['updatedAt'] = now > previousUpdatedAt
+          ? now
+          : previousUpdatedAt + 1;
+    });
+    await _saveToCloud();
   }
 
   @override
