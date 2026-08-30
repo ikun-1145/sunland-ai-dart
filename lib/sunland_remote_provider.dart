@@ -41,6 +41,7 @@ class SunlandRemoteProvider {
     required String conversationId,
     required String input,
     required String turnId,
+    String observationMode = 'off',
   }) async {
     if (_normalizeUserId(userId) == null || conversationUserId != userId) {
       throw const SunlandRemoteProviderException('登录状态好像出了点问题，请重新登录后再试一下。');
@@ -59,7 +60,7 @@ class SunlandRemoteProvider {
           'conversationId': conversationId,
           'turnId': turnId,
           'input': input,
-          'observationMode': 'off',
+          'observationMode': observationMode == 'summary' ? 'summary' : 'off',
         },
         cancelToken,
         userId,
@@ -71,6 +72,13 @@ class SunlandRemoteProvider {
       return SunlandRemoteResponse(
         content: content,
         migrationWarning: migrationWarning,
+        observationSummary: data['observationSummary'] is Map
+            ? Map<String, dynamic>.from(
+                (data['observationSummary'] as Map).map(
+                  (key, value) => MapEntry(key.toString(), value),
+                ),
+              )
+            : null,
       );
     } on DioException catch (error) {
       if (CancelToken.isCancel(error)) {
@@ -96,6 +104,64 @@ class SunlandRemoteProvider {
       cancelToken,
       userId,
     );
+  }
+
+  Future<List<SunlandKnowledgeRecord>> listKnowledge({
+    required String userId,
+  }) async {
+    try {
+      final data = await _authorizedGet(
+        '/v1/knowledge',
+        userId,
+        queryParameters: const <String, dynamic>{'limit': 100},
+      );
+      final items = data['items'];
+      if (items is! List || items.length > 100) {
+        throw const FormatException('invalid knowledge response');
+      }
+      return items.map(SunlandKnowledgeRecord.fromJson).toList(growable: false);
+    } on DioException catch (error) {
+      throw SunlandRemoteProviderException(
+        error.response?.statusCode == 429
+            ? '请求有点频繁，请稍后再试。'
+            : '暂时无法读取教学知识，请稍后再试。',
+      );
+    } on SunlandRemoteProviderException {
+      rethrow;
+    } catch (_) {
+      throw const SunlandRemoteProviderException('教学知识数据格式无效');
+    }
+  }
+
+  Future<void> deleteKnowledge({
+    required String userId,
+    required String knowledgeId,
+  }) {
+    final normalizedId = _boundedText(knowledgeId, 128);
+    return _deleteUserData(
+      '/v1/knowledge/${Uri.encodeComponent(normalizedId)}',
+      userId,
+    );
+  }
+
+  Future<void> deleteAllKnowledge({required String userId}) {
+    return _deleteUserData('/v1/knowledge', userId);
+  }
+
+  Future<void> deleteRememberedName({required String userId}) {
+    return _deleteUserData('/v1/memory/name', userId);
+  }
+
+  Future<void> _deleteUserData(String path, String userId) async {
+    try {
+      await _authorizedDelete(path, CancelToken(), userId);
+    } on DioException catch (error) {
+      throw SunlandRemoteProviderException(
+        error.response?.statusCode == 429
+            ? '请求有点频繁，请稍后再试。'
+            : '暂时无法完成这个操作，请稍后再试。',
+      );
+    }
   }
 
   void cancelCurrent() {
@@ -157,6 +223,33 @@ class SunlandRemoteProvider {
             },
           ),
           cancelToken: cancelToken,
+        );
+        return response.data ?? <String, dynamic>{};
+      } on DioException catch (error) {
+        if (error.response?.statusCode != 401 || attempt == 1) rethrow;
+      }
+    }
+    throw const SunlandRemoteProviderException('登录已过期，请重新登录');
+  }
+
+  Future<Map<String, dynamic>> _authorizedGet(
+    String path,
+    String expectedUserId, {
+    Map<String, dynamic>? queryParameters,
+  }) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final token = await tokenProvider(forceRefresh: attempt == 1);
+      if (token == null) {
+        throw const SunlandRemoteProviderException('登录已过期，请重新登录');
+      }
+      if (_tokenUserId(token) != expectedUserId) {
+        throw const SunlandRemoteProviderException('登录身份已切换，请重试');
+      }
+      try {
+        final response = await _dio.get<Map<String, dynamic>>(
+          '$baseUrl$path',
+          queryParameters: queryParameters,
+          options: Options(headers: {'authorization': 'Bearer $token'}),
         );
         return response.data ?? <String, dynamic>{};
       } on DioException catch (error) {
@@ -317,9 +410,45 @@ class SunlandRemoteProvider {
 }
 
 class SunlandRemoteResponse {
-  const SunlandRemoteResponse({required this.content, this.migrationWarning});
+  const SunlandRemoteResponse({
+    required this.content,
+    this.migrationWarning,
+    this.observationSummary,
+  });
   final String content;
   final String? migrationWarning;
+  final Map<String, dynamic>? observationSummary;
+}
+
+class SunlandKnowledgeRecord {
+  const SunlandKnowledgeRecord({
+    required this.id,
+    required this.subject,
+    required this.relation,
+    required this.object,
+    required this.negated,
+  });
+
+  final String id;
+  final String subject;
+  final String relation;
+  final String object;
+  final bool negated;
+
+  String get label => '$subject ${negated ? '不' : ''}$relation $object';
+
+  factory SunlandKnowledgeRecord.fromJson(Object? value) {
+    if (value is! Map || value['negated'] is! bool) {
+      throw const FormatException('invalid knowledge record');
+    }
+    return SunlandKnowledgeRecord(
+      id: _boundedText(value['id'], 128),
+      subject: _boundedText(value['subject'], 256),
+      relation: _boundedText(value['relation'], 128),
+      object: _boundedText(value['object'], 512),
+      negated: value['negated'] as bool,
+    );
+  }
 }
 
 class SunlandRemoteProviderException implements Exception {
@@ -334,6 +463,16 @@ String? _normalizeUserId(String value) {
   return RegExp(r'^[A-Za-z0-9][A-Za-z0-9@._+\-]{0,127}$').hasMatch(value)
       ? value
       : null;
+}
+
+String _boundedText(Object? value, int maximumLength) {
+  if (value is! String ||
+      value != value.trim() ||
+      value.isEmpty ||
+      value.length > maximumLength) {
+    throw const FormatException('invalid text');
+  }
+  return value;
 }
 
 String? _tokenUserId(String token) {

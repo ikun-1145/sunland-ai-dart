@@ -27,6 +27,7 @@ dependencies:
   app_links: ^7.0.0
   characters: ^1.4.0
   image: ^4.5.4
+  crypto: ^3.0.7
 
 dev_dependencies:
   flutter_test:

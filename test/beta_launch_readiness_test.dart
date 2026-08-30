@@ -41,4 +41,22 @@ void main() {
     expect(coreSource, isNot(contains("from('user_profiles').upsert")));
     expect(coreSource, contains('/v1/activation/claim'));
   });
+
+  test('本地 Beta 诊断只接入真实 Sunland 远端请求', () {
+    final mainSource = File('lib/main.dart').readAsStringSync();
+    final settingsSource = File('lib/settings_page.dart').readAsStringSync();
+
+    expect(mainSource, contains('betaDiagnostics.capture(requestUserId)'));
+    expect(
+      mainSource,
+      contains('observationMode: diagnosticsCapture.observationMode'),
+    );
+    expect(mainSource, contains('betaDiagnostics.record('));
+    expect(
+      mainSource,
+      contains('observationSummary: result.observationSummary'),
+    );
+    expect(settingsSource, contains('SunlandDataManagementCard('));
+    expect(settingsSource, contains('SunlandBetaDiagnosticsCard('));
+  });
 }

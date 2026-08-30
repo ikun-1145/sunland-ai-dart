@@ -16,6 +16,7 @@ import 'captcha_page.dart';
 import 'settings_page.dart';
 import 'update_service.dart';
 import 'furry_event_api.dart';
+import 'sunland_beta_diagnostics.dart';
 import 'sunland_remote_provider.dart';
 import 'database_token_provider.dart';
 import 'ban_page.dart';
@@ -2860,6 +2861,7 @@ class _ChatPageState extends State<ChatPage> {
 
   late final SunlandApiClient apiClient;
   late final SunlandRemoteProvider sunlandProvider;
+  late final SunlandBetaDiagnosticsStore betaDiagnostics;
   late final SupabaseAiRepository repo;
   late final SunlandSessionStore store;
   final supabase = Supabase.instance.client;
@@ -3449,6 +3451,7 @@ class _ChatPageState extends State<ChatPage> {
       tokenProvider: ({bool forceRefresh = false}) =>
           _readFreshAuthToken(forceRefresh: forceRefresh),
     );
+    betaDiagnostics = sharedSunlandBetaDiagnosticsStore;
     repo = SupabaseAiRepository(
       tokenProvider: ({bool forceRefresh = false}) =>
           _readFreshAuthToken(forceRefresh: forceRefresh),
@@ -4031,14 +4034,50 @@ class _ChatPageState extends State<ChatPage> {
           }
         } else {
           final activeConversation = conversationAtStart!;
+          final requestUserId = user!.id;
+          var diagnosticsCapture = SunlandBetaDiagnosticsCapture(
+            userId: requestUserId,
+            enabled: false,
+            revision: 0,
+          );
+          try {
+            diagnosticsCapture = await betaDiagnostics.capture(requestUserId);
+          } catch (_) {
+            // 本地诊断是旁路功能，存储不可用时不能影响正常对话。
+          }
           final result = await sunlandProvider.send(
-            userId: user!.id,
+            userId: requestUserId,
             conversationUserId: activeConversation['userId'].toString(),
             conversationId: activeConversation['id'].toString(),
             input: text,
             turnId: '$generationId-${DateTime.now().microsecondsSinceEpoch}',
+            observationMode: diagnosticsCapture.observationMode,
           );
           if (_cancelRequested || generationId != _generationSerial) return;
+          try {
+            await betaDiagnostics.record(
+              capture: diagnosticsCapture,
+              currentUserId: currentUserNotifier.value?.id,
+              observationSummary: result.observationSummary,
+              eligibilityProvider: () {
+                if (!mounted ||
+                    _cancelRequested ||
+                    generationId != _generationSerial ||
+                    currentUserNotifier.value?.id != requestUserId) {
+                  return false;
+                }
+                return conversations.any(
+                  (conversation) =>
+                      conversation['id']?.toString() ==
+                          activeConversation['id']?.toString() &&
+                      conversation['userId']?.toString() == requestUserId &&
+                      conversation['provider'] == sunlandProviderId,
+                );
+              },
+            );
+          } catch (_) {
+            // 汇总失败不会改变 Sunland AI 的正常返回结果。
+          }
           responseContent = result.content;
           if (result.migrationWarning != null && mounted) {
             ScaffoldMessenger.of(

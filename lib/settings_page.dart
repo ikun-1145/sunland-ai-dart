@@ -10,7 +10,10 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'main.dart';
 
 import 'pro_purchase.dart';
+import 'sunland_beta_diagnostics.dart';
 import 'sunland_ai_core.dart';
+import 'sunland_remote_provider.dart';
+import 'widgets/sunland_settings_sections.dart';
 
 class SettingsResult {
   const SettingsResult({this.user, this.loggedOut = false, this.activated});
@@ -55,6 +58,12 @@ class _SettingsPageState extends State<SettingsPage>
     tokenProvider: ({bool forceRefresh = false}) =>
         readFreshAuthToken(forceRefresh: forceRefresh),
   );
+  late final SunlandRemoteProvider _sunlandDataProvider = SunlandRemoteProvider(
+    tokenProvider: ({bool forceRefresh = false}) =>
+        readFreshAuthToken(forceRefresh: forceRefresh),
+  );
+  late final SunlandBetaDiagnosticsStore _betaDiagnostics =
+      sharedSunlandBetaDiagnosticsStore;
   SunlandUser? _user;
   bool _isActivated = false;
   int _usageCount = 0;
@@ -380,6 +389,7 @@ class _SettingsPageState extends State<SettingsPage>
     WidgetsBinding.instance.removeObserver(this);
     _avatarStatusTimer?.cancel();
     _proActivationPollingTimer?.cancel();
+    unawaited(_sunlandDataProvider.dispose());
     super.dispose();
   }
 
@@ -767,6 +777,36 @@ class _SettingsPageState extends State<SettingsPage>
                           activated: _isActivated,
                           onPurchase: _startProPurchase,
                         ),
+                        if (user != null) ...[
+                          const SizedBox(height: 10),
+                          _SectionTitle('Sunland AI · Beta 数据管理'),
+                          SunlandDataManagementCard(
+                            key: ValueKey('sunland-data-${user.id}'),
+                            userId: user.id,
+                            currentUserIdProvider: () =>
+                                currentUserNotifier.value?.id,
+                            loadKnowledge: () => _sunlandDataProvider
+                                .listKnowledge(userId: user.id),
+                            deleteKnowledge: (knowledgeId) =>
+                                _sunlandDataProvider.deleteKnowledge(
+                                  userId: user.id,
+                                  knowledgeId: knowledgeId,
+                                ),
+                            deleteAllKnowledge: () => _sunlandDataProvider
+                                .deleteAllKnowledge(userId: user.id),
+                            deleteRememberedName: () => _sunlandDataProvider
+                                .deleteRememberedName(userId: user.id),
+                          ),
+                          const SizedBox(height: 10),
+                          _SectionTitle('隐私与诊断'),
+                          SunlandBetaDiagnosticsCard(
+                            key: ValueKey('sunland-diagnostics-${user.id}'),
+                            userId: user.id,
+                            currentUserIdProvider: () =>
+                                currentUserNotifier.value?.id,
+                            store: _betaDiagnostics,
+                          ),
+                        ],
                         const SizedBox(height: 10),
                         _SectionTitle('其他'),
                         _SettingsCard(

@@ -196,6 +196,102 @@ void main() {
     await provider.dispose();
   });
 
+  test(
+    'summary observation mode returns only the server summary payload',
+    () async {
+      final provider = SunlandRemoteProvider(
+        dio: _dio((options, _) async {
+          final body = _body(options);
+          expect(body['observationMode'], 'summary');
+          expect(body, isNot(contains('userId')));
+          return _jsonBody({
+            'response': '已理解',
+            'observationSummary': {
+              'schemaVersion': 1,
+              'sunlandCoreVersion': '0.1.0',
+            },
+          });
+        }),
+        baseUrl: 'https://ai-core.test',
+        tokenProvider: ({bool forceRefresh = false}) async =>
+            _appToken('user-a'),
+      );
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        'sunland_remote_migration_user-a',
+        jsonEncode({'status': 'complete'}),
+      );
+
+      final result = await provider.send(
+        userId: 'user-a',
+        conversationUserId: 'user-a',
+        conversationId: 'conversation-a',
+        input: '你好',
+        turnId: 'turn-summary',
+        observationMode: 'summary',
+      );
+
+      expect(result.content, '已理解');
+      expect(result.observationSummary, {
+        'schemaVersion': 1,
+        'sunlandCoreVersion': '0.1.0',
+      });
+      await provider.dispose();
+    },
+  );
+
+  test(
+    'knowledge and memory controls use authenticated user-scoped routes',
+    () async {
+      final requests = <RequestOptions>[];
+      final provider = SunlandRemoteProvider(
+        dio: _dio((options, _) async {
+          requests.add(options);
+          expect(options.headers['authorization'], startsWith('Bearer '));
+          if (options.method == 'GET') {
+            return _jsonBody({
+              'items': [
+                {
+                  'id': 'knowledge/a',
+                  'subject': '小蓝',
+                  'relation': '喜欢',
+                  'object': '猫',
+                  'negated': false,
+                },
+              ],
+              'nextCursor': null,
+            });
+          }
+          return ResponseBody.fromString('', 204);
+        }),
+        baseUrl: 'https://ai-core.test',
+        tokenProvider: ({bool forceRefresh = false}) async =>
+            _appToken('user-a'),
+      );
+
+      final records = await provider.listKnowledge(userId: 'user-a');
+      await provider.deleteKnowledge(
+        userId: 'user-a',
+        knowledgeId: records.single.id,
+      );
+      await provider.deleteAllKnowledge(userId: 'user-a');
+      await provider.deleteRememberedName(userId: 'user-a');
+
+      expect(records.single.label, '小蓝 喜欢 猫');
+      expect(
+        requests.map((request) => '${request.method} ${request.uri.path}'),
+        <String>[
+          'GET /v1/knowledge',
+          'DELETE /v1/knowledge/knowledge%2Fa',
+          'DELETE /v1/knowledge',
+          'DELETE /v1/memory/name',
+        ],
+      );
+      expect(requests.first.uri.queryParameters['limit'], '100');
+      await provider.dispose();
+    },
+  );
+
   test('CancelToken terminates an in-flight remote request', () async {
     final provider = SunlandRemoteProvider(
       dio: _dio((options, cancelFuture) async {
