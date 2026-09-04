@@ -1,4 +1,6 @@
 // @ts-nocheck
+import { handleControlPlaneRequest } from "./admin.js";
+
 const MAX_STANDARD_REQUEST_BYTES = 200 * 1024;
 const MAX_AI_REQUEST_BYTES = 16 * 1024 * 1024;
 const MAX_VISION_IMAGE_COUNT = 4;
@@ -28,6 +30,15 @@ export default {
     if (url.pathname.startsWith(DOWNLOAD_PATH_PREFIX)) {
       return handleReleaseDownload(request, env, ctx, url);
     }
+
+    // 激活码已由独立产品决定正式退休。此处在鉴权和请求体解析前终止，
+    // 避免旧客户端或脚本再触达领取 RPC。
+    if (url.pathname === "/v1/activation/claim") {
+      return json({ error: "ACTIVATION_CODES_RETIRED" }, 410, env);
+    }
+
+    const controlPlaneResponse = await handleControlPlaneRequest(request, env, url);
+    if (controlPlaneResponse) return controlPlaneResponse;
 
     if (request.method !== "POST") {
       return json({ error: "Method not allowed" }, 405, env);
@@ -162,47 +173,72 @@ export default {
       const key = encodeURIComponent(email.toLowerCase().trim());
 
       // 60秒冷却
-      const last = await env.CODE_STORE.get("cooldown:" + key);
+      const last = await kvGet(
+        env,
+        "CODE_STORE",
+        "send-code-cooldown-read",
+        "cooldown:" + key,
+      );
       if (last && Date.now() - Number(last) < 60000) {
         return json({ error: "发送过于频繁，请稍候" }, 429, env);
       }
 
-      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const random = new Uint32Array(1);
+      crypto.getRandomValues(random);
+      const code = String(100000 + (random[0] % 900000));
 
-      // 写入验证码 + 冷却 + 清空失败计数
+      // 先写入验证码并清空失败计数；冷却只在邮件发送成功后设置。
       await Promise.all([
-        env.CODE_STORE.put("code:" + key, code, { expirationTtl: 300 }),
-        env.CODE_STORE.put("cooldown:" + key, String(Date.now()), { expirationTtl: 60 }),
-        env.CODE_STORE.delete("fail:" + key)
+        kvPut(env, "CODE_STORE", "send-code-code-put", "code:" + key, code, {
+          expirationTtl: 300,
+        }),
+        kvDelete(env, "CODE_STORE", "send-code-fail-delete", "fail:" + key),
       ]);
 
-      const mailRes = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendApiToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          from: "霜蓝 AI <no-reply@api-mail.sunland.dev>",
-          to: email,
-          subject: "霜蓝 AI 登录验证码",
-          html: `
-            <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;">
-              <h2 style="color:#0f172a;margin-bottom:8px;">霜蓝 AI 登录验证码</h2>
-              <p style="color:#64748b;margin-bottom:24px;">请在 5 分钟内使用以下验证码完成登录：</p>
-              <div style="background:#f0f9ff;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:32px;font-weight:700;color:#0284c7;">
-                ${code}
+      let mailRes;
+      try {
+        mailRes = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${resendApiToken}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: "霜蓝 AI <no-reply@api-mail.sunland.dev>",
+            to: email,
+            subject: "霜蓝 AI 登录验证码",
+            html: `
+              <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;">
+                <h2 style="color:#0f172a;margin-bottom:8px;">霜蓝 AI 登录验证码</h2>
+                <p style="color:#64748b;margin-bottom:24px;">请在 5 分钟内使用以下验证码完成登录：</p>
+                <div style="background:#f0f9ff;border-radius:12px;padding:20px;text-align:center;letter-spacing:8px;font-size:32px;font-weight:700;color:#0284c7;">
+                  ${code}
+                </div>
+                <p style="color:#94a3b8;font-size:12px;margin-top:24px;">如果这不是你的操作，请忽略此邮件。</p>
               </div>
-              <p style="color:#94a3b8;font-size:12px;margin-top:24px;">如果这不是你的操作，请忽略此邮件。</p>
-            </div>
-          `
-        })
-      });
+            `
+          })
+        });
+      } catch (error) {
+        await kvDelete(env, "CODE_STORE", "send-code-code-cleanup", "code:" + key);
+        console.error("[RESEND_REQUEST_ERROR]", error);
+        return json({ error: "邮件发送失败，请稍后重试" }, 500, env);
+      }
 
       if (!mailRes.ok) {
         console.error(`[RESEND_ERROR] status=${mailRes.status}`);
+        await kvDelete(env, "CODE_STORE", "send-code-code-cleanup", "code:" + key);
         return json({ error: "邮件发送失败，请稍后重试" }, 500, env);
       }
+
+      await kvPut(
+        env,
+        "CODE_STORE",
+        "send-code-cooldown-put",
+        "cooldown:" + key,
+        String(Date.now()),
+        { expirationTtl: 60 },
+      );
 
       return json({ ok: true }, 200, env);
     }
@@ -215,11 +251,18 @@ export default {
 
       const ip = request.headers.get("CF-Connecting-IP") || "unknown";
       const rateKey = "verify_rate:" + ip;
-      const last = await env.CODE_STORE.get(rateKey);
+      const last = await kvGet(env, "CODE_STORE", "verify-rate-read", rateKey);
       if (last && Date.now() - Number(last) < 800) {
         return json({ error: "操作过快" }, 429, env);
       }
-      await env.CODE_STORE.put(rateKey, String(Date.now()), { expirationTtl: 60 });
+      await kvPut(
+        env,
+        "CODE_STORE",
+        "verify-rate-put",
+        rateKey,
+        String(Date.now()),
+        { expirationTtl: 60 },
+      );
       if (!email || !code) {
         return json({ error: "参数缺失" }, 400, env);
       }
@@ -232,23 +275,35 @@ export default {
       const failKey = "fail:" + key;
 
       // ⭐ 失败次数保护（防暴力破解）
-      const fails = Number(await env.CODE_STORE.get(failKey) || 0);
+      const fails = Number(await kvGet(env, "CODE_STORE", "verify-fail-read", failKey) || 0);
       if (fails >= 5) {
         return json({ error: "尝试次数过多，请重新发送验证码" }, 429, env);
       }
 
-      const saved = await env.CODE_STORE.get("code:" + key);
+      const saved = await kvGet(
+        env,
+        "CODE_STORE",
+        "verify-code-read",
+        "code:" + key,
+      );
 
       if (!saved || saved !== code) {
         // 记录失败次数（TTL 与验证码保持一致）
-        await env.CODE_STORE.put(failKey, String(fails + 1), { expirationTtl: 300 });
+        await kvPut(
+          env,
+          "CODE_STORE",
+          "verify-fail-put",
+          failKey,
+          String(fails + 1),
+          { expirationTtl: 300 },
+        );
         return json({ error: "验证码错误或已过期" }, 400, env);
       }
 
       // 验证成功 → 清理所有相关 KV
       await Promise.all([
-        env.CODE_STORE.delete("code:" + key),
-        env.CODE_STORE.delete("fail:" + key)
+        kvDelete(env, "CODE_STORE", "verify-code-delete", "code:" + key),
+        kvDelete(env, "CODE_STORE", "verify-fail-delete", failKey),
       ]);
 
       // ===== 获取或创建用户（Supabase custom users 表）=====
@@ -320,17 +375,6 @@ export default {
       return json({ token, expiresIn: 15 * 60 }, 200, env);
     }
 
-    let activationCode = null;
-    if (url.pathname === "/v1/activation/claim") {
-      if (env.ACTIVATION_CLAIM_ENABLED === "false") {
-        return json({ error: "Activation service disabled" }, 503, env);
-      }
-      activationCode = typeof body.code === "string" ? body.code.trim() : "";
-      if (!/^[A-Za-z0-9_-]{4,64}$/.test(activationCode)) {
-        return json({ result: "invalid_code" }, 400, env);
-      }
-    }
-
     // =========================
     // 🚫 统一用户封禁校验（所有业务路由）
     // =========================
@@ -340,29 +384,6 @@ export default {
     }
     if (userStatus.isBanned) {
       return json({ error: "ACCOUNT_BANNED" }, 403, env);
-    }
-
-    // =========================
-    // 🎟️ 服务端原子领取激活码
-    // =========================
-    if (url.pathname === "/v1/activation/claim") {
-      const supabaseUrl = supabaseProjectUrl(env);
-      const supabaseKey = supabaseServerKey(env);
-      if (!supabaseUrl || !supabaseKey) {
-        console.error("[SUPABASE_CONFIG_MISSING]");
-        return json({ error: "Activation service unavailable" }, 503, env);
-      }
-      const claimResponse = await fetch(`${supabaseUrl}/rest/v1/rpc/sunland_claim_activation_code`, {
-        method: "POST",
-        headers: supabaseHeaders(env, { "Content-Type": "application/json" }),
-        body: JSON.stringify({ p_user_id: userId, p_code: activationCode })
-      });
-      if (!claimResponse.ok) {
-        console.error("[ACTIVATION_CLAIM_ERROR]", claimResponse.status);
-        return json({ error: "Activation service unavailable" }, 503, env);
-      }
-      const result = await claimResponse.json();
-      return json({ result }, result === "invalid_code" ? 400 : 200, env);
     }
 
     // =========================
@@ -383,8 +404,14 @@ export default {
       // 以 UTC+8 为一天的边界（避免深夜误差）
       const today = getTodayDateCN();
       const usageKey = `usage:${userId}:${today}`;
-      let count = Number(await env.USAGE_KV.get(usageKey) || 0);
       const limit = 20;
+      let count = 0;
+
+      if (!isPro) {
+        count = Number(
+          await kvGet(env, "USAGE_KV", "ai-usage-check", usageKey) || 0,
+        );
+      }
 
       if (!isPro && count >= limit) {
         return json({ error: "LIMIT", remain: 0, isPro: false }, 429, env);
@@ -511,7 +538,7 @@ export default {
       }
 
       // ===== KV 限流 =====
-      if (await isRateLimitedKV(env, userId)) {
+      if (await isRateLimitedKV(env, userId, "ai")) {
         return json({ error: "Too Many Requests" }, 429, env);
       }
 
@@ -635,9 +662,14 @@ export default {
 
         // ⭐ 成功后再扣次数
         if (!isPro) {
-          await env.USAGE_KV.put(usageKey, String(count + 1), {
-            expirationTtl: 86400
-          });
+          await kvPut(
+            env,
+            "USAGE_KV",
+            "ai-usage-update",
+            usageKey,
+            String(count + 1),
+            { expirationTtl: 86400 },
+          );
         }
 
         const wrappedStream = wrapStreamWithErrorLogging(response.body);
@@ -690,12 +722,14 @@ async function handleConversationTitle(body, env, userId, isPro) {
 
   const today = getTodayDateCN();
   const usageKey = `title_usage:${userId}:${today}`;
-  const usageCount = Number(await env.USAGE_KV.get(usageKey) || 0);
+  const usageCount = Number(
+    await kvGet(env, "USAGE_KV", "title-usage-check", usageKey) || 0,
+  );
   const usageLimit = isPro ? PRO_DAILY_TITLE_LIMIT : FREE_DAILY_TITLE_LIMIT;
   if (usageCount >= usageLimit) {
     return json({ error: "TITLE_LIMIT" }, 429, env);
   }
-  if (await isRateLimitedKV(env, `title:${userId}`)) {
+  if (await isRateLimitedKV(env, `title:${userId}`, "title")) {
     return json({ error: "Too Many Requests" }, 429, env);
   }
 
@@ -741,9 +775,14 @@ async function handleConversationTitle(body, env, userId, isPro) {
       return json({ error: "标题生成失败" }, 502, env);
     }
 
-    await env.USAGE_KV.put(usageKey, String(usageCount + 1), {
-      expirationTtl: 86400
-    });
+    await kvPut(
+      env,
+      "USAGE_KV",
+      "title-usage-update",
+      usageKey,
+      String(usageCount + 1),
+      { expirationTtl: 86400 },
+    );
     return json({ title }, 200, env);
   } catch {
     console.error("[TITLE_REQUEST_FAILED]");
@@ -988,7 +1027,7 @@ function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS"
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, PATCH, DELETE, OPTIONS"
   };
 }
 
@@ -1130,7 +1169,12 @@ function getTodayDateCN() {
 }
 
 async function getBlockedKeywords(env) {
-  const cached = await env.USAGE_KV.get("blocked_keywords");
+  const cached = await kvGet(
+    env,
+    "USAGE_KV",
+    "ai-blocked-keywords-read",
+    "blocked_keywords",
+  );
   if (cached) {
     return cached.split("|").map(item => item.trim()).filter(Boolean);
   }
@@ -1335,21 +1379,55 @@ function wrapStreamWithErrorLogging(body) {
 }
 
 // ⭐ KV 限流（约1秒窗口，防止快速重复请求，不影响正常聊天）
-async function isRateLimitedKV(env, key) {
+async function isRateLimitedKV(env, key, operationPrefix = "ai") {
   const RATE_LIMIT_WINDOW = 1200; // 1.2秒
   const rateKey = "rate:" + key;
-  const last = await env.USAGE_KV.get(rateKey);
+  const last = await kvGet(
+    env,
+    "USAGE_KV",
+    `${operationPrefix}-rate-limit-read`,
+    rateKey,
+  );
 
   if (last && Date.now() - Number(last) < RATE_LIMIT_WINDOW) {
     return true;
   }
 
   // ⚠️ TTL固定60秒（Cloudflare KV限制），不要参与精度计算
-  await env.USAGE_KV.put(rateKey, String(Date.now()), {
-    expirationTtl: 60
-  });
+  await kvPut(
+    env,
+    "USAGE_KV",
+    `${operationPrefix}-rate-limit-write`,
+    rateKey,
+    String(Date.now()),
+    { expirationTtl: 60 },
+  );
 
   return false;
+}
+
+function kvDiagnosticsEnabled(env) {
+  return env?.KV_DIAGNOSTICS === "1" || env?.KV_DIAGNOSTICS === "true";
+}
+
+function logKvOperation(env, type, namespace, operation) {
+  if (!kvDiagnosticsEnabled(env)) return;
+  console.log(`[KV ${type}] namespace=${namespace} operation=${operation}`);
+}
+
+function kvGet(env, namespace, operation, key) {
+  logKvOperation(env, "READ", namespace, operation);
+  return env[namespace].get(key);
+}
+
+function kvPut(env, namespace, operation, key, value, options) {
+  logKvOperation(env, "WRITE", namespace, operation);
+  return env[namespace].put(key, value, options);
+}
+
+function kvDelete(env, namespace, operation, key) {
+  logKvOperation(env, "DELETE", namespace, operation);
+  return env[namespace].delete(key);
 }
 
 // 🔐 SHA256（用于 GeeTest sign_token）

@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'main.dart';
 
+import 'announcements_page.dart';
 import 'pro_purchase.dart';
 import 'sunland_beta_diagnostics.dart';
 import 'sunland_ai_core.dart';
@@ -345,6 +346,8 @@ class _SettingsPageState extends State<SettingsPage>
         return;
       }
 
+      if (!mounted) return;
+
       setState(() {
         _avatarStatus = '正在上传头像...';
       });
@@ -650,6 +653,15 @@ class _SettingsPageState extends State<SettingsPage>
                         _SectionTitle('账号'),
                         _SettingsCard(
                           children: [
+                            _ActionRow(
+                              icon: Icons.campaign_outlined,
+                              label: '公告',
+                              onTap: () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => const AnnouncementsPage(),
+                                ),
+                              ),
+                            ),
                             _ActionRow(
                               icon: Icons.person,
                               label: '昵称',

@@ -38,12 +38,35 @@ function isSignedBy(token, secret) {
 
 function memoryKv() {
   const values = new Map();
+  const operations = { get: 0, put: 0, delete: 0, list: 0 };
   return {
     values,
-    async get(key) { return values.get(key) ?? null; },
-    async put(key, value) { values.set(key, value); },
-    async delete(key) { values.delete(key); },
+    operations,
+    async get(key) {
+      operations.get += 1;
+      return values.get(key) ?? null;
+    },
+    async put(key, value) {
+      operations.put += 1;
+      values.set(key, value);
+    },
+    async delete(key) {
+      operations.delete += 1;
+      values.delete(key);
+    },
+    async list() {
+      operations.list += 1;
+      return { keys: [...values.keys()].map(name => ({ name })) };
+    },
   };
+}
+
+function resetKvOperations(...namespaces) {
+  for (const namespace of namespaces) {
+    for (const operation of Object.keys(namespace.operations)) {
+      namespace.operations[operation] = 0;
+    }
+  }
 }
 
 function env(overrides = {}) {
@@ -74,6 +97,40 @@ function request(
     },
     body: JSON.stringify(body),
   });
+}
+
+function adminRequest(path, {
+  method = "GET",
+  body,
+  token = "supabase-session",
+} = {}) {
+  const headers = {
+    authorization: `Bearer ${token}`,
+    origin: "https://sunland.dev",
+  };
+  if (body !== undefined) headers["content-type"] = "application/json";
+  return new Request(`https://api.sunland.dev${path}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
+function adminEnv(overrides = {}) {
+  return env({
+    ADMIN_AUTH_USER_ID: "11111111-1111-4111-8111-111111111111",
+    ADMIN_EMAIL: "liuxizekali@outlook.com",
+    ...overrides,
+  });
+}
+
+function verifiedAdminUser(overrides = {}) {
+  return {
+    id: "11111111-1111-4111-8111-111111111111",
+    email: "liuxizekali@outlook.com",
+    email_confirmed_at: "2026-01-01T00:00:00.000Z",
+    ...overrides,
+  };
 }
 
 test("rotation bridge verifies primary and legacy tokens but still signs with legacy", async () => {
@@ -136,6 +193,123 @@ test("database token supports the explicit legacy Supabase JWT alias", async () 
   assert.equal(isSignedBy(result.token, "database-alias-secret"), true);
 });
 
+test("failed email delivery does not leave a cooldown or usable code", async () => {
+  let mailAttempts = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).startsWith("https://gcaptcha4.geetest.com/validate")) {
+      return Response.json({ result: "success" });
+    }
+    if (String(url) === "https://api.resend.com/emails") {
+      mailAttempts += 1;
+      return mailAttempts === 1
+        ? new Response("upstream failure", { status: 503 })
+        : Response.json({ id: "message-id" });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const environment = env({
+    GEETEST_ID: "captcha-id",
+    GEETEST_SERVER_KEY: "captcha-secret",
+    RESEND_API_TOKEN: "resend-secret",
+  });
+  const email = "retry@example.com";
+  const captcha = JSON.stringify({
+    lot_number: "lot",
+    captcha_output: "output",
+    pass_token: "pass",
+    gen_time: "now",
+  });
+  const sendRequest = () => new Request("https://api.sunland.dev/send-code", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ email, token: captcha }),
+  });
+
+  const firstResponse = await worker.fetch(sendRequest(), environment);
+  assert.equal(firstResponse.status, 500);
+  const key = encodeURIComponent(email);
+  assert.equal(environment.CODE_STORE.values.has(`cooldown:${key}`), false);
+  assert.equal(environment.CODE_STORE.values.has(`code:${key}`), false);
+
+  const retryResponse = await worker.fetch(sendRequest(), environment);
+  assert.equal(retryResponse.status, 200);
+  assert.equal(environment.CODE_STORE.values.has(`cooldown:${key}`), true);
+});
+
+test("successful email delivery uses one read, two writes, and one delete", async () => {
+  globalThis.fetch = async (url) => {
+    if (String(url).startsWith("https://gcaptcha4.geetest.com/validate")) {
+      return Response.json({ result: "success" });
+    }
+    if (String(url) === "https://api.resend.com/emails") {
+      return Response.json({ id: "message-id" });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const environment = env({
+    GEETEST_ID: "captcha-id",
+    GEETEST_SERVER_KEY: "captcha-secret",
+    RESEND_API_TOKEN: "resend-secret",
+  });
+  const response = await worker.fetch(
+    new Request("https://api.sunland.dev/send-code", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "audit@example.com",
+        token: JSON.stringify({
+          lot_number: "lot",
+          captcha_output: "output",
+          pass_token: "pass",
+          gen_time: "now",
+        }),
+      }),
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(environment.CODE_STORE.operations, {
+    get: 1,
+    put: 2,
+    delete: 1,
+    list: 0,
+  });
+});
+
+test("successful code verification uses three reads, one write, and two deletes", async () => {
+  const environment = env();
+  const email = "audit@example.com";
+  const key = encodeURIComponent(email);
+  await environment.CODE_STORE.put(`code:${key}`, "123456");
+  resetKvOperations(environment.CODE_STORE);
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/rest/v1/user_profiles?email=")) {
+      return Response.json([{ user_id: "user-a" }]);
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    new Request("https://api.sunland.dev/verify-code", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email, code: "123456" }),
+    }),
+    environment,
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(environment.CODE_STORE.operations, {
+    get: 3,
+    put: 1,
+    delete: 2,
+    list: 0,
+  });
+});
+
 test("expired application JWT is rejected before protected routes", async () => {
   const expired = sign(
     { id: "user-a", email: "a@example.com" },
@@ -156,68 +330,29 @@ test("expired application JWT is rejected before protected routes", async () => 
   assert.equal(response.status, 401);
 });
 
-test("activation claim uses the verified user and service-role RPC", async () => {
-  const calls = [];
-  globalThis.fetch = async (url, init) => {
-    calls.push({ url: String(url), init });
-    if (String(url).includes("/rest/v1/user_profiles?")) {
-      return Response.json([{ is_banned: false }]);
-    }
-    return new Response(JSON.stringify("success"), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const environment = env();
-  const response = await worker.fetch(
-    request("/v1/activation/claim", { code: "VALID_CODE", userId: "attacker" }),
-    environment,
-  );
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { result: "success" });
-  assert.equal(calls.length, 2);
-  assert.equal(
-    calls[0].url,
-    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro&limit=1",
-  );
-  assert.equal(calls[0].init.headers.Authorization, "Bearer service-secret");
-  assert.equal(calls[1].url, "https://database.example/rest/v1/rpc/sunland_claim_activation_code");
-  assert.equal(calls[1].init.headers.Authorization, "Bearer service-secret");
-  assert.deepEqual(JSON.parse(calls[1].init.body), {
-    p_user_id: "user-a",
-    p_code: "VALID_CODE",
-  });
-  assert.equal(environment.USAGE_KV.values.has("pro:user-a"), false);
-});
-
-test("staging safety switch blocks activation writes", async () => {
+test("retired activation claims return 410 before authentication or database access", async () => {
   let called = false;
   globalThis.fetch = async () => {
     called = true;
     throw new Error("unexpected upstream call");
   };
-  const response = await worker.fetch(
-    request("/v1/activation/claim", { code: "VALID_CODE" }),
-    env({ ACTIVATION_CLAIM_ENABLED: "false" }),
-  );
-  assert.equal(response.status, 503);
+  const response = await worker.fetch(request("/v1/activation/claim", { code: "VALID_CODE" }), env());
+  assert.equal(response.status, 410);
+  assert.deepEqual(await response.json(), { error: "ACTIVATION_CODES_RETIRED" });
   assert.equal(called, false);
 });
 
-test("Supabase project and server-key aliases replace legacy names", async () => {
+test("public announcement reads use the configured Supabase project and server-key aliases", async () => {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
-    if (String(url).includes("/rest/v1/user_profiles?")) {
-      return Response.json([{ is_banned: false }]);
-    }
-    return new Response(JSON.stringify("success"), {
+    return new Response(JSON.stringify({ items: [], total: 0, page: 1, pageSize: 20 }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   };
   const response = await worker.fetch(
-    request("/v1/activation/claim", { code: "VALID_CODE" }),
+    new Request("https://api.sunland.dev/v1/announcements"),
     env({
       SUPABASE_URL: "",
       SUPABASE_SERVICE_ROLE_KEY: "",
@@ -228,13 +363,170 @@ test("Supabase project and server-key aliases replace legacy names", async () =>
   assert.equal(response.status, 200);
   assert.equal(
     calls[0].url,
-    "https://database-alias.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro&limit=1",
+    "https://database-alias.example/rest/v1/rpc/sunland_public_announcements",
   );
   assert.equal(calls[0].init.headers.apikey, "sb_secret_server-alias");
   assert.equal(calls[0].init.headers.Authorization, undefined);
-  assert.equal(calls[1].url, "https://database-alias.example/rest/v1/rpc/sunland_claim_activation_code");
-  assert.equal(calls[1].init.headers.apikey, "sb_secret_server-alias");
-  assert.equal(calls[1].init.headers.Authorization, undefined);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { p_page: 1, p_page_size: 20 });
+});
+
+test("Admin API rejects a second Auth identity even when the request body spoofs the fixed email and role", async () => {
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push(String(url));
+    if (String(url).endsWith("/auth/v1/user")) {
+      return Response.json(verifiedAdminUser({ id: "22222222-2222-4222-8222-222222222222" }));
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/stats", {
+      method: "POST",
+      body: { email: "liuxizekali@outlook.com", userId: "business-admin", isAdmin: true, role: "admin" },
+    }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 403);
+  assert.deepEqual(await response.json(), { error: "ADMIN_FORBIDDEN", message: "该账号没有管理权限" });
+  assert.equal(calls.length, 1);
+});
+
+test("Admin API requires verified email, pinned Auth UUID, and exactly one business profile", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) {
+      return Response.json([{ user_id: "business-profile-is-not-auth-uuid" }]);
+    }
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_stats")) {
+      return Response.json({ totalUsers: 12, currentProUsers: 2 });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(adminRequest("/v1/admin/stats"), adminEnv());
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { totalUsers: 12, currentProUsers: 2 });
+  assert.equal(calls.length, 3);
+  assert.equal(calls[0].init.headers.Authorization, "Bearer supabase-session");
+  assert.match(calls[1].url, /user_profiles\?email=eq\.liuxizekali%40outlook\.com/);
+  assert.equal(calls[2].url.endsWith("sunland_admin_stats"), true);
+});
+
+test("unverified email and duplicate business profiles cannot obtain Admin access", async () => {
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser({ email_confirmed_at: null }));
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  const unverified = await worker.fetch(adminRequest("/v1/admin/stats"), adminEnv());
+  assert.equal(unverified.status, 403);
+
+  globalThis.fetch = async (url) => {
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "one" }, { user_id: "two" }]);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  const duplicate = await worker.fetch(adminRequest("/v1/admin/stats"), adminEnv());
+  assert.equal(duplicate.status, 403);
+});
+
+test("user list remains one current-page aggregation RPC at page sizes 20 and 100", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_list_users")) {
+      return Response.json({ items: [], total: 0, page: 1, pageSize: JSON.parse(init.body).p_page_size });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const first = await worker.fetch(adminRequest("/v1/admin/users?pageSize=20"), adminEnv());
+  const second = await worker.fetch(adminRequest("/v1/admin/users?pageSize=100"), adminEnv());
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 200);
+  const listCalls = calls.filter(call => call.url.endsWith("/rest/v1/rpc/sunland_admin_list_users"));
+  assert.equal(listCalls.length, 2);
+  assert.deepEqual(listCalls.map(call => JSON.parse(call.init.body).p_page_size), [20, 100]);
+  assert.equal(calls.some(call => /conversations|history/.test(call.url)), false);
+});
+
+test("successful maintenance mutation relies on its single transactional RPC and does not create a separate success audit write", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_maintenance")) return Response.json({ enabled: true });
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(adminRequest("/v1/admin/system/maintenance", {
+    method: "POST",
+    body: { enabled: true, title: "维护中", message: "稍后恢复", estimatedEnd: "2026-09-05T00:00:00.000Z" },
+  }), adminEnv());
+
+  assert.equal(response.status, 200);
+  assert.equal(calls.some(call => call.url.includes("sunland_admin_record_failed_action")), false);
+  const mutation = calls.find(call => call.url.endsWith("sunland_admin_set_maintenance"));
+  assert.equal(JSON.parse(mutation.init.body).p_admin_user_id, "11111111-1111-4111-8111-111111111111");
+});
+
+test("failed mutation rolls back through its RPC then records a scrubbed failure audit in a new request", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_maintenance")) {
+      return Response.json({ message: "database unavailable" }, { status: 500 });
+    }
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_record_failed_action")) return Response.json(true);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(adminRequest("/v1/admin/system/maintenance", {
+    method: "POST",
+    body: { enabled: false, title: "维护结束", message: "服务已恢复" },
+  }), adminEnv());
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: "DATABASE_ERROR", message: "操作暂时不可用" });
+  const failure = calls.find(call => call.url.endsWith("/rest/v1/rpc/sunland_admin_record_failed_action"));
+  const audit = JSON.parse(failure.init.body);
+  assert.deepEqual(audit, {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_action: "maintenance_disabled",
+    p_target_type: "app_config",
+    p_target_id: "global",
+    p_result: "DATABASE_ERROR",
+    p_metadata: {},
+  });
+  assert.doesNotMatch(JSON.stringify(audit), /supabase-session|service-secret|Authorization|JWT/i);
+});
+
+test("published announcements cannot be physically deleted and the conflict is failure-audited", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_delete_draft_announcement")) {
+      return Response.json({ message: "ANNOUNCEMENT_WAS_PUBLISHED" }, { status: 409 });
+    }
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_record_failed_action")) return Response.json(true);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const response = await worker.fetch(adminRequest(`/v1/admin/announcements/${id}`, { method: "DELETE" }), adminEnv());
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: "CONFLICT", message: "当前状态不允许此操作" });
+  assert.equal(calls.some(call => call.url.endsWith("sunland_admin_record_failed_action")), true);
 });
 
 test("banned users are rejected before the AI upstream request", async () => {
@@ -265,6 +557,7 @@ test("conversation title summarizes only the supplied first exchange without con
   const today = cst.toISOString().slice(0, 10);
   const chatUsageKey = `usage:user-a:${today}`;
   await environment.USAGE_KV.put(chatUsageKey, "20");
+  resetKvOperations(environment.USAGE_KV);
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
     if (String(url).includes("/rest/v1/user_profiles?")) {
@@ -297,6 +590,129 @@ test("conversation title summarizes only the supplied first exchange without con
   assert.equal(environment.USAGE_KV.values.get(chatUsageKey), "20");
   const titleUsageKey = usageKeys.find(key => key.startsWith("title_usage:user-a:"));
   assert.equal(environment.USAGE_KV.values.get(titleUsageKey), "1");
+  assert.deepEqual(environment.USAGE_KV.operations, {
+    get: 2,
+    put: 2,
+    delete: 0,
+    list: 0,
+  });
+});
+
+test("free AI requests count quota, keyword, and rate-limit KV operations", async () => {
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false, pro: false }]);
+    }
+    return new Response("data: [DONE]\n\n", {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello" }],
+      model: "deepseek-v4-flash",
+    }),
+    environment,
+  );
+  assert.equal(response.status, 200);
+  await response.arrayBuffer();
+  assert.deepEqual(environment.USAGE_KV.operations, {
+    get: 3,
+    put: 2,
+    delete: 0,
+    list: 0,
+  });
+});
+
+test("quota exhaustion stops before keyword and rate-limit KV operations", async () => {
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  const cst = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const today = cst.toISOString().slice(0, 10);
+  await environment.USAGE_KV.put(`usage:user-a:${today}`, "20");
+  resetKvOperations(environment.USAGE_KV);
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false, pro: false }]);
+    }
+    throw new Error("DeepSeek must not be called after quota exhaustion");
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello" }],
+    }),
+    environment,
+  );
+  assert.equal(response.status, 429);
+  assert.deepEqual(environment.USAGE_KV.operations, {
+    get: 1,
+    put: 0,
+    delete: 0,
+    list: 0,
+  });
+});
+
+test("upstream AI failure does not write the daily quota", async () => {
+  const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/rest/v1/user_profiles?")) {
+      return Response.json([{ is_banned: false, pro: false }]);
+    }
+    return new Response("upstream failure", { status: 503 });
+  };
+
+  const response = await worker.fetch(
+    request("/", {
+      messages: [{ role: "user", content: "hello" }],
+    }),
+    environment,
+  );
+  assert.equal(response.status, 502);
+  assert.deepEqual(environment.USAGE_KV.operations, {
+    get: 3,
+    put: 1,
+    delete: 0,
+    list: 0,
+  });
+});
+
+test("KV diagnostics expose logical operations without raw keys", async () => {
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(" "));
+  try {
+    const environment = env({
+      DEEPSEEK_API_KEY: "test-deepseek-key",
+      KV_DIAGNOSTICS: "1",
+    });
+    globalThis.fetch = async (url) => {
+      if (String(url).includes("/rest/v1/user_profiles?")) {
+        return Response.json([{ is_banned: false, pro: false }]);
+      }
+      return new Response("data: [DONE]\n\n", {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      });
+    };
+
+    const response = await worker.fetch(
+      request("/", {
+        messages: [{ role: "user", content: "hello" }],
+      }),
+      environment,
+    );
+    assert.equal(response.status, 200);
+    assert.match(logs.join("\n"), /namespace=USAGE_KV operation=ai-usage-check/u);
+    assert.match(logs.join("\n"), /namespace=USAGE_KV operation=ai-blocked-keywords-read/u);
+    assert.match(logs.join("\n"), /namespace=USAGE_KV operation=ai-rate-limit-write/u);
+    assert.match(logs.join("\n"), /namespace=USAGE_KV operation=ai-usage-update/u);
+    assert.doesNotMatch(logs.join("\n"), /usage:user-a|Authorization|hello/u);
+  } finally {
+    console.log = originalLog;
+  }
 });
 
 test("conversation title rejects incomplete exchanges before the AI request", async () => {
@@ -324,6 +740,7 @@ test("Pro model uses user_profiles.pro despite a stale negative KV entry", async
   const calls = [];
   const environment = env({ DEEPSEEK_API_KEY: "test-deepseek-key" });
   await environment.USAGE_KV.put("pro:user-a", "0");
+  resetKvOperations(environment.USAGE_KV);
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
     if (String(url).includes("/rest/v1/user_profiles?")) {
@@ -353,6 +770,12 @@ test("Pro model uses user_profiles.pro despite a stale negative KV entry", async
   );
   assert.equal(calls.some(call => call.url.includes("/activation_codes?")), false);
   assert.equal(JSON.parse(calls[1].init.body).model, "deepseek-v4-pro");
+  assert.deepEqual(environment.USAGE_KV.operations, {
+    get: 2,
+    put: 1,
+    delete: 0,
+    list: 0,
+  });
 });
 
 test("legacy positive KV cannot grant Pro when user_profiles.pro is false", async () => {
@@ -677,14 +1100,14 @@ test("external image URLs are rejected by the app gateway", async () => {
   assert.equal(calls.length, 1);
 });
 
-test("user status failures fail closed on protected business routes", async () => {
+test("user status failures fail closed on protected AI routes", async () => {
   globalThis.fetch = async () => Response.json(
     { error: "database unavailable" },
     { status: 503 },
   );
 
   const response = await worker.fetch(
-    request("/v1/activation/claim", { code: "VALID_CODE" }),
+    request("/", { messages: [{ role: "user", content: "hello" }] }),
     env(),
   );
 
@@ -692,7 +1115,7 @@ test("user status failures fail closed on protected business routes", async () =
   assert.deepEqual(await response.json(), { error: "User status unavailable" });
 });
 
-test("invalid activation code is rejected without reaching Supabase", async () => {
+test("retired activation route never parses or validates legacy codes", async () => {
   let called = false;
   globalThis.fetch = async () => {
     called = true;
@@ -702,6 +1125,6 @@ test("invalid activation code is rejected without reaching Supabase", async () =
     request("/v1/activation/claim", { code: "!" }),
     env(),
   );
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 410);
   assert.equal(called, false);
 });

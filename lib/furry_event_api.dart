@@ -278,12 +278,19 @@ class FurryEventEnriched {
     debugPrint('fromMap coverUrl raw: ${m['coverUrl']}');
     final weatherRaw = m['weather'];
     final hotelsRaw = m['hotels'];
-    final venueStr = m['address']?.toString() ?? '';
+    final venueStr = (m['venue'] ?? m['address'])?.toString() ?? '';
+
+    String? hotelUrl(String camelCaseKey, String snakeCaseKey) {
+      if (hotelsRaw is Map) {
+        return (hotelsRaw[camelCaseKey] ?? hotelsRaw[snakeCaseKey])?.toString();
+      }
+      return (m[camelCaseKey] ?? m[snakeCaseKey])?.toString();
+    }
 
     // 表内真实图片在 cover 列（furryfusion 图床，公网可直连、无防盗链）；
     // 兼容旧 cover_url 列。早期版本经 *.workers.dev 代理，该域名在国内网络
     // 不稳定/易被污染，反而导致图片加载失败，故直接使用原图地址。
-    String? cover = (m['cover'] ?? m['cover_url'])?.toString();
+    String? cover = (m['coverUrl'] ?? m['cover'] ?? m['cover_url'])?.toString();
     if (cover != null) {
       cover = cover.trim();
       if (!cover.startsWith('http')) cover = null;
@@ -292,34 +299,28 @@ class FurryEventEnriched {
     return FurryEventEnriched(
       name: m['name']?.toString() ?? '',
 
-      // ✅ 使用 snake_case
-      startAt: m['start_at']?.toString() ?? '',
-      endAt: m['end_at']?.toString() ?? '',
+      startAt: (m['startAt'] ?? m['start_at'])?.toString() ?? '',
+      endAt: (m['endAt'] ?? m['end_at'])?.toString() ?? '',
 
       city: m['city']?.toString() ?? '',
 
-      // ✅ address = 酒店名
-      venue: m['address']?.toString() ?? '',
+      venue: venueStr,
 
       coverUrl: cover,
 
-      // ✅ 跳转链接
-      sourceUrl: m['source_url']?.toString(),
+      sourceUrl: (m['sourceUrl'] ?? m['source_url'])?.toString(),
 
       // ✅ 新增字段
-      rawStatus: m['raw_status']?.toString(),
-      daysUntil: _toInt(m['days_until']),
+      rawStatus: (m['rawStatus'] ?? m['raw_status'])?.toString(),
+      daysUntil: _toInt(m['daysUntil'] ?? m['days_until']),
 
       weather: weatherRaw is Map<String, dynamic>
           ? FurryEventWeather.fromMap(weatherRaw)
           : null,
 
-      // ✅ 只有有酒店才给链接
-      ctripUrl: (hotelsRaw is Map && venueStr.isNotEmpty)
-          ? hotelsRaw['ctripUrl']?.toString()
-          : null,
-      meituanUrl: (hotelsRaw is Map && venueStr.isNotEmpty)
-          ? hotelsRaw['meituanUrl']?.toString()
+      ctripUrl: venueStr.isNotEmpty ? hotelUrl('ctripUrl', 'ctrip_url') : null,
+      meituanUrl: venueStr.isNotEmpty
+          ? hotelUrl('meituanUrl', 'meituan_url')
           : null,
     );
   }

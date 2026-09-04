@@ -154,7 +154,7 @@ Future<void> showThemeSelectionDialog(BuildContext context) async {
   showDialog(
     context: context,
     barrierDismissible: false,
-    builder: (_) {
+    builder: (dialogContext) {
       return AlertDialog(
         title: const Text("选择主题"),
         content: Column(
@@ -166,7 +166,9 @@ Future<void> showThemeSelectionDialog(BuildContext context) async {
                 themeNotifier.value = ThemeMode.light;
                 await saveThemeMode(ThemeMode.light);
                 await prefs.setBool('theme_chosen', true);
-                Navigator.pop(context);
+                if (dialogContext.mounted) {
+                  Navigator.pop(dialogContext);
+                }
               },
             ),
             ListTile(
@@ -175,7 +177,9 @@ Future<void> showThemeSelectionDialog(BuildContext context) async {
                 themeNotifier.value = ThemeMode.dark;
                 await saveThemeMode(ThemeMode.dark);
                 await prefs.setBool('theme_chosen', true);
-                Navigator.pop(context);
+                if (dialogContext.mounted) {
+                  Navigator.pop(dialogContext);
+                }
               },
             ),
             ListTile(
@@ -184,7 +188,9 @@ Future<void> showThemeSelectionDialog(BuildContext context) async {
                 themeNotifier.value = ThemeMode.system;
                 await saveThemeMode(ThemeMode.system);
                 await prefs.setBool('theme_chosen', true);
-                Navigator.pop(context);
+                if (dialogContext.mounted) {
+                  Navigator.pop(dialogContext);
+                }
               },
             ),
           ],
@@ -623,9 +629,6 @@ class _RootPageState extends State<RootPage> {
 
     final chosen = prefs.getBool('theme_chosen') ?? false;
 
-    // ⭐ 确保 UI 刷新
-    currentUserNotifier.notifyListeners();
-
     if (!chosen) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _showThemeDialog();
@@ -802,9 +805,9 @@ class _LoginPageState extends State<LoginPage>
     try {
       await api.requestCode(email, captchaToken: token);
 
+      if (!mounted) return;
       startCountdown();
 
-      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(const SnackBar(content: Text("验证码已发送")));
@@ -821,10 +824,15 @@ class _LoginPageState extends State<LoginPage>
   }
 
   void startCountdown() {
+    if (!mounted) return;
     countdownTimer?.cancel();
     setState(() => countdown = 60);
 
     countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
       if (countdown <= 1) {
         timer.cancel();
         setState(() => countdown = 0);
@@ -913,6 +921,7 @@ class _LoginPageState extends State<LoginPage>
         MaterialPageRoute(builder: (_) => const SplashPage()),
       );
     } catch (e) {
+      if (!mounted) return;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text("登录失败: $e")));
@@ -1491,6 +1500,19 @@ class _ChatPageState extends State<ChatPage> {
     final text = (msg['text'] ?? '').toString();
     if (text == '思考中...' || text == '深度思考中...') return true;
     return text.trim().isEmpty;
+  }
+
+  void _removeStreamingPlaceholder() {
+    if (messages.isEmpty) return;
+    final last = messages.last;
+    final text = (last['text'] ?? '').toString().trim();
+    final reasoning = (last['reasoning'] ?? '').toString().trim();
+    if (last['isUser'] != true &&
+        last['isStreaming'] == true &&
+        text.isEmpty &&
+        reasoning.isEmpty) {
+      messages.removeLast();
+    }
   }
 
   Widget _stoppedHintWidget(Map<String, dynamic> msg, bool isDark) {
@@ -4323,7 +4345,10 @@ class _ChatPageState extends State<ChatPage> {
           );
         }
         if (!mounted) return;
-        setState(() => isGenerating = false);
+        setState(() {
+          _removeStreamingPlaceholder();
+          isGenerating = false;
+        });
         return;
       }
 
@@ -4334,6 +4359,7 @@ class _ChatPageState extends State<ChatPage> {
         }
         if (!mounted) return;
         setState(() {
+          _removeStreamingPlaceholder();
           _remainingCount = normalized;
           isGenerating = false;
         });
