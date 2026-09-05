@@ -55,6 +55,7 @@ async function handleAdminGet(url, env, admin) {
       p_page_size: page.pageSize,
     });
   }
+  if (url.pathname === "/v1/admin/ai/stats") return aiStats(env);
   if (url.pathname === "/v1/admin/users") {
     const sort = url.searchParams.get("sort") || "created_at";
     const descending = url.searchParams.get("direction") !== "asc";
@@ -83,9 +84,11 @@ async function handleAdminGet(url, env, admin) {
 }
 
 async function handleAdminMutation(request, url, env, admin) {
+  const userBan = userBanPath(url.pathname);
   const requiresBody =
     url.pathname === "/v1/admin/system/maintenance" ||
     url.pathname === "/v1/admin/announcements" ||
+    (request.method === "POST" && userBan?.banned === true) ||
     (request.method === "PATCH" && url.pathname.startsWith("/v1/admin/announcements/"));
   const parsed = requiresBody
     ? await readJson(request, MAX_ADMIN_BODY_BYTES)
@@ -119,17 +122,21 @@ async function handleAdminMutation(request, url, env, admin) {
     });
   }
 
-  const userBan = userBanPath(url.pathname);
   if (request.method === "POST" && userBan) {
+    const reason = userBan.banned ? stringWithin(body.reason, 1, 500) : null;
+    if (userBan.banned && !reason) {
+      return mutationFailure(env, admin, "user_banned", "user_profile", userBan.userId, "VALIDATION_ERROR", 400);
+    }
     return runMutation(env, admin, {
       action: userBan.banned ? "user_banned" : "user_unbanned",
       targetType: "user_profile",
       targetId: userBan.userId,
-      rpcName: "sunland_admin_set_user_ban",
+      rpcName: "sunland_admin_set_user_ban_with_reason",
       rpcArgs: {
         p_admin_user_id: admin.authUserId,
         p_user_id: userBan.userId,
         p_is_banned: userBan.banned,
+        p_reason: reason,
       },
       mapPayload: mapUserBan,
     });
@@ -372,6 +379,54 @@ async function versions(env) {
   }
 }
 
+async function aiStats(env) {
+  if (!env.USAGE_KV) {
+    return response({ error: "AI_STATS_UNAVAILABLE", message: "AI 统计暂时不可用" }, 503, env);
+  }
+  const date = chinaDate();
+  try {
+    const [freeChat, titleGeneration] = await Promise.all([
+      aggregateDailyKv(env.USAGE_KV, "usage:", date),
+      aggregateDailyKv(env.USAGE_KV, "title_usage:", date),
+    ]);
+    return response({ date, freeChat, titleGeneration }, 200, env);
+  } catch {
+    return response({ error: "AI_STATS_UNAVAILABLE", message: "AI 统计暂时不可用" }, 503, env);
+  }
+}
+
+async function aggregateDailyKv(namespace, prefix, date) {
+  const matching = [];
+  let cursor;
+  let complete = false;
+  for (let page = 0; page < 5; page += 1) {
+    const listed = await namespace.list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) });
+    for (const key of listed.keys || []) {
+      if (typeof key?.name === "string" && key.name.endsWith(`:${date}`)) matching.push(key.name);
+    }
+    if (listed.list_complete === true) {
+      complete = true;
+      break;
+    }
+    cursor = listed.cursor;
+    if (!cursor) break;
+  }
+
+  if (!complete || matching.length > 1000) {
+    return { successfulRequests: null, trackedUsers: matching.length, complete: false };
+  }
+  const values = await Promise.all(matching.map((key) => namespace.get(key)));
+  const successfulRequests = values.reduce((sum, value) => {
+    const count = Number.parseInt(value || "0", 10);
+    return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+  }, 0);
+  return { successfulRequests, trackedUsers: matching.length, complete: true };
+}
+
+function chinaDate() {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 async function rpcResponse(env, name, args) {
   const result = await rpc(env, name, args);
   return result.ok
@@ -426,14 +481,14 @@ function announcementInput(body) {
   const title = stringWithin(body.title, 1, 120);
   const content = stringWithin(body.content, 1, 10000);
   const startsAt = optionalIsoTimestamp(body.startsAt);
-  const endsAt = optionalIsoTimestamp(body.endsAt);
-  if (!title || !content || startsAt.invalid || endsAt.invalid) return null;
-  if (startsAt.value && endsAt.value && Date.parse(endsAt.value) <= Date.parse(startsAt.value)) return null;
+  if (!title || !content || startsAt.invalid) return null;
   return {
     p_title: title,
     p_content: content,
     p_starts_at: startsAt.value,
-    p_ends_at: endsAt.value,
+    // The column stays for historic compatibility, but new Admin writes no
+    // longer support expiring announcements.
+    p_ends_at: null,
   };
 }
 
@@ -508,6 +563,7 @@ function mapUserDetail(row) {
     avatarUrl: row.avatarUrl,
     pro: row.isPro === true,
     banned: row.isBanned === true,
+    banReason: row.banReason ?? null,
     createdAt: row.createdAt,
     conversationCount: row.conversationCount ?? 0,
     userMessageCount: row.userMessageCount ?? 0,
@@ -525,6 +581,7 @@ function mapUserBan(row) {
   return {
     userId: row.userId,
     banned: row.isBanned === true,
+    banReason: row.banReason ?? null,
   };
 }
 

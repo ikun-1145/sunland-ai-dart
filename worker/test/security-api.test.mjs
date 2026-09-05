@@ -54,9 +54,14 @@ function memoryKv() {
       operations.delete += 1;
       values.delete(key);
     },
-    async list() {
+    async list({ prefix = "" } = {}) {
       operations.list += 1;
-      return { keys: [...values.keys()].map(name => ({ name })) };
+      return {
+        keys: [...values.keys()]
+          .filter(name => name.startsWith(prefix))
+          .map(name => ({ name })),
+        list_complete: true,
+      };
     },
   };
 }
@@ -456,6 +461,31 @@ test("user list remains one current-page aggregation RPC at page sizes 20 and 10
   assert.equal(calls.some(call => /conversations|history/.test(call.url)), false);
 });
 
+test("AI stats expose only aggregated current KV counters", async () => {
+  const environment = adminEnv();
+  const cst = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const today = cst.toISOString().slice(0, 10);
+  environment.USAGE_KV.values.set(`usage:user-a:${today}`, "2");
+  environment.USAGE_KV.values.set(`usage:user-b:${today}`, "3");
+  environment.USAGE_KV.values.set(`title_usage:user-a:${today}`, "1");
+  environment.USAGE_KV.values.set("usage:old-user:2020-01-01", "99");
+  globalThis.fetch = async url => {
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(adminRequest("/v1/admin/ai/stats"), environment);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    date: today,
+    freeChat: { successfulRequests: 5, trackedUsers: 2, complete: true },
+    titleGeneration: { successfulRequests: 1, trackedUsers: 1, complete: true },
+  });
+  assert.equal(environment.USAGE_KV.operations.list, 2);
+});
+
 test("successful maintenance mutation relies on its single transactional RPC and does not create a separate success audit write", async () => {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
@@ -477,32 +507,98 @@ test("successful maintenance mutation relies on its single transactional RPC and
   assert.equal(JSON.parse(mutation.init.body).p_admin_user_id, "11111111-1111-4111-8111-111111111111");
 });
 
+test("announcement mutations keep one publish time and always clear the retired end time", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_create_announcement")) {
+      return Response.json({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/announcements", {
+      method: "POST",
+      body: {
+        title: "维护通知",
+        content: "服务即将维护。",
+        startsAt: "2026-09-06T02:00:00.000Z",
+        endsAt: "2026-09-07T02:00:00.000Z",
+      },
+    }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 200);
+  const mutation = calls.find(call => call.url.endsWith("sunland_admin_create_announcement"));
+  assert.deepEqual(JSON.parse(mutation.init.body), {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_title: "维护通知",
+    p_content: "服务即将维护。",
+    p_starts_at: "2026-09-06T02:00:00.000Z",
+    p_ends_at: null,
+  });
+});
+
 test("user ban is an authenticated, transactional Admin mutation", async () => {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
     if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
-    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_user_ban")) {
-      return Response.json({ userId: "target-user", isBanned: true });
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_user_ban_with_reason")) {
+      return Response.json({ userId: "target-user", isBanned: true, banReason: "滥用服务" });
     }
     throw new Error(`unexpected fetch: ${url}`);
   };
 
   const response = await worker.fetch(
-    adminRequest("/v1/admin/users/target-user/ban", { method: "POST" }),
+    adminRequest("/v1/admin/users/target-user/ban", {
+      method: "POST",
+      body: { reason: "滥用服务" },
+    }),
     adminEnv(),
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { userId: "target-user", banned: true });
+  assert.deepEqual(await response.json(), {
+    userId: "target-user",
+    banned: true,
+    banReason: "滥用服务",
+  });
   assert.equal(calls.some(call => call.url.endsWith("sunland_admin_record_failed_action")), false);
-  const mutation = calls.find(call => call.url.endsWith("sunland_admin_set_user_ban"));
+  const mutation = calls.find(call => call.url.endsWith("sunland_admin_set_user_ban_with_reason"));
   assert.deepEqual(JSON.parse(mutation.init.body), {
     p_admin_user_id: "11111111-1111-4111-8111-111111111111",
     p_user_id: "target-user",
     p_is_banned: true,
+    p_reason: "滥用服务",
   });
+});
+
+test("user ban rejects an empty reason before the business RPC", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_record_failed_action")) return Response.json(true);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/users/target-user/ban", {
+      method: "POST",
+      body: { reason: "   " },
+    }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 400);
+  assert.equal(calls.some(call => call.url.endsWith("sunland_admin_set_user_ban_with_reason")), false);
 });
 
 test("failed user ban writes a scrubbed failure audit after the business RPC", async () => {
@@ -511,7 +607,7 @@ test("failed user ban writes a scrubbed failure audit after the business RPC", a
     calls.push({ url: String(url), init });
     if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
     if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
-    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_user_ban")) {
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_user_ban_with_reason")) {
       return Response.json({ message: "USER_NOT_FOUND" }, { status: 404 });
     }
     if (String(url).endsWith("/rest/v1/rpc/sunland_admin_record_failed_action")) return Response.json(true);

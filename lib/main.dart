@@ -4842,12 +4842,16 @@ class _ChatPageState extends State<ChatPage> {
     if (mounted) setState(() {});
   }
 
-  void _showLimitSheet() {
+  void _showLimitSheet({String? featureName}) {
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (context) {
         final isDark = Theme.of(context).brightness == Brightness.dark;
+        final title = featureName == null ? '今日免费次数已用完' : '$featureName不可用';
+        final description = featureName == null
+            ? '免费用户每天 20 次。升级 Pro 后可永久无限使用，并解锁 DeepSeek V4 Pro 与深度思考。'
+            : '$featureName需要激活 Pro 后才能使用。';
         return SafeArea(
           child: Container(
             margin: const EdgeInsets.all(12),
@@ -4882,9 +4886,9 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ),
                     const SizedBox(width: 12),
-                    const Expanded(
+                    Expanded(
                       child: Text(
-                        "今日免费次数已用完",
+                        title,
                         style: TextStyle(
                           fontSize: 17,
                           fontWeight: FontWeight.w700,
@@ -4895,7 +4899,7 @@ class _ChatPageState extends State<ChatPage> {
                 ),
                 const SizedBox(height: 10),
                 Text(
-                  "免费用户每天 20 次。升级 Pro 后可永久无限使用，并解锁 DeepSeek V4 Pro 与深度思考。",
+                  description,
                   style: TextStyle(
                     color: isDark ? Colors.white60 : Colors.black54,
                     height: 1.45,
@@ -5681,7 +5685,9 @@ class _ChatPageState extends State<ChatPage> {
                                         ? null
                                         : () {
                                             if (!isActivated) {
-                                              _showLimitSheet();
+                                              _showLimitSheet(
+                                                featureName: '深度思考',
+                                              );
                                               return;
                                             }
 
@@ -5892,7 +5898,10 @@ class _ChatPageState extends State<ChatPage> {
                                                           Navigator.pop(
                                                             dialogContext,
                                                           );
-                                                          _showLimitSheet();
+                                                          _showLimitSheet(
+                                                            featureName:
+                                                                'Pro 模型',
+                                                          );
                                                           return;
                                                         }
 
