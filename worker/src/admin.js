@@ -119,6 +119,22 @@ async function handleAdminMutation(request, url, env, admin) {
     });
   }
 
+  const userBan = userBanPath(url.pathname);
+  if (request.method === "POST" && userBan) {
+    return runMutation(env, admin, {
+      action: userBan.banned ? "user_banned" : "user_unbanned",
+      targetType: "user_profile",
+      targetId: userBan.userId,
+      rpcName: "sunland_admin_set_user_ban",
+      rpcArgs: {
+        p_admin_user_id: admin.authUserId,
+        p_user_id: userBan.userId,
+        p_is_banned: userBan.banned,
+      },
+      mapPayload: mapUserBan,
+    });
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/admin/announcements") {
     const input = announcementInput(body);
     if (!input) return mutationFailure(env, admin, "announcement_created", "announcement", null, "VALIDATION_ERROR", 400);
@@ -504,6 +520,14 @@ function mapUserDetail(row) {
   };
 }
 
+function mapUserBan(row) {
+  if (!row || typeof row !== "object") return row;
+  return {
+    userId: row.userId,
+    banned: row.isBanned === true,
+  };
+}
+
 function classifyFailure(result) {
   const message = typeof result.payload?.message === "string" ? result.payload.message : "";
   if (message.includes("NOT_FOUND")) return { code: "NOT_FOUND", status: 404 };
@@ -539,6 +563,19 @@ function announcementPathId(pathname) {
   const match = /^\/v1\/admin\/announcements\/([^/]+)(?:\/(?:publish|unpublish))?$/.exec(pathname);
   const id = match ? decodeURIComponent(match[1]) : null;
   return id && UUID_PATTERN.test(id) ? id : null;
+}
+
+function userBanPath(pathname) {
+  const match = /^\/v1\/admin\/users\/([^/]+)\/(ban|unban)$/.exec(pathname);
+  if (!match) return null;
+  let userId;
+  try {
+    userId = decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+  if (!userId || userId.length > 160 || /[\u0000-\u001f]/.test(userId)) return null;
+  return { userId, banned: match[2] === "ban" };
 }
 
 function decodePathTail(pathname, prefix) {

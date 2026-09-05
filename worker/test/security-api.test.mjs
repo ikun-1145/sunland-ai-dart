@@ -477,6 +477,65 @@ test("successful maintenance mutation relies on its single transactional RPC and
   assert.equal(JSON.parse(mutation.init.body).p_admin_user_id, "11111111-1111-4111-8111-111111111111");
 });
 
+test("user ban is an authenticated, transactional Admin mutation", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_user_ban")) {
+      return Response.json({ userId: "target-user", isBanned: true });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/users/target-user/ban", { method: "POST" }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { userId: "target-user", banned: true });
+  assert.equal(calls.some(call => call.url.endsWith("sunland_admin_record_failed_action")), false);
+  const mutation = calls.find(call => call.url.endsWith("sunland_admin_set_user_ban"));
+  assert.deepEqual(JSON.parse(mutation.init.body), {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_user_id: "target-user",
+    p_is_banned: true,
+  });
+});
+
+test("failed user ban writes a scrubbed failure audit after the business RPC", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_user_ban")) {
+      return Response.json({ message: "USER_NOT_FOUND" }, { status: 404 });
+    }
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_record_failed_action")) return Response.json(true);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/users/missing-user/unban", { method: "POST" }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), { error: "NOT_FOUND", message: "目标不存在" });
+  const audit = calls.find(call => call.url.endsWith("sunland_admin_record_failed_action"));
+  assert.deepEqual(JSON.parse(audit.init.body), {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_action: "user_unbanned",
+    p_target_type: "user_profile",
+    p_target_id: "missing-user",
+    p_result: "NOT_FOUND",
+    p_metadata: {},
+  });
+});
+
 test("failed mutation rolls back through its RPC then records a scrubbed failure audit in a new request", async () => {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
