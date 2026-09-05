@@ -507,6 +507,25 @@ test("successful maintenance mutation relies on its single transactional RPC and
   assert.equal(JSON.parse(mutation.init.body).p_admin_user_id, "11111111-1111-4111-8111-111111111111");
 });
 
+test("system status reads the real app_config primary key", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).includes("/rest/v1/app_config?config_key=eq.global")) {
+      return Response.json([{ maintenance_enabled: false }]);
+    }
+    if (String(url) === "https://ai-core.sunland.dev/healthz") return Response.json({ status: "ok" });
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(adminRequest("/v1/admin/system/status"), adminEnv());
+
+  assert.equal(response.status, 200);
+  assert.equal(calls.some(call => call.url.includes("app_config?id=eq.global")), false);
+});
+
 test("announcement mutations keep one publish time and always clear the retired end time", async () => {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {

@@ -336,7 +336,7 @@ async function systemStatus(env) {
     : null;
   const [supabaseResult, coreResult] = await Promise.all([
     projectUrl && serverKey
-      ? restJson(`${projectUrl}/rest/v1/app_config?id=eq.global&select=maintenance_enabled,maintenance_title,maintenance_message,maintenance_estimated_end,updated_at`, serviceHeaders(serverKey))
+      ? restJson(`${projectUrl}/rest/v1/app_config?config_key=eq.global&select=maintenance_enabled,maintenance_title,maintenance_message,maintenance_estimated_end,updated_at`, serviceHeaders(serverKey))
       : Promise.resolve({ ok: false }),
     fetch("https://ai-core.sunland.dev/healthz", { signal: AbortSignal.timeout(7000) })
       .then((res) => ({ ok: res.ok }))
