@@ -248,6 +248,7 @@ class UpdateService {
     final scaffoldMessenger = ScaffoldMessenger.of(context);
 
     final dir = await getApplicationDocumentsDirectory();
+    if (!context.mounted) return;
     final path = "${dir.path}/sunland_update.apk";
 
     final dio = Dio();
