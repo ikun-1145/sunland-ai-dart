@@ -7,6 +7,23 @@ build/
 .wrangler/
 worker/node_modules/
 
+# Local environment and tool state
+.env
+.env.*
+!.env.example
+**/local.properties
+supabase/.temp/
+.firebase/
+
+# Generated reports, databases, and local archives
+*.log
+coverage/
+*.db
+*.sqlite
+*.sqlite-*
+*.bak
+*.orig
+
 # Cloudflare Worker local secrets
 worker/.dev.vars
 worker/.dev.vars.*
@@ -35,12 +52,28 @@ android/app/build/
 ios/Pods/
 ios/.symlinks/
 
+# ===== Signing and credentials =====
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.p8
+*.key
+*.mobileprovision
+*.cer
+*.crt
+key.properties
+credentials.json
+service-account*.json
+google-services.json
+GoogleService-Info.plist
+
 # ===== Temp/Build files =====
 *.tmp
 *.tmp.*
 *.driveupload
 .tmp.driveupload/
-deploy.log
 bump_version.sh
 
 # ===== Claude Code =====
