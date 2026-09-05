@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -15,6 +16,12 @@ import 'sunland_beta_diagnostics.dart';
 import 'sunland_ai_core.dart';
 import 'sunland_remote_provider.dart';
 import 'widgets/sunland_settings_sections.dart';
+
+const nicknameMaxLength = 8;
+final _nicknameAllowedCharacter = RegExp(r'[\x21-\x7E\u4E00-\u9FFF]');
+final _nicknamePattern = RegExp(r'^[\x21-\x7E\u4E00-\u9FFF]{1,8}$');
+
+bool isValidNickname(String nickname) => _nicknamePattern.hasMatch(nickname);
 
 class SettingsResult {
   const SettingsResult({this.user, this.loggedOut = false, this.activated});
@@ -187,7 +194,12 @@ class _SettingsPageState extends State<SettingsPage>
                     const SizedBox(height: 14),
                     TextField(
                       controller: controller,
-                      maxLength: 20,
+                      maxLength: nicknameMaxLength,
+                      inputFormatters: [
+                        FilteringTextInputFormatter.allow(
+                          _nicknameAllowedCharacter,
+                        ),
+                      ],
                       autofocus: true,
                       decoration: InputDecoration(
                         hintText: '输入新的昵称',
@@ -215,7 +227,7 @@ class _SettingsPageState extends State<SettingsPage>
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      '仅支持中英文、数字，最多20字符',
+                      '仅支持ASCII字符和中文，最多8个字符且不含空格',
                       style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -239,15 +251,12 @@ class _SettingsPageState extends State<SettingsPage>
                         Expanded(
                           child: FilledButton(
                             onPressed: () async {
-                              final newName = controller.text.trim();
-                              final valid = RegExp(
-                                r'^[a-zA-Z0-9\u4e00-\u9fa5_]+$',
-                              );
+                              final newName = controller.text;
                               if (newName.isEmpty) {
                                 _showSnack('昵称不能为空');
                                 return;
                               }
-                              if (!valid.hasMatch(newName)) {
+                              if (!isValidNickname(newName)) {
                                 _showSnack('昵称包含非法字符');
                                 return;
                               }
