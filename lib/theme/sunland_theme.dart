@@ -1,9 +1,43 @@
 import 'package:flutter/material.dart';
 
-abstract final class SunlandTheme {
-  static const Color _brandCyan = Color(0xFF0891B2);
-  static const Color _darkBrandCyan = Color(0xFF67E8F9);
+abstract final class AppColors {
+  static const frostBlue = Color(0xFF0891B2);
+  static const frostBlueLight = Color(0xFF67E8F9);
+  static const darkSurface = Color(0xFF0B0F1A);
+  static const lightSurface = Color(0xFFF6F8FC);
+}
 
+abstract final class AppSpacing {
+  static const xxs = 4.0;
+  static const xs = 8.0;
+  static const sm = 12.0;
+  static const md = 16.0;
+  static const lg = 24.0;
+  static const xl = 32.0;
+}
+
+abstract final class AppRadius {
+  static const control = 12.0;
+  static const image = 14.0;
+  static const group = 16.0;
+  static const input = 22.0;
+  static const sheet = 28.0;
+}
+
+abstract final class AppTypography {
+  static const bodySize = 16.0;
+  static const supportingSize = 14.0;
+  static const captionSize = 13.0;
+  static const bodyHeight = 1.6;
+}
+
+abstract final class AppMotion {
+  static const micro = Duration(milliseconds: 160);
+  static const sheet = Duration(milliseconds: 240);
+  static const curve = Curves.easeOutCubic;
+}
+
+abstract final class SunlandTheme {
   static ThemeData get light => _build(Brightness.light);
 
   static ThemeData get dark => _build(Brightness.dark);
@@ -12,12 +46,12 @@ abstract final class SunlandTheme {
     final isDark = brightness == Brightness.dark;
     final scheme =
         ColorScheme.fromSeed(
-          seedColor: isDark ? _darkBrandCyan : _brandCyan,
+          seedColor: isDark ? AppColors.frostBlueLight : AppColors.frostBlue,
           brightness: brightness,
         ).copyWith(
-          primary: isDark ? _darkBrandCyan : _brandCyan,
+          primary: isDark ? AppColors.frostBlueLight : AppColors.frostBlue,
           onPrimary: isDark ? const Color(0xFF083344) : Colors.white,
-          surface: isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF6F8FC),
+          surface: isDark ? AppColors.darkSurface : AppColors.lightSurface,
           onSurface: isDark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
           surfaceContainer: isDark
               ? const Color(0xFF111827)
@@ -42,8 +76,8 @@ abstract final class SunlandTheme {
       bodyColor: scheme.onSurface,
       displayColor: scheme.onSurface,
     );
-    final roundedRectangle = RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(16),
+    final roundedRectangle = const RoundedRectangleBorder(
+      borderRadius: BorderRadius.all(Radius.circular(AppRadius.group)),
     );
 
     return base.copyWith(
@@ -55,7 +89,10 @@ abstract final class SunlandTheme {
       splashColor: scheme.primary.withValues(alpha: 0.08),
       highlightColor: scheme.primary.withValues(alpha: 0.05),
       textTheme: textTheme.copyWith(
-        bodyMedium: textTheme.bodyMedium?.copyWith(fontSize: 15, height: 1.45),
+        bodyMedium: textTheme.bodyMedium?.copyWith(
+          fontSize: AppTypography.bodySize,
+          height: AppTypography.bodyHeight,
+        ),
         titleMedium: textTheme.titleMedium?.copyWith(
           fontWeight: FontWeight.w600,
           letterSpacing: -0.1,
@@ -84,7 +121,9 @@ abstract final class SunlandTheme {
         backgroundColor: scheme.surfaceContainerHigh,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.sheet)),
+        ),
         titleTextStyle: textTheme.titleLarge?.copyWith(
           color: scheme.onSurface,
           fontWeight: FontWeight.w700,
@@ -102,7 +141,9 @@ abstract final class SunlandTheme {
         showDragHandle: true,
         dragHandleColor: scheme.outline,
         shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(AppRadius.sheet),
+          ),
         ),
         clipBehavior: Clip.antiAlias,
       ),
@@ -117,13 +158,17 @@ abstract final class SunlandTheme {
         ),
         elevation: 0,
         insetPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.group)),
+        ),
       ),
       popupMenuTheme: PopupMenuThemeData(
         color: scheme.surfaceContainerHigh,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.group)),
+        ),
         textStyle: textTheme.bodyMedium,
       ),
       inputDecorationTheme: InputDecorationTheme(
@@ -133,19 +178,19 @@ abstract final class SunlandTheme {
           color: scheme.onSurfaceVariant.withValues(alpha: 0.72),
         ),
         contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 13,
+          horizontal: AppSpacing.sm,
+          vertical: AppSpacing.sm,
         ),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppRadius.group),
           borderSide: BorderSide(color: scheme.outlineVariant),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppRadius.group),
           borderSide: BorderSide(color: scheme.outlineVariant),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(AppRadius.group),
           borderSide: BorderSide(color: scheme.primary, width: 1.4),
         ),
       ),
@@ -155,8 +200,13 @@ abstract final class SunlandTheme {
         subtitleTextStyle: textTheme.bodySmall?.copyWith(
           color: scheme.onSurfaceVariant,
         ),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: AppSpacing.md,
+          vertical: AppSpacing.xxs / 2,
+        ),
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(AppRadius.image)),
+        ),
       ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
@@ -165,7 +215,9 @@ abstract final class SunlandTheme {
             scheme.primary.withValues(alpha: 0.09),
           ),
           shape: WidgetStatePropertyAll(
-            RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(AppRadius.control),
+            ),
           ),
         ),
       ),
@@ -189,8 +241,8 @@ abstract final class SunlandTheme {
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
           foregroundColor: scheme.primary,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.all(Radius.circular(AppRadius.control)),
           ),
           textStyle: const TextStyle(fontWeight: FontWeight.w600),
         ),
@@ -198,6 +250,18 @@ abstract final class SunlandTheme {
       checkboxTheme: CheckboxThemeData(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
         side: BorderSide(color: scheme.outline, width: 1.4),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? scheme.onPrimary
+              : scheme.outline,
+        ),
+        trackColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected)
+              ? scheme.primary
+              : scheme.surfaceContainerHigh,
+        ),
       ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: scheme.primary,

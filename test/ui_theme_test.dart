@@ -30,7 +30,7 @@ void main() {
   });
 
   group('StreamingMarkdownBody', () {
-    testWidgets('applies a soft reveal only while content is streaming', (
+    testWidgets('renders appended streaming content without a shader layer', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -43,7 +43,7 @@ void main() {
         ),
       );
 
-      expect(find.byType(ShaderMask), findsOneWidget);
+      expect(find.byType(ShaderMask), findsNothing);
 
       await tester.pumpWidget(
         _testApp(
@@ -54,9 +54,7 @@ void main() {
           ),
         ),
       );
-      await tester.pump(const Duration(milliseconds: 120));
-
-      expect(find.byType(ShaderMask), findsOneWidget);
+      expect(find.text('第一段回答，继续补充。'), findsOneWidget);
 
       await tester.pumpWidget(
         _testApp(
@@ -68,27 +66,26 @@ void main() {
         ),
       );
 
-      expect(find.byType(ShaderMask), findsNothing);
       expect(find.byType(MarkdownBody), findsOneWidget);
     });
 
-    testWidgets('disables reveal when the platform requests reduced motion', (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        _testApp(
-          mediaQuery: const MediaQueryData(disableAnimations: true),
-          child: StreamingMarkdownBody(
-            data: '减少动态效果',
-            styleSheet: MarkdownStyleSheet(),
-            isStreaming: true,
+    testWidgets(
+      'keeps streaming content readable when reduced motion is requested',
+      (tester) async {
+        await tester.pumpWidget(
+          _testApp(
+            mediaQuery: const MediaQueryData(disableAnimations: true),
+            child: StreamingMarkdownBody(
+              data: '减少动态效果',
+              styleSheet: MarkdownStyleSheet(),
+              isStreaming: true,
+            ),
           ),
-        ),
-      );
+        );
 
-      expect(find.byType(ShaderMask), findsNothing);
-      expect(find.text('减少动态效果'), findsOneWidget);
-    });
+        expect(find.text('减少动态效果'), findsOneWidget);
+      },
+    );
   });
 
   testWidgets('offline state follows the dark surface and text palette', (

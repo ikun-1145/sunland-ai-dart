@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../theme/sunland_theme.dart';
+
 class AssistantReasoningPanel extends StatefulWidget {
   const AssistantReasoningPanel({
     required this.reasoning,
@@ -66,25 +68,27 @@ class _AssistantReasoningPanelState extends State<AssistantReasoningPanel>
   @override
   Widget build(BuildContext context) {
     final reasoning = widget.reasoning.trim();
+    final colorScheme = Theme.of(context).colorScheme;
     final foreground = widget.isStreaming
-        ? const Color(0xFF22D3EE)
-        : (widget.isDark ? Colors.white60 : Colors.black54);
+        ? colorScheme.primary
+        : colorScheme.onSurfaceVariant;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
         Material(
-          color: widget.isDark
-              ? Colors.white.withOpacity(0.05)
-              : Colors.black.withOpacity(0.04),
-          borderRadius: BorderRadius.circular(8),
+          color: colorScheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(AppRadius.control),
           child: InkWell(
             key: const ValueKey('assistant-reasoning-toggle'),
             onTap: widget.onToggle,
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(AppRadius.control),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.xs,
+                vertical: AppSpacing.xxs,
+              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -108,7 +112,8 @@ class _AssistantReasoningPanelState extends State<AssistantReasoningPanel>
                   const SizedBox(width: 3),
                   AnimatedRotation(
                     turns: widget.expanded ? 0.25 : 0,
-                    duration: const Duration(milliseconds: 160),
+                    duration: AppMotion.micro,
+                    curve: AppMotion.curve,
                     child: Icon(
                       Icons.chevron_right,
                       size: 17,
@@ -121,12 +126,16 @@ class _AssistantReasoningPanelState extends State<AssistantReasoningPanel>
           ),
         ),
         AnimatedSize(
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeInOut,
+          duration: AppMotion.micro,
+          curve: AppMotion.curve,
           alignment: Alignment.topLeft,
           child: widget.expanded && reasoning.isNotEmpty
               ? Padding(
-                  padding: const EdgeInsets.only(top: 4, left: 2, right: 4),
+                  padding: const EdgeInsets.only(
+                    top: AppSpacing.xxs,
+                    left: AppSpacing.xxs,
+                    right: AppSpacing.xxs,
+                  ),
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 160),
                     child: SingleChildScrollView(
@@ -135,11 +144,9 @@ class _AssistantReasoningPanelState extends State<AssistantReasoningPanel>
                         reasoning,
                         key: const ValueKey('assistant-reasoning-content'),
                         style: TextStyle(
-                          fontSize: 12,
-                          height: 1.25,
-                          color: widget.isDark
-                              ? Colors.white54
-                              : Colors.black54,
+                          fontSize: AppTypography.captionSize,
+                          height: 1.45,
+                          color: colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ),

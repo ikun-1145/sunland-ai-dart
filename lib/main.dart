@@ -30,6 +30,8 @@ import 'services/network_connectivity_service.dart';
 import 'services/user_status_service.dart';
 import 'theme/sunland_theme.dart';
 import 'widgets/assistant_reasoning_panel.dart';
+import 'widgets/chat_composer.dart';
+import 'widgets/conversation_history_groups.dart';
 import 'widgets/streaming_markdown_body.dart';
 
 // ⭐ 全局 token 存储
@@ -1495,6 +1497,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   String _searchKeyword = "";
+  final TextEditingController _searchController = TextEditingController();
 
   bool _isThinkingPhase(Map<String, dynamic> msg) {
     final text = (msg['text'] ?? '').toString();
@@ -1670,6 +1673,7 @@ class _ChatPageState extends State<ChatPage> {
     bool isUser,
     bool isDark,
   ) {
+    final colorScheme = Theme.of(context).colorScheme;
     if (isUser) {
       final imagePaths = msg['imagePaths'];
       final paths = imagePaths is List
@@ -1688,21 +1692,13 @@ class _ChatPageState extends State<ChatPage> {
           ),
           child: Container(
             margin: const EdgeInsets.symmetric(vertical: 5),
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.xs,
+            ),
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(18),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF22D3EE).withOpacity(0.3),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
+              color: colorScheme.primary,
+              borderRadius: BorderRadius.circular(AppRadius.group),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.end,
@@ -1710,7 +1706,7 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 if (paths.isNotEmpty)
                   SizedBox(
-                    height: 64,
+                    height: paths.length == 1 ? 184 : 88,
                     child: ListView.separated(
                       scrollDirection: Axis.horizontal,
                       shrinkWrap: true,
@@ -1718,17 +1714,19 @@ class _ChatPageState extends State<ChatPage> {
                       separatorBuilder: (_, _) => const SizedBox(width: 6),
                       itemBuilder: (_, index) {
                         final path = paths[index];
+                        final imageSize = paths.length == 1 ? 184.0 : 88.0;
                         return ClipRRect(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(AppRadius.image),
                           child: Image.file(
                             File(path),
-                            width: 64,
-                            height: 64,
+                            width: imageSize,
+                            height: imageSize,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, _, _) => const SizedBox(
-                              width: 64,
-                              height: 64,
-                              child: Icon(Icons.broken_image, size: 20),
+                            cacheWidth: (imageSize * 3).round(),
+                            errorBuilder: (_, _, _) => SizedBox(
+                              width: imageSize,
+                              height: imageSize,
+                              child: const Icon(Icons.broken_image, size: 20),
                             ),
                           ),
                         );
@@ -1736,11 +1734,15 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                 if (paths.isNotEmpty && displayText.isNotEmpty)
-                  const SizedBox(height: 8),
+                  const SizedBox(height: AppSpacing.xs),
                 if (displayText.isNotEmpty)
                   Text(
                     displayText,
-                    style: const TextStyle(fontSize: 14, color: Colors.white),
+                    style: TextStyle(
+                      fontSize: AppTypography.supportingSize,
+                      height: 1.45,
+                      color: colorScheme.onPrimary,
+                    ),
                   ),
               ],
             ),
@@ -1801,7 +1803,7 @@ class _ChatPageState extends State<ChatPage> {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(0, 8, 16, 6),
+      padding: const EdgeInsets.fromLTRB(0, AppSpacing.xs, 0, AppSpacing.xs),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1828,38 +1830,38 @@ class _ChatPageState extends State<ChatPage> {
     if (cached != null) return cached;
     final sheet = MarkdownStyleSheet(
       h1: TextStyle(
-        fontSize: 22,
-        fontWeight: FontWeight.bold,
-        color: isDark ? Colors.white : Colors.black87,
-        height: 1.4,
+        fontSize: 24,
+        fontWeight: FontWeight.w700,
+        color: isDark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
+        height: 1.3,
       ),
       h2: TextStyle(
-        fontSize: 19,
-        fontWeight: FontWeight.bold,
-        color: isDark ? Colors.white : Colors.black87,
-        height: 1.4,
+        fontSize: 20,
+        fontWeight: FontWeight.w700,
+        color: isDark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
+        height: 1.35,
       ),
       h3: TextStyle(
-        fontSize: 16,
+        fontSize: 17,
         fontWeight: FontWeight.w600,
-        color: isDark ? Colors.white : Colors.black87,
+        color: isDark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
         height: 1.4,
       ),
       p: TextStyle(
-        fontSize: 15,
-        height: 1.65,
-        color: isDark ? Colors.white.withOpacity(0.9) : Colors.black87,
+        fontSize: AppTypography.bodySize,
+        height: AppTypography.bodyHeight,
+        color: isDark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
       ),
       strong: const TextStyle(fontWeight: FontWeight.bold),
       em: const TextStyle(fontStyle: FontStyle.italic),
       tableHead: TextStyle(
         fontWeight: FontWeight.bold,
         fontSize: 14,
-        color: isDark ? Colors.white : Colors.black87,
+        color: isDark ? const Color(0xFFF1F5F9) : const Color(0xFF0F172A),
       ),
       tableBody: TextStyle(
         fontSize: 14,
-        color: isDark ? Colors.white.withOpacity(0.85) : Colors.black87,
+        color: isDark ? const Color(0xFFE2E8F0) : const Color(0xFF1E293B),
       ),
       tableBorder: TableBorder.all(
         color: isDark
@@ -1871,7 +1873,7 @@ class _ChatPageState extends State<ChatPage> {
       tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
       codeblockDecoration: BoxDecoration(
         color: isDark ? const Color(0xFF1A1F2E) : const Color(0xFFF5F5F5),
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(AppRadius.control),
       ),
       code: TextStyle(
         fontFamily: 'monospace',
@@ -4463,6 +4465,7 @@ class _ChatPageState extends State<ChatPage> {
     apiClient.close();
     unawaited(sunlandProvider.dispose());
     controller.dispose();
+    _searchController.dispose();
     scrollController.dispose();
     super.dispose();
   }
@@ -4486,22 +4489,16 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Widget buildQuickBtn(String text) {
-    return GestureDetector(
-      onTap: () {
+    return ActionChip(
+      avatar: const Icon(Icons.auto_awesome_outlined, size: 16),
+      label: Text(text),
+      onPressed: () {
         controller.text = text.replaceAll(
           RegExp(r'^[^ ]+ '),
           '',
         ); // 去掉 emoji 前缀
         sendMessage();
       },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-          color: Colors.black.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Text(text, style: const TextStyle(fontSize: 14)),
-      ),
     );
   }
 
@@ -4981,11 +4978,190 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
+  void _showModelPicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('选择模型', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              _modelItem(
+                name: 'Sunland',
+                label: 'Sunland AI · Beta',
+                description: '云端符号推理，不使用 DeepSeek',
+                assetPath: 'assets/studio.png',
+                logoSize: 24,
+                locked: !sunlandProvider.isSupported,
+                selected: _activeProvider == sunlandProviderId,
+                onTap: () async {
+                  final changed = await _selectConversationProvider(
+                    provider: sunlandProviderId,
+                    model: sunlandModelId,
+                  );
+                  if (changed && sheetContext.mounted) {
+                    Navigator.pop(sheetContext);
+                  }
+                },
+              ),
+              _modelItem(
+                name: 'Flash',
+                selected:
+                    _activeProvider == deepSeekProviderId &&
+                    currentModel.contains('flash'),
+                onTap: () async {
+                  final changed = await _selectConversationProvider(
+                    provider: deepSeekProviderId,
+                    model: 'deepseek-v4-flash',
+                  );
+                  if (changed && sheetContext.mounted) {
+                    Navigator.pop(sheetContext);
+                  }
+                },
+              ),
+              _modelItem(
+                name: 'Pro',
+                locked: !isActivated,
+                selected:
+                    _activeProvider == deepSeekProviderId &&
+                    currentModel.contains('pro'),
+                onTap: () async {
+                  if (!isActivated) {
+                    Navigator.pop(sheetContext);
+                    _showLimitSheet(featureName: 'Pro 模型');
+                    return;
+                  }
+                  final changed = await _selectConversationProvider(
+                    provider: deepSeekProviderId,
+                    model: 'deepseek-v4-pro',
+                  );
+                  if (changed && sheetContext.mounted) {
+                    Navigator.pop(sheetContext);
+                  }
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<ConversationHistoryGroup> _visibleConversationGroups() {
+    final keyword = _searchKeyword;
+    final visible = conversations.where((conversation) {
+      if (keyword.isEmpty) return true;
+      return (conversation['title'] ?? '').toString().toLowerCase().contains(
+        keyword,
+      );
+    }).toList();
+    return groupConversationsByUpdatedAt(visible, now: DateTime.now());
+  }
+
+  void _createConversation() {
+    if (currentConversationId == null && messages.isEmpty) {
+      Navigator.pop(context);
+      return;
+    }
+    Navigator.pop(context);
+    setState(() {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final newId = now.toString();
+      currentConversationId = newId;
+      _lastQueryContext = null;
+      _pendingProvider = deepSeekProviderId;
+      useDeep = false;
+      pickedImages.clear();
+      conversations.insert(0, {
+        'id': newId,
+        'title': '新对话',
+        'updatedAt': now,
+        'provider': deepSeekProviderId,
+        'model': currentModel,
+        'userId': currentUserNotifier.value?.id,
+        'createdAt': now,
+      });
+      messages.clear();
+      localConversationMessages[newId] = [];
+    });
+  }
+
+  void _selectConversation(Map<String, dynamic> conversation) {
+    Navigator.pop(context);
+    if (currentConversationId == conversation['id']) return;
+    rememberLocalMessages();
+    setState(() {
+      currentConversationId = conversation['id']?.toString();
+      _lastQueryContext = null;
+      messages = normalizeMessages(
+        List<Map<String, dynamic>>.from(
+          localConversationMessages[currentConversationId] ?? [],
+        ),
+      );
+      _applyProviderStateForConversation(conversation);
+    });
+  }
+
+  Widget _conversationTile(BuildContext context, Map<String, dynamic> convo) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final selected = currentConversationId == convo['id'];
+    final id = convo['id']?.toString() ?? '';
+    final deletable =
+        convo['title'] != '新对话' &&
+        (localConversationMessages[convo['id']]?.isNotEmpty ?? false);
+    return Material(
+      color: selected
+          ? colorScheme.primary.withValues(alpha: 0.12)
+          : Colors.transparent,
+      borderRadius: BorderRadius.circular(AppRadius.image),
+      child: ListTile(
+        selected: selected,
+        leading: Icon(
+          Icons.chat_bubble_outline,
+          size: 18,
+          color: selected ? colorScheme.primary : colorScheme.onSurfaceVariant,
+        ),
+        title: Text(
+          convo['title']?.toString() ?? '新对话',
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          ),
+        ),
+        trailing: deletable
+            ? PopupMenuButton<String>(
+                tooltip: '更多操作',
+                onSelected: (action) {
+                  if (action == 'delete') unawaited(deleteConversation(id));
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'delete',
+                    child: Row(
+                      children: [
+                        Icon(Icons.delete_outline),
+                        SizedBox(width: AppSpacing.xs),
+                        Text('删除对话'),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : null,
+        onTap: () => _selectConversation(convo),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final colorScheme = Theme.of(context).colorScheme;
     final isSunlandConversation = _isSunlandConversation;
-    final isProviderLocked = _hasCurrentConversationStarted;
 
     return Scaffold(
       onDrawerChanged: (isOpened) {
@@ -4994,55 +5170,37 @@ class _ChatPageState extends State<ChatPage> {
         }
       },
       drawer: Drawer(
-        backgroundColor: isDark ? const Color(0xFF0F0F0F) : Colors.white,
+        backgroundColor: colorScheme.surface,
         child: SafeArea(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // --- Richer header card ---
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: isDark
-                        ? const Color(0xFF111827)
-                        : Colors.grey.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Row(
-                    children: [
-                      Image.asset('assets/ailogo.png', width: 52, height: 52),
-                      const SizedBox(width: 12),
-                      Column(
+                Row(
+                  children: [
+                    Image.asset('assets/ailogo.png', width: 36, height: 36),
+                    const SizedBox(width: AppSpacing.sm),
+                    Expanded(
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            "霜蓝 AI",
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.bold,
-                              color: isDark ? Colors.white : Colors.black87,
-                            ),
+                            '霜蓝 AI',
+                            style: Theme.of(context).textTheme.titleMedium,
                           ),
-                          const SizedBox(height: 4),
                           Text(
-                            "你的智能助手",
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: isDark ? Colors.white60 : Colors.black45,
-                            ),
+                            '对话历史',
+                            style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-
-                const SizedBox(height: 20),
-
-                // --- Search TextField ---
+                const SizedBox(height: AppSpacing.lg),
                 TextField(
+                  controller: _searchController,
                   onChanged: (value) {
                     setState(() {
                       _searchKeyword = value.toLowerCase();
@@ -5055,234 +5213,68 @@ class _ChatPageState extends State<ChatPage> {
                         ? IconButton(
                             icon: const Icon(Icons.close, size: 18),
                             onPressed: () {
+                              _searchController.clear();
                               setState(() {
                                 _searchKeyword = "";
                               });
                             },
                           )
                         : null,
-                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                    filled: true,
-                    fillColor: isDark
-                        ? const Color(0xFF111827)
-                        : Colors.grey.withOpacity(0.1),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
+                    contentPadding: const EdgeInsets.symmetric(
+                      vertical: AppSpacing.xs,
                     ),
                   ),
                 ),
 
-                const SizedBox(height: 12),
-
-                GestureDetector(
-                  onTap: () {
-                    // ✅ 如果已经是新对话（没有ID + 没消息）就不创建
-                    if (currentConversationId == null && messages.isEmpty) {
-                      Navigator.pop(context);
-                      return;
-                    }
-
-                    Navigator.pop(context);
-
-                    setState(() {
-                      final newId = DateTime.now().millisecondsSinceEpoch
-                          .toString();
-
-                      currentConversationId = newId;
-                      _lastQueryContext = null; // 新建对话：清空兽聚查询上下文
-                      _pendingProvider = deepSeekProviderId;
-                      useDeep = false;
-                      pickedImages.clear();
-
-                      conversations.insert(0, {
-                        'id': newId,
-                        'title': '新对话',
-                        'updatedAt': DateTime.now().millisecondsSinceEpoch,
-                        'provider': deepSeekProviderId,
-                        'model': currentModel,
-                        'userId': currentUserNotifier.value?.id,
-                        'createdAt': DateTime.now().millisecondsSinceEpoch,
-                      });
-
-                      messages.clear();
-                      localConversationMessages[newId] = [];
-                    });
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(
-                      gradient: const LinearGradient(
-                        colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)],
-                      ),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: Center(
-                      child: Text(
-                        "新建对话",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
+                const SizedBox(height: AppSpacing.sm),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton.icon(
+                    onPressed: _createConversation,
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('新建对话'),
                   ),
                 ),
-
-                const SizedBox(height: 12),
-
+                const SizedBox(height: AppSpacing.sm),
                 Expanded(
                   child: Builder(
                     builder: (context) {
-                      final filteredConversations = conversations.where((c) {
-                        if (_searchKeyword.isEmpty) return true;
-                        final title = (c['title'] ?? '')
-                            .toString()
-                            .toLowerCase();
-                        return title.contains(_searchKeyword);
-                      }).toList();
-                      if (filteredConversations.isEmpty) {
+                      final groups = _visibleConversationGroups();
+                      if (groups.isEmpty) {
                         return Center(
                           child: Text(
-                            "没有找到相关对话",
-                            style: TextStyle(color: Colors.grey, fontSize: 13),
+                            '没有找到相关对话',
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
                           ),
                         );
                       }
                       return ListView.builder(
-                        itemCount: filteredConversations.length,
+                        itemCount: groups.length,
                         itemBuilder: (context, index) {
-                          final convo = filteredConversations[index];
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 6),
-                            decoration: BoxDecoration(
-                              color: currentConversationId == convo['id']
-                                  ? const Color(
-                                      0xFF22D3EE,
-                                    ).withOpacity(isDark ? 0.25 : 0.18)
-                                  : (isDark
-                                        ? const Color(0xFF111827)
-                                        : Colors.grey.withOpacity(0.08)),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child:
-                                (convo['title'] == '新对话' ||
-                                    (localConversationMessages[convo['id']]
-                                            ?.isEmpty ??
-                                        true))
-                                ? ListTile(
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    title: Text(
-                                      convo['title'] ?? '新对话',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        fontWeight:
-                                            currentConversationId == convo['id']
-                                            ? FontWeight.w600
-                                            : FontWeight.normal,
-                                      ),
-                                    ),
-                                    leading: Icon(
-                                      Icons.chat_bubble_outline,
-                                      size: 18,
-                                      color:
-                                          currentConversationId == convo['id']
-                                          ? const Color(0xFF22D3EE)
-                                          : null,
-                                    ),
-                                    onTap: () {
-                                      Navigator.pop(context);
-                                      if (currentConversationId !=
-                                          convo['id']) {
-                                        rememberLocalMessages();
-                                        setState(() {
-                                          currentConversationId = convo['id'];
-                                          _lastQueryContext =
-                                              null; // 切换对话：清空兽聚查询上下文
-                                          messages = normalizeMessages(
-                                            List<Map<String, dynamic>>.from(
-                                              localConversationMessages[currentConversationId] ??
-                                                  [],
-                                            ),
-                                          );
-                                          _applyProviderStateForConversation(
-                                            convo,
-                                          );
-                                        });
-                                      }
-                                    },
-                                  )
-                                : Dismissible(
-                                    key: ValueKey(convo['id']),
-                                    direction: DismissDirection.endToStart,
-                                    background: Container(
-                                      alignment: Alignment.centerRight,
-                                      padding: const EdgeInsets.only(
-                                        right: 16,
-                                        top: 8,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.red,
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      child: const Icon(
-                                        Icons.delete,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                    onDismissed: (_) {
-                                      deleteConversation(convo['id']);
-                                    },
-                                    child: ListTile(
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                      title: Text(
-                                        convo['title'] ?? '新对话',
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontWeight:
-                                              currentConversationId ==
-                                                  convo['id']
-                                              ? FontWeight.w600
-                                              : FontWeight.normal,
-                                        ),
-                                      ),
-                                      leading: Icon(
-                                        Icons.chat_bubble_outline,
-                                        size: 18,
-                                        color:
-                                            currentConversationId == convo['id']
-                                            ? const Color(0xFF22D3EE)
-                                            : null,
-                                      ),
-                                      onTap: () {
-                                        Navigator.pop(context);
-                                        if (currentConversationId !=
-                                            convo['id']) {
-                                          rememberLocalMessages();
-                                          setState(() {
-                                            currentConversationId = convo['id'];
-                                            _lastQueryContext =
-                                                null; // 切换对话：清空兽聚查询上下文
-                                            messages = normalizeMessages(
-                                              List<Map<String, dynamic>>.from(
-                                                localConversationMessages[currentConversationId] ??
-                                                    [],
-                                              ),
-                                            );
-                                            _applyProviderStateForConversation(
-                                              convo,
-                                            );
-                                          });
-                                        }
-                                      },
-                                    ),
-                                  ),
+                          final group = groups[index];
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  AppSpacing.xs,
+                                  AppSpacing.sm,
+                                  AppSpacing.xs,
+                                  AppSpacing.xxs,
+                                ),
+                                child: Text(
+                                  group.label,
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.labelMedium,
+                                ),
+                              ),
+                              ...group.conversations.map(
+                                (convo) => _conversationTile(context, convo),
+                              ),
+                            ],
                           );
                         },
                       );
@@ -5295,11 +5287,11 @@ class _ChatPageState extends State<ChatPage> {
         ),
       ),
       extendBodyBehindAppBar: true,
-      backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.transparent,
+      backgroundColor: colorScheme.surface,
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        backgroundColor: isDark ? const Color(0xFF0B0F1A) : Colors.transparent,
-        foregroundColor: isDark ? Colors.white : Colors.black87,
+        backgroundColor: colorScheme.surface,
+        foregroundColor: colorScheme.onSurface,
         elevation: 0,
         systemOverlayStyle: SystemUiOverlayStyle(
           statusBarColor: Colors.transparent,
@@ -5349,10 +5341,10 @@ class _ChatPageState extends State<ChatPage> {
                         ),
                         minimumSize: Size.zero,
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        foregroundColor: const Color(0xFF7C3AED),
-                        backgroundColor: const Color(
-                          0xFF7C3AED,
-                        ).withValues(alpha: 0.1),
+                        foregroundColor: colorScheme.primary,
+                        backgroundColor: colorScheme.primary.withValues(
+                          alpha: 0.1,
+                        ),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(999),
                         ),
@@ -5375,7 +5367,7 @@ class _ChatPageState extends State<ChatPage> {
                       onTap: _openSettings,
                       child: CircleAvatar(
                         radius: 17,
-                        backgroundColor: const Color(0xFF22D3EE),
+                        backgroundColor: colorScheme.primary,
                         backgroundImage:
                             (user?.userMetadata?['avatar_url'] != null)
                             ? NetworkImage(user!.userMetadata!['avatar_url'])
@@ -5412,18 +5404,6 @@ class _ChatPageState extends State<ChatPage> {
         onTap: () => FocusScope.of(context).unfocus(),
         child: Stack(
           children: [
-            // 背景渐变（更高级）
-            Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: isDark
-                      ? const [Color(0xFF0B0F1A), Color(0xFF0F172A)]
-                      : const [Color(0xFFF8FAFF), Color(0xFFEAF2FF)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-              ),
-            ),
             Column(
               children: [
                 // Insert padding at the very top to offset for AppBar when extendBodyBehindAppBar is true
@@ -5457,22 +5437,12 @@ class _ChatPageState extends State<ChatPage> {
                           const SizedBox(height: 16),
                           Padding(
                             padding: const EdgeInsets.fromLTRB(20, 10, 20, 0),
-                            child: ShaderMask(
-                              shaderCallback: (bounds) {
-                                return const LinearGradient(
-                                  colors: [
-                                    Color(0xFF22D3EE),
-                                    Color(0xFF3B82F6),
-                                  ],
-                                ).createShader(bounds);
-                              },
-                              child: const Text(
-                                "今天想做点什么？",
-                                style: TextStyle(
-                                  fontSize: 30,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.white,
-                                ),
+                            child: Text(
+                              '今天想做点什么？',
+                              style: TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.w700,
+                                color: colorScheme.primary,
                               ),
                             ),
                           ),
@@ -5504,7 +5474,7 @@ class _ChatPageState extends State<ChatPage> {
                       physics: const BouncingScrollPhysics(
                         parent: AlwaysScrollableScrollPhysics(),
                       ),
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 180),
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
                       itemCount: messages.length,
                       itemBuilder: (_, i) {
                         final msg = messages[i];
@@ -5533,478 +5503,42 @@ class _ChatPageState extends State<ChatPage> {
                               alignment: isUser
                                   ? Alignment.centerRight
                                   : Alignment.centerLeft,
-                              child: buildMessageContent(msg, isUser, isDark),
+                              child: ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 760,
+                                ),
+                                child: buildMessageContent(msg, isUser, isDark),
+                              ),
                             ),
                           ),
                         );
                       },
                     ),
                   ),
-                // 输入区（上下两层）
-                SafeArea(
-                  top: false,
-                  child: Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: BackdropFilter(
-                        filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
-                        child: Container(
-                          padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-                          decoration: BoxDecoration(
-                            color: isDark
-                                ? const Color(0xFF0F172A).withOpacity(0.92)
-                                : Colors.white.withOpacity(0.92),
-                            borderRadius: BorderRadius.circular(24),
-                            border: Border.all(
-                              color: isDark
-                                  ? Colors.white.withOpacity(0.1)
-                                  : Colors.black.withOpacity(0.08),
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withOpacity(0.15),
-                                blurRadius: 40,
-                                offset: const Offset(0, -5),
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              // ===== ① 图片预览区 =====
-                              if (pickedImages.isNotEmpty)
-                                Container(
-                                  margin: const EdgeInsets.only(bottom: 8),
-                                  height: 70,
-                                  child: ListView.builder(
-                                    scrollDirection: Axis.horizontal,
-                                    itemCount: pickedImages.length,
-                                    itemBuilder: (_, i) {
-                                      final path = pickedImages[i];
-                                      return Stack(
-                                        children: [
-                                          Container(
-                                            margin: const EdgeInsets.only(
-                                              right: 8,
-                                            ),
-                                            child: ClipRRect(
-                                              borderRadius:
-                                                  BorderRadius.circular(10),
-                                              child: Image.file(
-                                                File(path),
-                                                width: 70,
-                                                height: 70,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (_, _, _) =>
-                                                    const SizedBox(
-                                                      width: 70,
-                                                      height: 70,
-                                                      child: Icon(
-                                                        Icons.broken_image,
-                                                        size: 20,
-                                                      ),
-                                                    ),
-                                              ),
-                                            ),
-                                          ),
-                                          Positioned(
-                                            top: 2,
-                                            right: 10,
-                                            child: GestureDetector(
-                                              onTap: () {
-                                                setState(() {
-                                                  pickedImages.removeAt(i);
-                                                });
-                                              },
-                                              child: Container(
-                                                decoration: BoxDecoration(
-                                                  color: Colors.black54,
-                                                  shape: BoxShape.circle,
-                                                ),
-                                                child: const Icon(
-                                                  Icons.close,
-                                                  size: 14,
-                                                  color: Colors.white,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
-
-                              // ===== ② 输入框 =====
-                              TextField(
-                                controller: controller,
-                                minLines: 1,
-                                maxLines: 3,
-                                style: TextStyle(fontSize: 14),
-                                decoration: InputDecoration(
-                                  hintText: "输入消息...",
-                                  isDense: true,
-                                  contentPadding: EdgeInsets.symmetric(
-                                    vertical: 8,
-                                  ),
-                                  border: InputBorder.none,
-                                ),
-                              ),
-
-                              const SizedBox(height: 8),
-
-                              // ===== ③ 功能按钮区 =====
-                              Row(
-                                children: [
-                                  IconButton(
-                                    icon: const Icon(
-                                      Icons.add_photo_alternate_outlined,
-                                    ),
-                                    tooltip: isSunlandConversation
-                                        ? 'Sunland AI 暂不支持文件上传'
-                                        : '拍照或选择图片',
-                                    onPressed: isSunlandConversation
-                                        ? null
-                                        : pickImage,
-                                  ),
-
-                                  GestureDetector(
-                                    onTap: isSunlandConversation
-                                        ? null
-                                        : () {
-                                            if (!isActivated) {
-                                              _showLimitSheet(
-                                                featureName: '深度思考',
-                                              );
-                                              return;
-                                            }
-
-                                            setState(() {
-                                              useDeep = !useDeep;
-                                            });
-
-                                            _saveModelPrefs();
-                                          },
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 10,
-                                        vertical: 7,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: useDeep
-                                            ? const Color(
-                                                0xFF22D3EE,
-                                              ).withOpacity(0.2)
-                                            : Colors.transparent,
-                                        borderRadius: BorderRadius.circular(
-                                          999,
-                                        ),
-                                        border: useDeep
-                                            ? Border.all(
-                                                color: const Color(0xFF22D3EE),
-                                                width: 1.5,
-                                              )
-                                            : null,
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Image.asset(
-                                            isDark
-                                                ? 'assets/ailogo_dark.png'
-                                                : 'assets/ailogo.png',
-                                            width: 22,
-                                            height: 22,
-                                            color:
-                                                isSunlandConversation ||
-                                                    !isActivated
-                                                ? Colors.grey
-                                                : (useDeep
-                                                      ? const Color(0xFF22D3EE)
-                                                      : null),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            '深度思考',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600,
-                                              color:
-                                                  isSunlandConversation ||
-                                                      !isActivated
-                                                  ? Colors.grey
-                                                  : (useDeep
-                                                        ? const Color(
-                                                            0xFF0891B2,
-                                                          )
-                                                        : (isDark
-                                                              ? Colors.white70
-                                                              : Colors
-                                                                    .black54)),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-
-                                  const Spacer(),
-
-                                  GestureDetector(
-                                    onTap: () {
-                                      if (isSunlandConversation &&
-                                          isProviderLocked) {
-                                        ScaffoldMessenger.of(
-                                          context,
-                                        ).showSnackBar(
-                                          const SnackBar(
-                                            content: Text(
-                                              '当前对话已绑定 Sunland AI，请新建对话后切换模型。',
-                                            ),
-                                          ),
-                                        );
-                                        return;
-                                      }
-                                      showDialog(
-                                        context: context,
-                                        barrierColor: Colors.black.withOpacity(
-                                          0.3,
-                                        ),
-                                        builder: (dialogContext) {
-                                          final isDarkDialog =
-                                              Theme.of(
-                                                dialogContext,
-                                              ).brightness ==
-                                              Brightness.dark;
-
-                                          return Center(
-                                            child: Material(
-                                              color: Colors.transparent,
-                                              child: Container(
-                                                width: 260,
-                                                padding: const EdgeInsets.all(
-                                                  14,
-                                                ),
-                                                decoration: BoxDecoration(
-                                                  color: isDarkDialog
-                                                      ? const Color(0xFF111827)
-                                                      : Colors.white,
-                                                  borderRadius:
-                                                      BorderRadius.circular(16),
-                                                  boxShadow: [
-                                                    BoxShadow(
-                                                      color: Colors.black
-                                                          .withOpacity(0.2),
-                                                      blurRadius: 20,
-                                                    ),
-                                                  ],
-                                                ),
-                                                child: Column(
-                                                  mainAxisSize:
-                                                      MainAxisSize.min,
-                                                  children: [
-                                                    const Text(
-                                                      "选择模型",
-                                                      style: TextStyle(
-                                                        fontSize: 14,
-                                                        fontWeight:
-                                                            FontWeight.bold,
-                                                      ),
-                                                    ),
-
-                                                    const SizedBox(height: 10),
-
-                                                    _modelItem(
-                                                      name: "Sunland",
-                                                      label:
-                                                          "Sunland AI · Beta",
-                                                      description:
-                                                          "云端符号推理，不使用 DeepSeek",
-                                                      assetPath:
-                                                          'assets/studio.png',
-                                                      logoSize: 24,
-                                                      locked: !sunlandProvider
-                                                          .isSupported,
-                                                      selected:
-                                                          _activeProvider ==
-                                                          sunlandProviderId,
-                                                      onTap: () async {
-                                                        final changed =
-                                                            await _selectConversationProvider(
-                                                              provider:
-                                                                  sunlandProviderId,
-                                                              model:
-                                                                  sunlandModelId,
-                                                            );
-                                                        if (changed &&
-                                                            dialogContext
-                                                                .mounted) {
-                                                          Navigator.pop(
-                                                            dialogContext,
-                                                          );
-                                                        }
-                                                      },
-                                                    ),
-
-                                                    _modelItem(
-                                                      name: "Flash",
-                                                      selected:
-                                                          _activeProvider ==
-                                                              deepSeekProviderId &&
-                                                          currentModel.contains(
-                                                            'flash',
-                                                          ),
-                                                      onTap: () async {
-                                                        final changed =
-                                                            await _selectConversationProvider(
-                                                              provider:
-                                                                  deepSeekProviderId,
-                                                              model:
-                                                                  'deepseek-v4-flash',
-                                                            );
-                                                        if (changed &&
-                                                            dialogContext
-                                                                .mounted) {
-                                                          Navigator.pop(
-                                                            dialogContext,
-                                                          );
-                                                        }
-                                                      },
-                                                    ),
-
-                                                    _modelItem(
-                                                      name: "Pro",
-                                                      locked: !isActivated,
-                                                      selected:
-                                                          _activeProvider ==
-                                                              deepSeekProviderId &&
-                                                          currentModel.contains(
-                                                            'pro',
-                                                          ),
-                                                      onTap: () async {
-                                                        if (!isActivated) {
-                                                          Navigator.pop(
-                                                            dialogContext,
-                                                          );
-                                                          _showLimitSheet(
-                                                            featureName:
-                                                                'Pro 模型',
-                                                          );
-                                                          return;
-                                                        }
-
-                                                        final changed =
-                                                            await _selectConversationProvider(
-                                                              provider:
-                                                                  deepSeekProviderId,
-                                                              model:
-                                                                  'deepseek-v4-pro',
-                                                            );
-                                                        if (changed &&
-                                                            dialogContext
-                                                                .mounted) {
-                                                          Navigator.pop(
-                                                            dialogContext,
-                                                          );
-                                                        }
-                                                      },
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                      );
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: isDark
-                                            ? Colors.white.withOpacity(0.1)
-                                            : Colors.black.withOpacity(0.05),
-                                        borderRadius: BorderRadius.circular(10),
-                                      ),
-                                      child: isSunlandConversation
-                                          ? Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                ClipRRect(
-                                                  borderRadius:
-                                                      BorderRadius.circular(5),
-                                                  child: Image.asset(
-                                                    'assets/studio.png',
-                                                    width: 20,
-                                                    height: 20,
-                                                  ),
-                                                ),
-                                                const SizedBox(width: 6),
-                                                const Text(
-                                                  "Sunland AI · Beta",
-                                                  style: TextStyle(
-                                                    fontSize: 12,
-                                                  ),
-                                                ),
-                                                if (isProviderLocked) ...[
-                                                  const SizedBox(width: 4),
-                                                  const Icon(
-                                                    Icons.lock,
-                                                    size: 12,
-                                                  ),
-                                                ],
-                                              ],
-                                            )
-                                          : Text(
-                                              currentModel.contains('pro')
-                                                  ? "Pro"
-                                                  : "Flash",
-                                              style: const TextStyle(
-                                                fontSize: 12,
-                                              ),
-                                            ),
-                                    ),
-                                  ),
-
-                                  const SizedBox(width: 8),
-
-                                  IconButton(
-                                    icon: Icon(
-                                      isGenerating
-                                          ? Icons.stop_circle
-                                          : Icons.send,
-                                    ),
-                                    onPressed: isGenerating
-                                        ? cancelGeneration
-                                        : () {
-                                            final text = controller.text.trim();
-
-                                            if (text.isEmpty &&
-                                                pickedImages.isEmpty) {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                const SnackBar(
-                                                  content: Text("请输入内容"),
-                                                ),
-                                              );
-                                              return;
-                                            }
-
-                                            sendMessage();
-                                          },
-                                  ),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
+                ChatComposer(
+                  controller: controller,
+                  attachments: pickedImages,
+                  isGenerating: isGenerating,
+                  attachmentsEnabled: !isSunlandConversation,
+                  deepThinkingEnabled: useDeep,
+                  deepThinkingAvailable: !isSunlandConversation && isActivated,
+                  modelLabel: isSunlandConversation
+                      ? 'Sunland AI · Beta'
+                      : (currentModel.contains('pro') ? 'Pro' : 'Flash'),
+                  onPickImage: pickImage,
+                  onRemoveAttachment: (index) =>
+                      setState(() => pickedImages.removeAt(index)),
+                  onToggleDeepThinking: () {
+                    if (!isActivated) {
+                      _showLimitSheet(featureName: '深度思考');
+                      return;
+                    }
+                    setState(() => useDeep = !useDeep);
+                    unawaited(_saveModelPrefs());
+                  },
+                  onSelectModel: _showModelPicker,
+                  onSend: sendMessage,
+                  onStop: cancelGeneration,
                 ),
               ],
             ),

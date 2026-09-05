@@ -15,6 +15,7 @@ import 'pro_purchase.dart';
 import 'sunland_beta_diagnostics.dart';
 import 'sunland_ai_core.dart';
 import 'sunland_remote_provider.dart';
+import 'theme/sunland_theme.dart';
 import 'widgets/sunland_settings_sections.dart';
 
 const nicknameMaxLength = 8;
@@ -604,271 +605,236 @@ class _SettingsPageState extends State<SettingsPage>
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).scaffoldBackgroundColor,
-        ),
-        child: Stack(
-          children: [
-            Positioned(
-              top: -80,
-              left: -60,
-              child: Container(
-                width: 220,
-                height: 220,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [Color(0x5522D3EE), Colors.transparent],
-                  ),
+      body: SafeArea(
+        child: _loading
+            ? Center(
+                child: Image.asset('assets/loading.gif', width: 64, height: 64),
+              )
+            : ListView(
+                padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.sm,
+                  AppSpacing.xs,
+                  AppSpacing.sm,
+                  AppSpacing.lg,
                 ),
-              ),
-            ),
-            Positioned(
-              top: -60,
-              right: -40,
-              child: Container(
-                width: 200,
-                height: 200,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [Color(0x55A78BFA), Colors.transparent],
+                children: [
+                  _AvatarHeader(
+                    user: user,
+                    nickname: _nickname,
+                    uploading: _uploadingAvatar,
+                    status: _avatarStatus,
+                    onTap: _pickAvatar,
+                    activated: _isActivated,
                   ),
-                ),
-              ),
-            ),
-            SafeArea(
-              child: _loading
-                  ? Center(
-                      child: Image.asset(
-                        'assets/loading.gif',
-                        width: 64,
-                        height: 64,
+                  const SizedBox(height: 20),
+                  _SectionTitle('账号'),
+                  _SettingsCard(
+                    children: [
+                      _ActionRow(
+                        icon: Icons.campaign_outlined,
+                        label: '公告',
+                        onTap: () => Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const AnnouncementsPage(),
+                          ),
+                        ),
                       ),
-                    )
-                  : ListView(
-                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
-                      children: [
-                        _AvatarHeader(
-                          user: user,
-                          nickname: _nickname,
-                          uploading: _uploadingAvatar,
-                          status: _avatarStatus,
-                          onTap: _pickAvatar,
-                          activated: _isActivated,
+                      _ActionRow(
+                        icon: Icons.person,
+                        label: '昵称',
+                        onTap: _editNickname,
+                      ),
+                      _InfoRow(
+                        icon: Icons.alternate_email,
+                        label: '邮箱',
+                        value: user?.email ?? '未登录',
+                      ),
+                      _InfoRow(
+                        icon: Icons.badge_outlined,
+                        label: '用户 ID',
+                        value: user?.id != null && user!.id.length > 8
+                            ? user.id.substring(0, 8)
+                            : (user?.id ?? '--'),
+                        monospace: true,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  // --- Theme Switcher Section ---
+                  _SectionTitle('外观'),
+                  _SettingsCard(
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.palette_outlined),
+                        title: const Text('主题模式'),
+                        subtitle: Text(
+                          Theme.of(context).brightness == Brightness.dark
+                              ? '深色模式'
+                              : '浅色模式',
                         ),
-                        const SizedBox(height: 20),
-                        _SectionTitle('账号'),
-                        _SettingsCard(
-                          children: [
-                            _ActionRow(
-                              icon: Icons.campaign_outlined,
-                              label: '公告',
-                              onTap: () => Navigator.of(context).push(
-                                MaterialPageRoute<void>(
-                                  builder: (_) => const AnnouncementsPage(),
-                                ),
-                              ),
+                        trailing: PopupMenuButton<ThemeMode>(
+                          onSelected: (mode) {
+                            themeNotifier.value = mode;
+                            saveThemeMode(mode);
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(
+                              value: ThemeMode.light,
+                              child: Text('浅色模式'),
                             ),
-                            _ActionRow(
-                              icon: Icons.person,
-                              label: '昵称',
-                              onTap: _editNickname,
+                            PopupMenuItem(
+                              value: ThemeMode.dark,
+                              child: Text('深色模式'),
                             ),
-                            _InfoRow(
-                              icon: Icons.alternate_email,
-                              label: '邮箱',
-                              value: user?.email ?? '未登录',
-                            ),
-                            _InfoRow(
-                              icon: Icons.badge_outlined,
-                              label: '用户 ID',
-                              value: user?.id != null && user!.id.length > 8
-                                  ? user.id.substring(0, 8)
-                                  : (user?.id ?? '--'),
-                              monospace: true,
+                            PopupMenuItem(
+                              value: ThemeMode.system,
+                              child: Text('跟随系统'),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 10),
-                        // --- Theme Switcher Section ---
-                        _SectionTitle('外观'),
-                        _SettingsCard(
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  // --- End Theme Switcher Section ---
+                  _SectionTitle('今日使用'),
+                  _SettingsCard(
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.all(AppSpacing.md),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            ListTile(
-                              leading: const Icon(Icons.palette_outlined),
-                              title: const Text('主题模式'),
-                              subtitle: Text(
-                                Theme.of(context).brightness == Brightness.dark
-                                    ? '深色模式'
-                                    : '浅色模式',
-                              ),
-                              trailing: PopupMenuButton<ThemeMode>(
-                                onSelected: (mode) {
-                                  themeNotifier.value = mode;
-                                  saveThemeMode(mode);
-                                },
-                                itemBuilder: (context) => const [
-                                  PopupMenuItem(
-                                    value: ThemeMode.light,
-                                    child: Text('浅色模式'),
-                                  ),
-                                  PopupMenuItem(
-                                    value: ThemeMode.dark,
-                                    child: Text('深色模式'),
-                                  ),
-                                  PopupMenuItem(
-                                    value: ThemeMode.system,
-                                    child: Text('跟随系统'),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        // --- End Theme Switcher Section ---
-                        _SectionTitle('今日使用'),
-                        _SettingsCard(
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      const Row(
-                                        children: [
-                                          Icon(
-                                            Icons.query_stats,
-                                            color: Color(0xFF0891B2),
-                                          ),
-                                          SizedBox(width: 10),
-                                          Text(
-                                            '剩余次数',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      Text(
-                                        _isActivated ? '∞' : '$remain 次',
-                                        style: const TextStyle(
-                                          color: Color(0xFF0891B2),
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(99),
-                                    child: LinearProgressIndicator(
-                                      value: usageFraction,
-                                      minHeight: 7,
-                                      backgroundColor: const Color(0xFFE0F2FE),
-                                      color: const Color(0xFF22D3EE),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.query_stats,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
                                     ),
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(
-                                    _isActivated
-                                        ? 'Pro 会员 · 无限次对话'
-                                        : '每天重置 20 次免费额度',
-                                    style: TextStyle(
-                                      color: isDark
-                                          ? Colors.white38
-                                          : Colors.black45,
-                                      fontSize: 12,
+                                    const SizedBox(width: AppSpacing.xs),
+                                    Text(
+                                      '剩余次数',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 10),
-                        _SectionTitle('会员'),
-                        _ProPanel(
-                          activated: _isActivated,
-                          onPurchase: _startProPurchase,
-                        ),
-                        if (user != null) ...[
-                          const SizedBox(height: 10),
-                          _SectionTitle('Sunland AI · Beta 数据管理'),
-                          SunlandDataManagementCard(
-                            key: ValueKey('sunland-data-${user.id}'),
-                            userId: user.id,
-                            currentUserIdProvider: () =>
-                                currentUserNotifier.value?.id,
-                            loadKnowledge: () => _sunlandDataProvider
-                                .listKnowledge(userId: user.id),
-                            deleteKnowledge: (knowledgeId) =>
-                                _sunlandDataProvider.deleteKnowledge(
-                                  userId: user.id,
-                                  knowledgeId: knowledgeId,
+                                  ],
                                 ),
-                            deleteAllKnowledge: () => _sunlandDataProvider
-                                .deleteAllKnowledge(userId: user.id),
-                            deleteRememberedName: () => _sunlandDataProvider
-                                .deleteRememberedName(userId: user.id),
-                          ),
-                          const SizedBox(height: 10),
-                          _SectionTitle('隐私与诊断'),
-                          SunlandBetaDiagnosticsCard(
-                            key: ValueKey('sunland-diagnostics-${user.id}'),
-                            userId: user.id,
-                            currentUserIdProvider: () =>
-                                currentUserNotifier.value?.id,
-                            store: _betaDiagnostics,
-                          ),
-                        ],
-                        const SizedBox(height: 10),
-                        _SectionTitle('其他'),
-                        _SettingsCard(
-                          children: [
-                            _ActionRow(
-                              icon: Icons.description_outlined,
-                              label: '用户协议',
-                              onTap: () => _openExternal(
-                                'https://sunland.dev/xukexieyi.html',
+                                Text(
+                                  _isActivated ? '∞' : '$remain 次',
+                                  style: TextStyle(
+                                    color: Theme.of(
+                                      context,
+                                    ).colorScheme.primary,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: AppSpacing.sm),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(99),
+                              child: LinearProgressIndicator(
+                                value: usageFraction,
+                                minHeight: 7,
+                                backgroundColor: Theme.of(
+                                  context,
+                                ).colorScheme.primary.withValues(alpha: 0.12),
+                                color: Theme.of(context).colorScheme.primary,
                               ),
                             ),
-                            _ActionRow(
-                              icon: Icons.privacy_tip_outlined,
-                              label: '隐私政策',
-                              onTap: () => _openExternal(
-                                'https://sunland.dev/privacy.html',
+                            const SizedBox(height: AppSpacing.xs),
+                            Text(
+                              _isActivated ? 'Pro 会员 · 无限次对话' : '每天重置 20 次免费额度',
+                              style: TextStyle(
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                                fontSize: AppTypography.captionSize,
                               ),
-                            ),
-                            _ActionRow(
-                              icon: Icons.logout,
-                              label: '退出登录',
-                              danger: true,
-                              onTap: _logout,
                             ),
                           ],
                         ),
-                        const SizedBox(height: 20),
-                        Center(
-                          child: Text(
-                            '霜蓝 AI · v$_version · 数据安全存储于云端',
-                            style: TextStyle(
-                              color: isDark ? Colors.white38 : Colors.black38,
-                              fontSize: 11,
-                            ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  _SectionTitle('会员'),
+                  _ProPanel(
+                    activated: _isActivated,
+                    onPurchase: _startProPurchase,
+                  ),
+                  if (user != null) ...[
+                    const SizedBox(height: 10),
+                    _SectionTitle('Sunland AI · Beta 数据管理'),
+                    SunlandDataManagementCard(
+                      key: ValueKey('sunland-data-${user.id}'),
+                      userId: user.id,
+                      currentUserIdProvider: () =>
+                          currentUserNotifier.value?.id,
+                      loadKnowledge: () =>
+                          _sunlandDataProvider.listKnowledge(userId: user.id),
+                      deleteKnowledge: (knowledgeId) =>
+                          _sunlandDataProvider.deleteKnowledge(
+                            userId: user.id,
+                            knowledgeId: knowledgeId,
                           ),
-                        ),
-                      ],
+                      deleteAllKnowledge: () => _sunlandDataProvider
+                          .deleteAllKnowledge(userId: user.id),
+                      deleteRememberedName: () => _sunlandDataProvider
+                          .deleteRememberedName(userId: user.id),
                     ),
-            ),
-          ],
-        ),
+                    const SizedBox(height: 10),
+                    _SectionTitle('隐私与诊断'),
+                    SunlandBetaDiagnosticsCard(
+                      key: ValueKey('sunland-diagnostics-${user.id}'),
+                      userId: user.id,
+                      currentUserIdProvider: () =>
+                          currentUserNotifier.value?.id,
+                      store: _betaDiagnostics,
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  _SectionTitle('其他'),
+                  _SettingsCard(
+                    children: [
+                      _ActionRow(
+                        icon: Icons.description_outlined,
+                        label: '用户协议',
+                        onTap: () =>
+                            _openExternal('https://sunland.dev/xukexieyi.html'),
+                      ),
+                      _ActionRow(
+                        icon: Icons.privacy_tip_outlined,
+                        label: '隐私政策',
+                        onTap: () =>
+                            _openExternal('https://sunland.dev/privacy.html'),
+                      ),
+                      _ActionRow(
+                        icon: Icons.logout,
+                        label: '退出登录',
+                        danger: true,
+                        onTap: _logout,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Center(
+                    child: Text(
+                      '霜蓝 AI · v$_version · 数据安全存储于云端',
+                      style: TextStyle(
+                        color: isDark ? Colors.white38 : Colors.black38,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
@@ -918,17 +884,17 @@ class _AvatarHeader extends StatelessWidget {
                 height: 72,
                 decoration: const BoxDecoration(shape: BoxShape.circle),
                 child: CircleAvatar(
-                  backgroundColor: Colors.white,
+                  backgroundColor: colorScheme.surfaceContainerHigh,
                   backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
                       ? NetworkImage(avatarUrl)
                       : null,
                   child: avatarUrl == null || avatarUrl.isEmpty
                       ? Text(
                           user?.initial ?? '?',
-                          style: const TextStyle(
+                          style: TextStyle(
                             fontSize: 30,
                             fontWeight: FontWeight.w700,
-                            color: Color(0xFF0F172A),
+                            color: colorScheme.onSurface,
                           ),
                         )
                       : null,
@@ -949,14 +915,20 @@ class _AvatarHeader extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 12),
-        Text(
-          (nickname != null && nickname!.isNotEmpty)
-              ? nickname!
-              : (user?.email ?? '未登录'),
-          style: const TextStyle(
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.3,
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.lg),
+          child: Text(
+            (nickname != null && nickname!.isNotEmpty)
+                ? nickname!
+                : (user?.email ?? '未登录'),
+            maxLines: 2,
+            textAlign: TextAlign.center,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 0.3,
+            ),
           ),
         ),
         const SizedBox(height: 6),
@@ -964,7 +936,7 @@ class _AvatarHeader extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
             color: activated
-                ? const Color(0xFFA78BFA).withValues(alpha: 0.18)
+                ? colorScheme.primary.withValues(alpha: 0.14)
                 : colorScheme.onSurface.withValues(alpha: 0.07),
             borderRadius: BorderRadius.circular(99),
           ),
@@ -972,9 +944,7 @@ class _AvatarHeader extends StatelessWidget {
             activated ? 'Pro 会员' : '普通用户',
             style: TextStyle(
               color: activated
-                  ? (Theme.of(context).brightness == Brightness.dark
-                        ? const Color(0xFFC4B5FD)
-                        : const Color(0xFF7C3AED))
+                  ? colorScheme.primary
                   : colorScheme.onSurfaceVariant,
               fontWeight: FontWeight.w600,
               fontSize: 12,
@@ -985,10 +955,8 @@ class _AvatarHeader extends StatelessWidget {
         Text(
           status ?? '点击头像上传新头像',
           style: TextStyle(
-            color: Theme.of(context).brightness == Brightness.dark
-                ? Colors.white38
-                : Colors.black45,
-            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+            fontSize: AppTypography.captionSize,
           ),
         ),
       ],
@@ -1004,12 +972,17 @@ class _SectionTitle extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.xxs,
+        AppSpacing.lg,
+        AppSpacing.xxs,
+        AppSpacing.xs,
+      ),
       child: Text(
         text,
         style: TextStyle(
-          fontSize: 12,
-          color: Theme.of(context).hintColor,
+          fontSize: AppTypography.captionSize,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
           fontWeight: FontWeight.w600,
         ),
       ),
@@ -1024,19 +997,16 @@ class _SettingsCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-        ),
-        child: Column(
-          children: List.generate(children.length * 2 - 1, (index) {
-            if (index.isEven) return children[index ~/ 2];
-            return Divider(height: 1, indent: 56);
-          }),
-        ),
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(AppRadius.group),
+      ),
+      child: Column(
+        children: List.generate(children.length * 2 - 1, (index) {
+          if (index.isEven) return children[index ~/ 2];
+          return const Divider(height: 1, indent: 56);
+        }),
       ),
     );
   }
@@ -1057,28 +1027,22 @@ class _InfoRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      child: Row(
-        children: [
-          Icon(icon, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 12),
-          Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              value,
-              textAlign: TextAlign.right,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: isDark ? Colors.white54 : Colors.black54,
-                fontFamily: monospace ? 'monospace' : null,
-                fontSize: monospace ? 11 : 13,
-              ),
-            ),
+    final colorScheme = Theme.of(context).colorScheme;
+    return ListTile(
+      leading: Icon(icon, color: colorScheme.primary),
+      title: Text(label, style: const TextStyle(fontWeight: FontWeight.w600)),
+      trailing: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 160),
+        child: Text(
+          value,
+          textAlign: TextAlign.right,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: colorScheme.onSurfaceVariant,
+            fontFamily: monospace ? 'monospace' : null,
+            fontSize: monospace ? 11 : AppTypography.captionSize,
           ),
-        ],
+        ),
       ),
     );
   }
@@ -1100,21 +1064,13 @@ class _ActionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final color = danger
-        ? Colors.redAccent
+        ? Theme.of(context).colorScheme.error
         : Theme.of(context).colorScheme.primary;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: ListTile(
-          leading: Icon(icon, color: color),
-          title: Text(
-            label,
-            style: TextStyle(color: danger ? Colors.redAccent : null),
-          ),
-          trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-        ),
-      ),
+    return ListTile(
+      leading: Icon(icon, color: color),
+      title: Text(label, style: TextStyle(color: danger ? color : null)),
+      trailing: const Icon(Icons.chevron_right, size: 20),
+      onTap: onTap,
     );
   }
 }
@@ -1130,21 +1086,14 @@ class _ProPanel extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     if (activated) {
       return Container(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(AppSpacing.md),
         decoration: BoxDecoration(
           color: Theme.of(context).cardColor,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: Theme.of(context).dividerColor.withOpacity(0.18),
-          ),
+          borderRadius: BorderRadius.circular(AppRadius.group),
         ),
         child: Row(
           children: [
-            const Icon(
-              Icons.workspace_premium,
-              color: Color(0xFF7C3AED),
-              size: 30,
-            ),
+            Icon(Icons.workspace_premium, color: colorScheme.primary, size: 30),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
@@ -1171,38 +1120,37 @@ class _ProPanel extends StatelessWidget {
     }
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(AppSpacing.md),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: Theme.of(context).dividerColor.withOpacity(0.12),
-        ),
+        borderRadius: BorderRadius.circular(AppRadius.group),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(
+              Icon(
                 Icons.diamond_outlined,
-                color: Color(0xFF7C3AED),
+                color: colorScheme.primary,
                 size: 30,
               ),
               const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    '霜蓝 Pro',
-                    style: TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    '一次付费，永久解锁',
-                    style: TextStyle(color: colorScheme.onSurfaceVariant),
-                  ),
-                ],
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '霜蓝 Pro',
+                      style: TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      '一次付费，永久解锁',
+                      style: TextStyle(color: colorScheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -1218,47 +1166,12 @@ class _ProPanel extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 16),
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [Color(0xFF22D3EE), Color(0xFFA78BFA)],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: const Color(0xFF22D3EE).withOpacity(0.3),
-                        blurRadius: 18,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-                  ),
-                  child: Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      borderRadius: BorderRadius.circular(12),
-                      onTap: onPurchase,
-                      child: const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 12),
-                        child: Center(
-                          child: Text(
-                            '立即升级 · ¥10 永久',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ],
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton(
+              onPressed: onPurchase,
+              child: const Text('立即升级 · ¥10 永久'),
+            ),
           ),
         ],
       ),
@@ -1278,12 +1191,12 @@ class _FeatureChip extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
         color: colorScheme.onSurface.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(99),
+        borderRadius: BorderRadius.circular(AppRadius.control),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.check_circle, size: 14, color: Color(0xFF22C55E)),
+          Icon(Icons.check_circle, size: 14, color: colorScheme.primary),
           const SizedBox(width: 5),
           Text(
             text,
