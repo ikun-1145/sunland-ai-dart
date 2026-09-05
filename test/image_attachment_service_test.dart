@@ -91,4 +91,19 @@ void main() {
       );
     },
   );
+
+  test(
+    'keeps staged previews when the app prepares the directory again',
+    () async {
+      final attachmentDirectory = await ensureImageAttachmentDirectory(
+        tempDirectory,
+      );
+      final image = File('${attachmentDirectory.path}/sent-image.png')
+        ..writeAsBytesSync([1, 2, 3]);
+
+      await ensureImageAttachmentDirectory(tempDirectory);
+
+      expect(await image.exists(), isTrue);
+    },
+  );
 }

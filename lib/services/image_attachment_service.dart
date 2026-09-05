@@ -10,6 +10,16 @@ const int maxPreparedVisionImageBytes = 3 * 1024 * 1024;
 const int maxPreparedVisionTotalBytes = 10 * 1024 * 1024;
 const int maxVisionImageSide = 2048;
 
+Future<Directory> ensureImageAttachmentDirectory(
+  Directory supportDirectory,
+) async {
+  final directory = Directory(
+    '${supportDirectory.path}${Platform.pathSeparator}chat_image_attachments',
+  );
+  await directory.create(recursive: true);
+  return directory;
+}
+
 class ImagePreparationException implements Exception {
   const ImagePreparationException(this.message);
 

@@ -2933,18 +2933,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<Directory> _prepareImageAttachmentDirectory() async {
     final supportDirectory = await getApplicationSupportDirectory();
-    final directory = Directory(
-      '${supportDirectory.path}${Platform.pathSeparator}chat_image_attachments',
-    );
-    try {
-      if (await directory.exists()) {
-        await directory.delete(recursive: true);
-      }
-    } on FileSystemException catch (error) {
-      debugPrint('Unable to clear stale image attachments: $error');
-    }
-    await directory.create(recursive: true);
-    return directory;
+    return ensureImageAttachmentDirectory(supportDirectory);
   }
 
   Map<String, dynamic>? get _currentConversation {
