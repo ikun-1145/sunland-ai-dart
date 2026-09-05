@@ -562,6 +562,33 @@ test("announcement mutations keep one publish time and always clear the retired 
   });
 });
 
+test("announcement publish calls the transactional publish RPC with the route id", async () => {
+  const calls = [];
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_set_announcement_active")) {
+      return Response.json({ id, is_active: true });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest(`/v1/admin/announcements/${id}/publish`, { method: "POST" }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 200);
+  const mutation = calls.find(call => call.url.endsWith("sunland_admin_set_announcement_active"));
+  assert.deepEqual(JSON.parse(mutation.init.body), {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_id: id,
+    p_active: true,
+  });
+});
+
 test("user ban is an authenticated, transactional Admin mutation", async () => {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {
