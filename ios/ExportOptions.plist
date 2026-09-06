@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd"\>
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>ad-hoc</string>
+
+    <key>signingStyle</key>
+    <string>manual</string>
+
+    <key>teamID</key>
+    <string>X5VC498VJ8</string>
+
+    <key>provisioningProfiles</key>
+    <dict>
+        <key>app.scarlet3615.kumquat5811</key>
+        <string>00008150-000E05343404401CQK46TW</string>
+    </dict>
+
+    <key>signingCertificate</key>
+    <string>iPhone Distribution</string>
+</dict>
+</plist>

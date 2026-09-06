@@ -526,6 +526,92 @@ test("system status reads the real app_config primary key", async () => {
   assert.equal(calls.some(call => call.url.includes("app_config?id=eq.global")), false);
 });
 
+test("profile nickname reset is an authenticated, transactional Admin mutation", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_reset_user_nickname")) {
+      return Response.json({ userId: "target-user", name: "" });
+    }
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/users/target-user/profile/nickname/reset", { method: "POST" }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { userId: "target-user", nickname: "" });
+  const mutation = calls.find(call => call.url.endsWith("sunland_admin_reset_user_nickname"));
+  assert.deepEqual(JSON.parse(mutation.init.body), {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_user_id: "target-user",
+  });
+});
+
+test("profile avatar reset deletes only the returned target avatar object", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_reset_user_avatar")) {
+      return Response.json({ userId: "target-user", avatarUrl: "", previousAvatarPath: "target-user/avatar-123.jpg" });
+    }
+    if (String(url).endsWith("/storage/v1/object/avatars/target-user/avatar-123.jpg")) return new Response(null, { status: 200 });
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/users/target-user/profile/avatar/reset", { method: "POST" }),
+    adminEnv(),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    userId: "target-user",
+    avatarUrl: "",
+    avatarObjectDeleted: true,
+  });
+  assert.equal(calls.filter(call => call.url.includes("/storage/v1/object/avatars/")).length, 1);
+});
+
+test("manual system check returns bounded service outcomes and audits the check", async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    if (String(url).endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (String(url).includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    if (String(url).includes("/rest/v1/app_config?config_key=eq.global")) return Response.json([{ maintenance_enabled: false }]);
+    if (String(url) === "https://ai-core.sunland.dev/healthz") return Response.json({ status: "ok" });
+    if (String(url) === "https://api.deepseek.com/v1/models") return Response.json({ object: "list", data: [] });
+    if (String(url).endsWith("/rest/v1/rpc/sunland_admin_record_system_status_check")) return Response.json(null);
+    throw new Error(`unexpected fetch: ${url}`);
+  };
+
+  const response = await worker.fetch(
+    adminRequest("/v1/admin/system/status/check", { method: "POST" }),
+    adminEnv({ DEEPSEEK_API_KEY: "test-deepseek-key" }),
+  );
+
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.supabase.ok, true);
+  assert.equal(payload.aiCore.ok, true);
+  assert.deepEqual(payload.deepSeek, { ok: true, status: "OK" });
+  assert.match(payload.checkedAt, /^\d{4}-\d{2}-\d{2}T/);
+  const deepSeekRequest = calls.find(call => call.url === "https://api.deepseek.com/v1/models");
+  assert.equal(deepSeekRequest.init.headers.Authorization, "Bearer test-deepseek-key");
+  const audit = calls.find(call => call.url.endsWith("sunland_admin_record_system_status_check"));
+  assert.deepEqual(JSON.parse(audit.init.body), {
+    p_admin_user_id: "11111111-1111-4111-8111-111111111111",
+    p_metadata: { worker: true, supabase: true, aiCore: true, deepSeek: true },
+  });
+});
+
 test("announcement mutations keep one publish time and always clear the retired end time", async () => {
   const calls = [];
   globalThis.fetch = async (url, init = {}) => {

@@ -373,7 +373,8 @@ class _WeatherCacheItem {
 }
 
 class FurryEventSearchApi {
-  // 兽聚查询入口：城市 / 月份 / 年份均可选，直接查 furry_events 表。
+  // 兽聚查询入口：地点 / 月份 / 年份均可选，由 Edge Function 统一匹配
+  // address / province / city，避免省级地点被误判为空结果。
   // 参数解析与跨轮上下文合并由调用方（main.dart 的 _resolveFurryQueryParams）负责。
   static Future<FurryEventSearchResult> search({
     String? city,
@@ -390,55 +391,20 @@ class FurryEventSearchApi {
   }) async {
     final client = Supabase.instance.client;
     try {
-      // 动态构建查询，支持城市、月份和年份筛选
-      var query = client.from('furry_events').select();
-
-      // 城市筛选
-      if (city != null && city.isNotEmpty) {
-        query = query.ilike('city', '%$city%');
-      }
-
-      // 时间筛选：月份优先，其次年份，都没有则只看未来。
-      // start_at 为 ISO 字符串列，区间用字典序比较（与 ISO 时间序一致）。
-      final now = DateTime.now();
-      DateTime? start;
-      DateTime? end;
-      if (month != null) {
-        // 月份已指定：年份用显式值，否则自动推断（已过去的月份顺延到明年）
-        final y = year ?? (month < now.month ? now.year + 1 : now.year);
-        start = DateTime(y, month, 1);
-        end = DateTime(y, month + 1, 1); // month==12 → 次年1月，Dart 自动归一化
-      } else if (year != null) {
-        // 仅指定年份：限定整年
-        start = DateTime(year, 1, 1);
-        end = DateTime(year + 1, 1, 1);
-      } else {
-        // 无年月约束：只返回未来活动
-        start = now;
-      }
-
-      query = query.gte('start_at', start.toIso8601String());
-      if (end != null) {
-        query = query.lt('start_at', end.toIso8601String());
-      }
-
-      final res = await query.order('start_at');
-
-      final list = (res as List)
-          .whereType<Map>()
-          .map((e) => Map<String, dynamic>.from(e))
-          .toList();
-
-      debugPrint('兽聚查询 city=$city month=$month year=$year → ${list.length} 条');
-
-      // 严格语义：无匹配即返回空（由 UI 显示"没有找到相关兽聚活动"），不放宽时间/城市
-      return FurryEventSearchResult(
-        events: list.map(FurryEventEnriched.fromMap).toList(),
-        cached: false,
-        total: list.length,
+      final location = city?.trim();
+      final normalizedLocation = location?.isNotEmpty == true ? location : null;
+      final response = await client.functions.invoke(
+        'furry-event-search',
+        body: {
+          'city': ?normalizedLocation,
+          'month': ?month,
+          'year': ?year,
+        },
       );
-    } on PostgrestException catch (e) {
-      throw Exception(e.message.isNotEmpty ? e.message : '兽聚查询失败');
+      if (response.data is! Map) throw Exception('兽聚查询返回格式无效');
+      return FurryEventSearchResult.fromMap(
+        Map<String, dynamic>.from(response.data as Map),
+      );
     } catch (e) {
       throw Exception('兽聚查询失败');
     }

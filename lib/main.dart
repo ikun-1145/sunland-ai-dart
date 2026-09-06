@@ -1985,6 +1985,45 @@ class _ChatPageState extends State<ChatPage> {
       '高雄',
       '香港',
       '澳门',
+      '济南',
+      '呼和浩特',
+      '台中',
+      '惠州',
+      '保定',
+      '台州',
+      '龙岩',
+      '长宁',
+      '闵行',
+      '东丽',
+      '西青',
+      '河北',
+      '山西',
+      '辽宁',
+      '吉林',
+      '黑龙江',
+      '江苏',
+      '浙江',
+      '安徽',
+      '福建',
+      '江西',
+      '山东',
+      '河南',
+      '湖北',
+      '湖南',
+      '广东',
+      '海南',
+      '四川',
+      '贵州',
+      '云南',
+      '陕西',
+      '甘肃',
+      '青海',
+      '台湾',
+      '内蒙古',
+      '广西',
+      '西藏',
+      '宁夏',
+      '新疆',
     ];
     for (final city in cities) {
       if (text.contains(city)) return city;
@@ -2070,7 +2109,7 @@ class _ChatPageState extends State<ChatPage> {
                     '你是兽聚查询范围解析器。结合"上一次查询范围"和用户这句话，'
                     '输出用户【本次】想查询的最终范围。'
                     '只输出一个 JSON 对象，不要任何解释、前后缀或 markdown 代码块。'
-                    '字段：city（中文城市名字符串，无则 null）、'
+                    '字段：city（中文省/市地点字符串，无则 null）、'
                     'year（整数年份，如 2026，无则 null）、'
                     'month（整数 1-12，无则 null）。'
                     '今天是 $today，仅用于换算相对时间。'
@@ -2103,7 +2142,10 @@ class _ChatPageState extends State<ChatPage> {
       if (decoded is! Map) return _fallbackResolve(text);
 
       String? city = decoded['city']?.toString().trim();
-      if (city == null || city.isEmpty || city.toLowerCase() == 'null') {
+      if (city == null ||
+          city.isEmpty ||
+          city.toLowerCase() == 'null' ||
+          const {'无', '未指定', '不限'}.contains(city)) {
         city = null;
       }
 

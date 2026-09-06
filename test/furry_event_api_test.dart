@@ -22,13 +22,15 @@ void main() {
     expect(event.meituanUrl, 'https://example.com/meituan');
   });
 
-  test('keeps the Edge Function camelCase response shape compatible', () {
+  test('maps the Edge Function location fields without losing the address', () {
     final event = FurryEventEnriched.fromMap({
-      'name': '北京兽聚',
+      'name': '江苏兽聚',
       'startAt': '2026-10-01T10:00:00+08:00',
       'endAt': '2026-10-02T18:00:00+08:00',
-      'city': '北京',
-      'venue': '国家会议中心',
+      'province': '江苏',
+      'city': '南京',
+      'address': '江苏·南京',
+      'venue': null,
       'coverUrl': 'https://example.com/cover.png',
       'sourceUrl': 'https://example.com/event',
       'hotels': {
@@ -39,7 +41,8 @@ void main() {
 
     expect(event.startAt, '2026-10-01T10:00:00+08:00');
     expect(event.endAt, '2026-10-02T18:00:00+08:00');
-    expect(event.venue, '国家会议中心');
+    expect(event.city, '南京');
+    expect(event.venue, '江苏·南京');
     expect(event.ctripUrl, 'https://example.com/ctrip');
     expect(event.meituanUrl, 'https://example.com/meituan');
   });

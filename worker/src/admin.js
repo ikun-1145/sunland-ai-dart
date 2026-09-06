@@ -85,6 +85,7 @@ async function handleAdminGet(url, env, admin) {
 
 async function handleAdminMutation(request, url, env, admin) {
   const userBan = userBanPath(url.pathname);
+  const profileReset = userProfileResetPath(url.pathname);
   const requiresBody =
     url.pathname === "/v1/admin/system/maintenance" ||
     url.pathname === "/v1/admin/announcements" ||
@@ -140,6 +141,28 @@ async function handleAdminMutation(request, url, env, admin) {
       },
       mapPayload: mapUserBan,
     });
+  }
+
+  if (request.method === "POST" && profileReset?.field === "nickname") {
+    return runMutation(env, admin, {
+      action: "user_nickname_reset",
+      targetType: "user_profile",
+      targetId: profileReset.userId,
+      rpcName: "sunland_admin_reset_user_nickname",
+      rpcArgs: {
+        p_admin_user_id: admin.authUserId,
+        p_user_id: profileReset.userId,
+      },
+      mapPayload: mapUserNicknameReset,
+    });
+  }
+
+  if (request.method === "POST" && profileReset?.field === "avatar") {
+    return runAvatarReset(env, admin, profileReset.userId);
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/admin/system/status/check") {
+    return systemStatusCheck(env, admin);
   }
 
   if (request.method === "POST" && url.pathname === "/v1/admin/announcements") {
@@ -265,6 +288,31 @@ async function runMutation(env, admin, spec) {
   return mutationFailure(env, admin, spec.action, spec.targetType, spec.targetId, failure.code, failure.status);
 }
 
+async function runAvatarReset(env, admin, userId) {
+  const result = await rpc(env, "sunland_admin_reset_user_avatar", {
+    p_admin_user_id: admin.authUserId,
+    p_user_id: userId,
+  });
+  if (!result.ok) {
+    const failure = classifyFailure(result);
+    return mutationFailure(env, admin, "user_avatar_reset", "user_profile", userId, failure.code, failure.status);
+  }
+
+  const previousAvatarPath = nonEmpty(result.payload?.previousAvatarPath);
+  const avatarObjectDeleted = previousAvatarPath
+    ? await deleteOwnedAvatarObject(env, userId, previousAvatarPath)
+    : true;
+  if (!avatarObjectDeleted) {
+    console.error(JSON.stringify({ event: "admin_avatar_object_cleanup_failed", userId }));
+    await recordFailure(env, admin, "user_avatar_object_cleanup", "user_profile", userId, "STORAGE_ERROR");
+  }
+  return response({
+    userId: result.payload?.userId ?? userId,
+    avatarUrl: "",
+    avatarObjectDeleted,
+  }, 200, env);
+}
+
 async function mutationFailure(env, admin, action, targetType, targetId, resultCode, status) {
   const recorded = await recordFailure(env, admin, action, targetType, targetId, resultCode);
   if (!recorded) {
@@ -329,6 +377,29 @@ async function listAuditLogs(env, page) {
 }
 
 async function systemStatus(env) {
+  return response(await systemStatusSnapshot(env), 200, env);
+}
+
+async function systemStatusCheck(env, admin) {
+  const checkedAt = new Date().toISOString();
+  const [status, deepSeek] = await Promise.all([systemStatusSnapshot(env), deepSeekStatus(env)]);
+  const auditRecorded = await rpc(env, "sunland_admin_record_system_status_check", {
+    p_admin_user_id: admin.authUserId,
+    p_metadata: {
+      worker: status.worker.ok === true,
+      supabase: status.supabase.ok === true,
+      aiCore: status.aiCore.ok === true,
+      deepSeek: deepSeek.ok === true,
+    },
+  });
+  if (!auditRecorded.ok) {
+    console.error(JSON.stringify({ event: "admin_system_check_audit_unavailable" }));
+    return response({ error: "AUDIT_UNAVAILABLE", message: "操作失败，审计服务暂时不可用" }, 503, env);
+  }
+  return response({ ...status, deepSeek, checkedAt }, 200, env);
+}
+
+async function systemStatusSnapshot(env) {
   const projectUrl = supabaseProjectUrl(env);
   const serverKey = supabaseServerKey(env);
   const version = env.CF_VERSION_METADATA
@@ -343,7 +414,7 @@ async function systemStatus(env) {
       .catch(() => ({ ok: false })),
   ]);
   const config = supabaseResult.ok && Array.isArray(supabaseResult.payload) ? supabaseResult.payload[0] : null;
-  return response({
+  return {
     worker: { ok: true, version },
     supabase: { ok: Boolean(config) },
     aiCore: { ok: coreResult.ok === true },
@@ -357,7 +428,21 @@ async function systemStatus(env) {
           updatedAt: config.updated_at,
         }
       : null,
-  }, 200, env);
+  };
+}
+
+async function deepSeekStatus(env) {
+  const apiKey = nonEmpty(env.DEEPSEEK_API_KEY) || nonEmpty(env.DEEPSEEK_KEY);
+  if (!apiKey) return { ok: false, status: "UNCONFIGURED" };
+  try {
+    const result = await fetch("https://api.deepseek.com/v1/models", {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(7000),
+    });
+    return { ok: result.ok, status: result.ok ? "OK" : "UNAVAILABLE" };
+  } catch {
+    return { ok: false, status: "UNAVAILABLE" };
+  }
 }
 
 async function versions(env) {
@@ -585,6 +670,11 @@ function mapUserBan(row) {
   };
 }
 
+function mapUserNicknameReset(row) {
+  if (!row || typeof row !== "object") return row;
+  return { userId: row.userId, nickname: row.name ?? "" };
+}
+
 function classifyFailure(result) {
   const message = typeof result.payload?.message === "string" ? result.payload.message : "";
   if (message.includes("NOT_FOUND")) return { code: "NOT_FOUND", status: 404 };
@@ -633,6 +723,38 @@ function userBanPath(pathname) {
   }
   if (!userId || userId.length > 160 || /[\u0000-\u001f]/.test(userId)) return null;
   return { userId, banned: match[2] === "ban" };
+}
+
+function userProfileResetPath(pathname) {
+  const match = /^\/v1\/admin\/users\/([^/]+)\/profile\/(nickname|avatar)\/reset$/.exec(pathname);
+  if (!match) return null;
+  let userId;
+  try {
+    userId = decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+  if (!userId || userId.length > 160 || /[\u0000-\u001f]/.test(userId)) return null;
+  return { userId, field: match[2] };
+}
+
+async function deleteOwnedAvatarObject(env, userId, avatarPath) {
+  const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (!avatarPath.startsWith(`${safeUserId}/`) || /[\u0000-\u001f]/.test(avatarPath)) return false;
+  const projectUrl = supabaseProjectUrl(env);
+  const serverKey = supabaseServerKey(env);
+  if (!projectUrl || !serverKey) return false;
+  const encodedPath = avatarPath.split("/").map(encodeURIComponent).join("/");
+  try {
+    const result = await fetch(`${projectUrl}/storage/v1/object/avatars/${encodedPath}`, {
+      method: "DELETE",
+      headers: serviceHeaders(serverKey),
+      signal: AbortSignal.timeout(7000),
+    });
+    return result.ok || result.status === 404;
+  } catch {
+    return false;
+  }
 }
 
 function decodePathTail(pathname, prefix) {
