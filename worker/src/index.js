@@ -17,6 +17,9 @@ const DOWNLOAD_TYPES = {
   apk: "application/vnd.android.package-archive",
   ipa: "application/octet-stream"
 };
+const USER_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9@._+-]{0,127}$/;
+const DELETION_JOB_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const DELETION_ATTEMPT_ID_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
 
 export default {
 
@@ -64,6 +67,22 @@ export default {
       return json({ error: "Bad JSON" }, 400, env);
     }
     const body = parsedBody.value;
+
+    if (url.pathname === "/v1/account/identity") {
+      return handleAccountIdentity(request, env);
+    }
+
+    if (
+      url.pathname === "/v1/account-delete/begin" ||
+      url.pathname === "/v1/account-delete/finalize"
+    ) {
+      return handleAccountDeleteMutation(
+        request,
+        env,
+        url.pathname === "/v1/account-delete/finalize",
+        body,
+      );
+    }
 
     // =========================
     // 🔥 通用 GeeTest 验证函数
@@ -326,6 +345,13 @@ export default {
     else if (url.pathname === "/refresh") {
       const user = await getUserFromRequest(request, env);
       if (!user) return json({ error: "Unauthorized" }, 401, env);
+      const refreshStatus = await getUserStatus(env, user.id);
+      if (!refreshStatus) {
+        return json({ error: "User status unavailable" }, 503, env);
+      }
+      if (refreshStatus.identityStatus !== "active") {
+        return json({ error: "ACCOUNT_NOT_ACTIVE" }, 403, env);
+      }
 
       // 签发新 token（重置7天有效期）
       const signingSecret = applicationSigningSecret(env);
@@ -347,6 +373,13 @@ export default {
     if (!user) return json({ error: "Unauthorized" }, 401, env);
 
     const userId = user.id;
+    const userStatus = await getUserStatus(env, userId);
+    if (!userStatus) {
+      return json({ error: "User status unavailable" }, 503, env);
+    }
+    if (userStatus.identityStatus !== "active") {
+      return json({ error: "ACCOUNT_NOT_ACTIVE" }, 403, env);
+    }
 
     // =========================
     // 🔐 短期 Supabase 数据访问 Token
@@ -378,10 +411,6 @@ export default {
     // =========================
     // 🚫 统一用户封禁校验（所有业务路由）
     // =========================
-    const userStatus = await getUserStatus(env, userId);
-    if (!userStatus) {
-      return json({ error: "User status unavailable" }, 503, env);
-    }
     if (userStatus.isBanned) {
       return json({ error: "ACCOUNT_BANNED" }, 403, env);
     }
@@ -1067,6 +1096,147 @@ function supabaseHeaders(env, extra = {}) {
   };
 }
 
+function accountDeleteInternalToken(env) {
+  return firstConfigured(
+    env.SUNLAND_ACCOUNT_DELETE_INTERNAL_TOKEN,
+    env.ACCOUNT_DELETE_INTERNAL_TOKEN
+  );
+}
+
+async function callIdentityRpc(env, name, args) {
+  const projectUrl = supabaseProjectUrl(env);
+  if (!projectUrl || !supabaseServerKey(env)) {
+    return { ok: false, status: 503, payload: null };
+  }
+  try {
+    const response = await fetch(`${projectUrl}/rest/v1/rpc/${name}`, {
+      method: "POST",
+      headers: supabaseHeaders(env, { "Content-Type": "application/json" }),
+      body: JSON.stringify(args),
+      signal: AbortSignal.timeout(7000)
+    });
+    const payload = await response.json().catch(() => null);
+    return { ok: response.ok, status: response.status, payload };
+  } catch {
+    return { ok: false, status: 503, payload: null };
+  }
+}
+
+async function handleAccountIdentity(request, env) {
+  const user = await getUserFromRequest(request, env);
+  if (!user) return json({ error: "Unauthorized" }, 401, env);
+
+  const status = await getUserStatus(env, user.id);
+  if (!status) return json({ error: "User status unavailable" }, 503, env);
+  if (status.identityStatus !== "active") {
+    return json({ error: "ACCOUNT_NOT_ACTIVE" }, 403, env);
+  }
+
+  return json({
+    user_id: user.id,
+    email: user.email,
+    identity_status: "active"
+  }, 200, env);
+}
+
+async function handleAccountDeleteMutation(request, env, isFinalize, body) {
+  const expectedInternalToken = accountDeleteInternalToken(env);
+  const providedInternalToken = request.headers.get("x-internal-token") || "";
+  if (!expectedInternalToken || providedInternalToken !== expectedInternalToken) {
+    return json({ error: "INTERNAL_UNAUTHORIZED" }, 401, env);
+  }
+
+  const userId = typeof body?.user_id === "string" ? body.user_id.trim() : "";
+  const deletionJobId = typeof body?.deletion_job_id === "string"
+    ? body.deletion_job_id.trim()
+    : "";
+  const attemptId = typeof body?.attempt_id === "string" ? body.attempt_id.trim() : "";
+  const fencingVersion = body?.fencing_version;
+
+  if (
+    !USER_ID_PATTERN.test(userId) ||
+    !DELETION_JOB_ID_PATTERN.test(deletionJobId) ||
+    !DELETION_ATTEMPT_ID_PATTERN.test(attemptId) ||
+    !Number.isSafeInteger(fencingVersion) ||
+    fencingVersion < 1
+  ) {
+    return json({ error: "VALIDATION_ERROR" }, 400, env);
+  }
+
+  const rpcName = isFinalize
+    ? "sunland_account_delete_finalize"
+    : "sunland_account_delete_begin";
+  const result = await callIdentityRpc(env, rpcName, {
+    p_user_id: userId,
+    p_deletion_job_id: deletionJobId,
+    p_attempt_id: attemptId,
+    p_fencing_version: fencingVersion
+  });
+  if (!result.ok) {
+    console.error(`[ACCOUNT_DELETE_RPC_ERROR] action=${isFinalize ? "finalize" : "begin"} status=${result.status}`);
+    return json({ error: "IDENTITY_SERVICE_UNAVAILABLE" }, 503, env);
+  }
+
+  const code = result.payload?.code;
+  if (!code) return json({ error: "IDENTITY_SERVICE_INVALID" }, 502, env);
+
+  if (code === "user_not_found") {
+    return json({ error: "USER_NOT_FOUND", deletion_job_id: deletionJobId, user_id: userId }, 404, env);
+  }
+  if (code === "invalid_request") {
+    return json({ error: "VALIDATION_ERROR" }, 400, env);
+  }
+  if (!isFinalize && code === "retired") {
+    return json({
+      error: "ACCOUNT_RETIRED",
+      deletion_job_id: deletionJobId,
+      user_id: userId
+    }, 409, env);
+  }
+  if (
+    code === "deletion_conflict" ||
+    code === "not_deleting" ||
+    code === "stale_attempt" ||
+    code === "fencing_conflict"
+  ) {
+    return json({
+      error: "DELETION_CONFLICT",
+      deletion_job_id: result.payload.deletion_job_id ?? deletionJobId,
+      user_id: result.payload.user_id ?? userId,
+      attempt_id: result.payload.attempt_id,
+      fencing_version: result.payload.fencing_version
+    }, 409, env);
+  }
+
+  if (isFinalize) {
+    return json({
+      ok: true,
+      code,
+      deletion_job_id: result.payload.deletion_job_id,
+      user_id: result.payload.user_id,
+      attempt_id: result.payload.attempt_id,
+      fencing_version: result.payload.fencing_version
+    }, 200, env);
+  }
+
+  if (code === "retired") {
+    return json({
+      error: "ACCOUNT_RETIRED",
+      deletion_job_id: deletionJobId,
+      user_id: userId
+    }, 409, env);
+  }
+
+  return json({
+    ok: true,
+    code,
+    deletion_job_id: result.payload.deletion_job_id,
+    user_id: result.payload.user_id,
+    attempt_id: result.payload.attempt_id,
+    fencing_version: result.payload.fencing_version
+  }, 200, env);
+}
+
 async function getUserStatus(env, userId) {
   const projectUrl = supabaseProjectUrl(env);
   if (!projectUrl || !supabaseServerKey(env)) {
@@ -1076,7 +1246,7 @@ async function getUserStatus(env, userId) {
 
   try {
     const response = await fetch(
-      `${projectUrl}/rest/v1/user_profiles?user_id=eq.${encodeURIComponent(userId)}&select=is_banned,pro&limit=1`,
+      `${projectUrl}/rest/v1/user_profiles?user_id=eq.${encodeURIComponent(userId)}&select=is_banned,pro,identity_status&limit=1`,
       {
         headers: supabaseHeaders(env),
         signal: AbortSignal.timeout(7000)
@@ -1096,7 +1266,10 @@ async function getUserStatus(env, userId) {
 
     return {
       isBanned: rows[0].is_banned,
-      isPro: rows[0].pro === true
+      isPro: rows[0].pro === true,
+      identityStatus: typeof rows[0]?.identity_status === "string"
+        ? rows[0].identity_status
+        : "active"
     };
   } catch {
     console.error("[USER_STATUS_REQUEST_ERROR]");
@@ -1112,7 +1285,7 @@ async function findUserIdByEmail(env, email) {
     return null;
   }
   const userRes = await fetch(
-    `${projectUrl}/rest/v1/user_profiles?email=eq.${encodeURIComponent(email)}&select=user_id&limit=1`,
+    `${projectUrl}/rest/v1/user_profiles?email=eq.${encodeURIComponent(email)}&identity_status=eq.active&select=user_id&limit=1`,
     { headers: supabaseHeaders(env) }
   );
 

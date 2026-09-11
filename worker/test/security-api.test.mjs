@@ -144,6 +144,9 @@ test("rotation bridge verifies primary and legacy tokens but still signs with le
     APP_JWT_PRIMARY_SECRET: "primary-secret",
     APP_JWT_LEGACY_SECRET: "legacy-secret",
   });
+  globalThis.fetch = async () => Response.json([
+    { is_banned: false, pro: false, identity_status: "active" },
+  ]);
   const primaryResponse = await worker.fetch(
     request("/refresh", {}, undefined, "primary-secret"),
     environment,
@@ -161,6 +164,9 @@ test("rotation bridge verifies primary and legacy tokens but still signs with le
 });
 
 test("database token is short-lived, authenticated, and ignores a body user id", async () => {
+  globalThis.fetch = async () => Response.json([
+    { is_banned: false, pro: false, identity_status: "active" },
+  ]);
   const response = await worker.fetch(
     request("/v1/database-token", { userId: "attacker" }),
     env(),
@@ -186,6 +192,9 @@ test("database token fails closed when its signing secret is unavailable", async
 });
 
 test("database token supports the explicit legacy Supabase JWT alias", async () => {
+  globalThis.fetch = async () => Response.json([
+    { is_banned: false, pro: false, identity_status: "active" },
+  ]);
   const response = await worker.fetch(
     request("/v1/database-token"),
     env({
@@ -1053,7 +1062,7 @@ test("Pro model uses user_profiles.pro despite a stale negative KV entry", async
   assert.equal(calls.length, 2);
   assert.equal(
     calls[0].url,
-    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro&limit=1",
+    "https://database.example/rest/v1/user_profiles?user_id=eq.user-a&select=is_banned,pro,identity_status&limit=1",
   );
   assert.equal(calls.some(call => call.url.includes("/activation_codes?")), false);
   assert.equal(JSON.parse(calls[1].init.body).model, "deepseek-v4-pro");
