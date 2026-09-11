@@ -118,6 +118,7 @@ test("download proxy serves a cached full asset without contacting GitHub", asyn
     assert.equal(response.status, 200);
     assert.equal(await response.text(), "cached-ipa");
     assert.equal(response.headers.get("x-sunland-cache"), "HIT");
+    assert.match(response.headers.get("access-control-expose-headers"), /Content-Range/);
     assert.equal(response.headers.get("content-disposition"), `attachment; filename="sunland-ai-${version}.ipa"`);
     assert.equal(runtime.upstreamRequests.length, 0);
   } finally {

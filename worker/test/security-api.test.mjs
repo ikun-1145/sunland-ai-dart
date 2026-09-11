@@ -1424,3 +1424,55 @@ test("retired activation route never parses or validates legacy codes", async ()
   assert.equal(response.status, 410);
   assert.equal(called, false);
 });
+
+test("usage reads the chat KV counter for the authenticated account without consuming it", async () => {
+  const environment = env();
+  const date = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+  environment.USAGE_KV.values.set(`usage:user-a:${date}`, "7");
+  environment.USAGE_KV.values.set(`usage:user-b:${date}`, "19");
+  globalThis.fetch = async () => Response.json([{ pro: false, is_banned: false, identity_status: "active" }]);
+  const response = await worker.fetch(request("/v1/usage", { userId: "user-b" }), environment);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { userId: "user-a", date, limit: 20, remain: 13, isPro: false });
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("access-control-expose-headers"), "x-remain");
+  assert.equal(environment.USAGE_KV.operations.put, 0);
+  environment.USAGE_KV.values.set(`usage:user-a:${date}`, "20");
+  assert.equal((await (await worker.fetch(request("/v1/usage"), environment)).json()).remain, 0);
+  environment.USAGE_KV.values.delete(`usage:user-a:${date}`);
+  assert.equal((await (await worker.fetch(request("/v1/usage"), environment)).json()).remain, 20);
+});
+
+test("usage protects identity and reports Pro and KV failure without inventing free quota", async () => {
+  const environment = env();
+  const unauthorized = await worker.fetch(request("/v1/usage", {}, { id: "user-a" }, "wrong"), environment);
+  assert.equal(unauthorized.status, 401);
+  globalThis.fetch = async () => Response.json([{ pro: true, is_banned: false, identity_status: "active" }]);
+  assert.equal((await (await worker.fetch(request("/v1/usage"), environment)).json()).remain, -1);
+  assert.equal(environment.USAGE_KV.operations.get, 0);
+  globalThis.fetch = async () => Response.json([{ pro: false, is_banned: false, identity_status: "active" }]);
+  environment.USAGE_KV.get = async () => { throw new Error("offline"); };
+  assert.equal((await worker.fetch(request("/v1/usage"), environment)).status, 503);
+  globalThis.fetch = async () => Response.json([{ pro: false, is_banned: true, identity_status: "active" }]);
+  assert.equal((await worker.fetch(request("/v1/usage"), environment)).status, 403);
+});
+
+test("a successful client chat and the web usage endpoint report the same remaining quota", async () => {
+  const environment = env({ DEEPSEEK_API_KEY: "test-key" });
+  globalThis.fetch = async url => String(url).includes('/rest/v1/user_profiles?')
+    ? Response.json([{ pro: false, is_banned: false, identity_status: 'active' }])
+    : new Response('data: {"choices":[{"delta":{"content":"hello"}}]}\n\ndata: [DONE]\n\n');
+  for (const remain of [19, 18]) {
+    environment.USAGE_KV.values.delete('rate:user-a');
+    const chat = await worker.fetch(request('/', {
+      messages: [{ role: 'user', content: 'hello' }], model: 'deepseek-v4-flash',
+    }), environment);
+    assert.equal(chat.status, 200);
+    assert.equal(chat.headers.get('x-remain'), String(remain));
+    assert.equal(chat.headers.get('access-control-expose-headers'), 'x-remain');
+    await chat.text();
+    const usage = await worker.fetch(request('/v1/usage'), environment);
+    assert.equal((await usage.json()).remain, remain);
+  }
+  assert.equal(environment.USAGE_KV.operations.put, 4); // two rate timestamps and two quota writes
+});

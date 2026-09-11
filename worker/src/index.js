@@ -422,6 +422,21 @@ export default {
     // 与封禁状态同次读取，避免已弃用的 activation_codes 和 KV 负缓存误拒 Pro。
     const isPro = userStatus.isPro;
 
+    // Read the same UTC+8 KV counter as chat; never consume quota here.
+    if (url.pathname === "/v1/usage") {
+      const date = getTodayDateCN();
+      const limit = 20;
+      try {
+        const count = isPro ? 0 : Number(
+          await kvGet(env, "USAGE_KV", "ai-usage-read", `usage:${userId}:${date}`) ?? 0,
+        );
+        if (!Number.isSafeInteger(count) || count < 0) throw new Error("invalid usage");
+        return json({ userId, date, limit, remain: isPro ? -1 : Math.max(0, limit - count), isPro }, 200, env);
+      } catch {
+        return json({ error: "Usage unavailable" }, 503, env);
+      }
+    }
+
     if (url.pathname === "/v1/conversation-title") {
       return handleConversationTitle(body, env, userId, isPro);
     }
@@ -976,13 +991,13 @@ function downloadResponse(upstream, env, filename, platform, {
   headOnly = false
 } = {}) {
   const headers = new Headers({
+    ...corsHeaders(env),
     "Accept-Ranges": "bytes",
     "Access-Control-Expose-Headers": "Content-Length, Content-Range, ETag, Last-Modified, X-Sunland-Cache",
     "Cache-Control": upstream.ok ? DOWNLOAD_CACHE_CONTROL : "no-store",
     "Content-Disposition": `attachment; filename="${filename}"`,
     "Content-Type": DOWNLOAD_TYPES[platform],
-    "X-Content-Type-Options": "nosniff",
-    ...corsHeaders(env)
+    "X-Content-Type-Options": "nosniff"
   });
   for (const header of ["Content-Length", "Content-Range", "ETag", "Last-Modified"]) {
     const value = upstream.headers.get(header);
@@ -1056,7 +1071,8 @@ function corsHeaders(env) {
   return {
     "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Allow-Methods": "GET, HEAD, POST, PATCH, DELETE, OPTIONS"
+    "Access-Control-Allow-Methods": "GET, HEAD, POST, PATCH, DELETE, OPTIONS",
+    "Access-Control-Expose-Headers": "x-remain"
   };
 }
 
