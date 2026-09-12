@@ -56,6 +56,7 @@ async function handleAdminGet(url, env, admin) {
     });
   }
   if (url.pathname === "/v1/admin/ai/stats") return aiStats(env);
+  if (url.pathname === "/v1/admin/ai/models") return rpcResponse(env, "sunland_admin_list_ai_models", {});
   if (url.pathname === "/v1/admin/users") {
     const sort = url.searchParams.get("sort") || "created_at";
     const descending = url.searchParams.get("direction") !== "asc";
@@ -89,6 +90,7 @@ async function handleAdminMutation(request, url, env, admin) {
   const requiresBody =
     url.pathname === "/v1/admin/system/maintenance" ||
     url.pathname === "/v1/admin/announcements" ||
+    url.pathname === "/v1/admin/ai/models" ||
     (request.method === "POST" && userBan?.banned === true) ||
     (request.method === "PATCH" && url.pathname.startsWith("/v1/admin/announcements/"));
   const parsed = requiresBody
@@ -98,6 +100,18 @@ async function handleAdminMutation(request, url, env, admin) {
 
   if (!parsed.ok) {
     return mutationFailure(env, admin, "admin_request_rejected", "admin_api", url.pathname, "VALIDATION_ERROR", parsed.status);
+  }
+
+  if (request.method === "POST" && url.pathname === "/v1/admin/ai/models") {
+    const input = aiModelInput(body);
+    if (!input) return mutationFailure(env, admin, "ai_model_saved", "ai_model", null, "VALIDATION_ERROR", 400);
+    return runMutation(env, admin, {
+      action: "ai_model_saved",
+      targetType: "ai_model",
+      targetId: input.p_id,
+      rpcName: "sunland_admin_save_ai_model",
+      rpcArgs: { p_admin_user_id: admin.authUserId, ...input },
+    });
   }
 
   if (request.method === "POST" && url.pathname === "/v1/admin/system/maintenance") {
@@ -678,6 +692,9 @@ function mapUserNicknameReset(row) {
 function classifyFailure(result) {
   const message = typeof result.payload?.message === "string" ? result.payload.message : "";
   if (message.includes("NOT_FOUND")) return { code: "NOT_FOUND", status: 404 };
+  if (message.includes("AI_MODEL_CONFLICT") || message.includes("AI_MODEL_REQUIRED") || result.payload?.code === "23505") {
+    return { code: "CONFLICT", status: 409 };
+  }
   if (message.includes("WAS_PUBLISHED") || message.includes("ACTIVE")) return { code: "CONFLICT", status: 409 };
   if (result.status >= 400 && result.status < 500) return { code: "VALIDATION_ERROR", status: 400 };
   return { code: "DATABASE_ERROR", status: 503 };
@@ -777,6 +794,39 @@ function stringWithin(value, min, max) {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length >= min && trimmed.length <= max ? trimmed : null;
+}
+
+function aiModelInput(body) {
+  const displayName = stringWithin(body.display_name, 1, 80);
+  const modelName = stringWithin(body.model_name, 1, 120);
+  const provider = body.provider;
+  const id = body.id ?? null;
+  const updatedAt = body.updated_at ?? null;
+  const supported = provider === "deepseek"
+    ? ["deepseek-v4-flash", "deepseek-v4-pro"].includes(modelName)
+    : provider === "sunland" && modelName === "frost";
+  if (!displayName || !supported ||
+      /[\u0000-\u001f\u007f]/.test(displayName) ||
+      ![body.free_enabled, body.pro_enabled, body.enabled].every(value => typeof value === "boolean") ||
+      (modelName === "deepseek-v4-pro" && body.free_enabled) ||
+      !Number.isInteger(body.sort_order) || body.sort_order < 0 || body.sort_order > 10000 ||
+      (id !== null && (typeof id !== "string" || !UUID_PATTERN.test(id))) ||
+      (id === null && updatedAt !== null) ||
+      (id !== null && (typeof updatedAt !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(updatedAt) ||
+        Number.isNaN(Date.parse(updatedAt))))) return null;
+  return {
+    p_id: id,
+    p_provider: provider,
+    p_display_name: displayName,
+    p_model_name: modelName,
+    p_free_enabled: body.free_enabled,
+    p_pro_enabled: body.pro_enabled,
+    p_enabled: body.enabled,
+    p_sort_order: body.sort_order,
+    // Preserve database microseconds for optimistic concurrency checks.
+    p_updated_at: updatedAt,
+  };
 }
 
 function optionalIsoTimestamp(value) {

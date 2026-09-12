@@ -22,10 +22,12 @@ import 'database_token_provider.dart';
 import 'ban_page.dart';
 import 'maintenance_page.dart';
 import 'network_unavailable_page.dart';
+import 'services/chat_usage_service.dart';
 import 'services/ai_haptic_service.dart';
 import 'services/app_config_service.dart';
 import 'services/background_execution_service.dart';
 import 'services/image_attachment_service.dart';
+import 'services/model_catalog_service.dart';
 import 'services/network_connectivity_service.dart';
 import 'services/user_status_service.dart';
 import 'theme/sunland_theme.dart';
@@ -1442,7 +1444,9 @@ class _LoginPageState extends State<LoginPage>
 enum _ImageAttachmentSource { camera, gallery, files }
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key});
+  const ChatPage({super.key, this.modelCatalogLoader});
+
+  final ModelCatalogRowLoader? modelCatalogLoader;
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -2077,7 +2081,7 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 由 AI 解析兽聚查询范围：结合"上一次查询范围"+本次消息，让模型直接输出
   /// 本次最终的 {city, year, month}（自带继承/覆盖/放宽判断）。
-  /// 使用 flash 模型（最快最省，不动 Pro）；任何失败都回退到本地正则提取
+  /// 使用当前选定模型；任何失败都回退到本地正则提取
   /// + 上下文补全，保证卡片始终可用、不退化。
   Future<({String? city, int? month, int? year})> _resolveFurryQueryParams(
     String text,
@@ -2100,7 +2104,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final result = await apiClient
           .sendChat(
-            model: 'deepseek-v4-flash',
+            model: currentModel,
             deep: false,
             messages: [
               ChatMessage(
@@ -2931,11 +2935,20 @@ class _ChatPageState extends State<ChatPage> {
   late final SupabaseAiRepository repo;
   late final SunlandSessionStore store;
   final supabase = Supabase.instance.client;
-  String currentModel = 'deepseek-v4-flash';
+  String currentModel = '';
+  late final ModelCatalogService _modelCatalogService;
+  List<CatalogModel> _catalogModels = [];
+  bool _catalogLoading = true;
+  bool _catalogFailed = false;
   String _pendingProvider = deepSeekProviderId;
   bool useDeep = false;
   bool isActivated = false;
   int _remainingCount = freeDailyLimit;
+  String? _usageDate;
+  int _usageRevision = 0;
+  late final ChatUsageService _usageService;
+  AppLifecycleListener? _usageLifecycle;
+  Timer? _usageTimer;
   String? _lastUserText;
   final TextEditingController controller = TextEditingController();
   final ScrollController scrollController = ScrollController();
@@ -3016,15 +3029,11 @@ class _ChatPageState extends State<ChatPage> {
         ? sunlandProviderId
         : deepSeekProviderId;
     _pendingProvider = provider;
+    currentModel = conversation?['model']?.toString() ?? '';
     if (provider == sunlandProviderId) {
       useDeep = false;
       pickedImages.clear();
-      _restoreFurryQueryContext();
-      return;
     }
-    currentModel = conversation?['model'] == 'deepseek-v4-pro'
-        ? 'deepseek-v4-pro'
-        : 'deepseek-v4-flash';
     _restoreFurryQueryContext();
   }
 
@@ -3098,15 +3107,14 @@ class _ChatPageState extends State<ChatPage> {
       targetConversation['createdAt'] ??=
           int.tryParse(targetConversation['id']?.toString() ?? '') ??
           DateTime.now().millisecondsSinceEpoch;
-      if (provider != sunlandProviderId) {
-        currentModel = model;
-      }
+      currentModel = model;
       if (provider == sunlandProviderId) {
         useDeep = false;
         pickedImages.clear();
       }
     });
     await _saveModelPrefs();
+    if (!mounted) return false;
     rememberLocalMessages();
     unawaited(_saveToCloud());
     return true;
@@ -3233,11 +3241,12 @@ class _ChatPageState extends State<ChatPage> {
                 int.tryParse((convo['updatedAt'] ?? '').toString()) ??
                 DateTime.now().millisecondsSinceEpoch,
             provider: provider,
-            model: provider == sunlandProviderId
-                ? sunlandModelId
-                : (convo['model'] == 'deepseek-v4-pro'
-                      ? 'deepseek-v4-pro'
-                      : 'deepseek-v4-flash'),
+            // Legacy records without a model keep their historical default.
+            model:
+                convo['model']?.toString() ??
+                (provider == sunlandProviderId
+                    ? sunlandModelId
+                    : 'deepseek-v4-flash'),
             userId: (convo['userId'] ?? activeUserId)?.toString(),
             createdAt:
                 int.tryParse((convo['createdAt'] ?? id).toString()) ??
@@ -3298,9 +3307,7 @@ class _ChatPageState extends State<ChatPage> {
       'title': buildConversationTitle(firstMessage),
       'is_local': true,
       'provider': _activeProvider,
-      'model': _activeProvider == sunlandProviderId
-          ? sunlandModelId
-          : currentModel,
+      'model': currentModel,
     });
   }
 
@@ -3503,6 +3510,15 @@ class _ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     apiClient = SunlandApiClient(tokenProvider: _readFreshAuthToken);
+    _usageService = ChatUsageService(tokenProvider: _readFreshAuthToken);
+    _usageLifecycle = AppLifecycleListener(
+      onResume: () => unawaited(_checkActivation()),
+    );
+    _usageTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(_checkActivation());
+      }
+    });
     sunlandProvider = SunlandRemoteProvider(
       tokenProvider: ({bool forceRefresh = false}) =>
           _readFreshAuthToken(forceRefresh: forceRefresh),
@@ -3514,6 +3530,10 @@ class _ChatPageState extends State<ChatPage> {
     );
     store = SunlandSessionStore();
     _imageAttachmentDirectory = _prepareImageAttachmentDirectory();
+    _modelCatalogService = ModelCatalogService(
+      rowLoader: widget.modelCatalogLoader,
+    );
+    unawaited(_refreshModelCatalog());
     _initData();
     unawaited(_loadOcrPrivacyTipFlag());
     if (Platform.isAndroid) {
@@ -3566,7 +3586,9 @@ class _ChatPageState extends State<ChatPage> {
     await prefs.remove('useDeep');
     if (mounted) {
       setState(() {
-        if (savedModel != null && savedModel.isNotEmpty) {
+        if (_currentConversation == null &&
+            savedModel != null &&
+            savedModel.isNotEmpty) {
           currentModel = savedModel;
         }
         useDeep = false;
@@ -3574,10 +3596,8 @@ class _ChatPageState extends State<ChatPage> {
           useDeep = false;
           pickedImages.clear();
         }
-        if (!isActivated) {
-          currentModel = 'deepseek-v4-flash';
-          useDeep = false;
-        }
+        if (!isActivated) useDeep = false;
+        _chooseInitialCatalogModel();
       });
     }
   }
@@ -3587,35 +3607,84 @@ class _ChatPageState extends State<ChatPage> {
     await prefs.setString('currentModel', currentModel);
   }
 
-  String _resolveModel() {
-    // Pro 权限校验：非 Pro 用户强制 flash
-    if (!isActivated) return 'deepseek-v4-flash';
+  CatalogModel? get _selectedCatalogModel {
+    for (final model in _catalogModels) {
+      if (model.provider == _activeProvider &&
+          model.modelName == currentModel) {
+        return model;
+      }
+    }
+    return null;
+  }
 
-    // 深度思考模式强制 pro
-    if (useDeep) return 'deepseek-v4-pro';
+  String get _modelLabel => _catalogLoading
+      ? '模型加载中'
+      : _catalogFailed
+      ? '模型暂不可用'
+      : _selectedCatalogModel?.displayName ?? '请选择模型';
 
-    return currentModel;
+  void _chooseInitialCatalogModel() {
+    // Preserve historical selections, including models removed from the catalog.
+    if (_hasCurrentConversationStarted || _currentConversation != null) return;
+    if (_selectedCatalogModel?.isAvailableFor(isPro: isActivated) == true)
+      return;
+    for (final model in _catalogModels) {
+      if (model.isAvailableFor(isPro: isActivated)) {
+        _pendingProvider = model.provider;
+        currentModel = model.modelName;
+        return;
+      }
+    }
+  }
+
+  Future<void> _refreshModelCatalog() async {
+    if (!mounted) return;
+    setState(() {
+      _catalogLoading = true;
+      _catalogFailed = false;
+    });
+    try {
+      final models = await _modelCatalogService.fetchModels();
+      if (!mounted) return;
+      setState(() {
+        _catalogModels = models;
+        _catalogLoading = false;
+        _chooseInitialCatalogModel();
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _catalogModels = [];
+        _catalogLoading = false;
+        _catalogFailed = true;
+      });
+    }
   }
 
   Future<void> _checkActivation() async {
     final user = currentUserNotifier.value;
-    if (user == null) return;
-
+    if (user == null || !mounted) return;
+    final revision = ++_usageRevision;
+    if (_usageDate != chatUsageDate(DateTime.now())) {
+      setState(() => _usageDate = null);
+    }
     try {
-      final activated = await repo.isActivated(user.id);
-      final remainingCount = await store.readRemainingCount(user.id);
-      if (mounted) {
-        setState(() {
-          isActivated = activated;
-          _remainingCount = activated ? freeDailyLimit : remainingCount;
-          if (!activated) {
-            currentModel = 'deepseek-v4-flash';
-            useDeep = false;
-          }
-        });
+      final usage = await _usageService.read(user.id);
+      if (!mounted || currentUserNotifier.value?.id != user.id ||
+          revision != _usageRevision) {
+        return;
       }
-    } catch (e) {
-      debugPrint('_checkActivation error: $e');
+      setState(() {
+        isActivated = usage.isPro;
+        _remainingCount = usage.isPro ? freeDailyLimit : usage.remaining;
+        _usageDate = usage.date;
+        if (!isActivated) useDeep = false;
+      });
+    } catch (_) {
+      if (mounted && currentUserNotifier.value?.id == user.id &&
+          revision == _usageRevision) {
+        setState(() => _usageDate = null);
+      }
     }
   }
 
@@ -3640,10 +3709,18 @@ class _ChatPageState extends State<ChatPage> {
         context,
       ).showSnackBar(const SnackBar(content: Text('Sunland AI 暂不支持图片或文件上传')));
     }
-    // ⭐ 优先拦截 Pro 权限（避免被当成免费额度用尽）
-    if (!isSunlandRequest &&
-        !isActivated &&
-        (currentModel == 'deepseek-v4-pro' || useDeep)) {
+    final selectedModel = _selectedCatalogModel;
+    if (_catalogLoading ||
+        _catalogFailed ||
+        selectedModel == null ||
+        !selectedModel.isAvailableFor(isPro: isActivated)) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('当前模型不可用，请打开模型选择后重试')));
+      return;
+    }
+    // 深度思考仍沿用现有 Pro 权限，与目录中的模型资格分别判断。
+    if (!isSunlandRequest && !isActivated && useDeep) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -3660,20 +3737,7 @@ class _ChatPageState extends State<ChatPage> {
     final generationId = ++_generationSerial;
     if (mounted) FocusScope.of(context).unfocus();
 
-    // ✅ 新增：免费用户额度检查
-    if (!isSunlandRequest && !isActivated && _remainingCount <= 0) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("今日免费次数已用完，请升级到Pro或明天再试"),
-            duration: Duration(seconds: 3),
-          ),
-        );
-      }
-      setState(() => isGenerating = false);
-      return;
-    }
-
+    // The gateway enforces quota; yesterday's device snapshot must not block a new day.
     final user = currentUserNotifier.value;
     final text = controller.text.trim();
     final hasImages = !isSunlandRequest && pickedImages.isNotEmpty;
@@ -3977,7 +4041,7 @@ class _ChatPageState extends State<ChatPage> {
         'updatedAt': DateTime.now().millisecondsSinceEpoch,
         'titleGenerated': false,
         'provider': provider,
-        'model': provider == sunlandProviderId ? sunlandModelId : currentModel,
+        'model': currentModel,
         'userId': user?.id,
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       });
@@ -4147,37 +4211,7 @@ class _ChatPageState extends State<ChatPage> {
         streamActive = false;
         flushStreamingMessage(force: true);
       } else {
-        // ===== 自动模型策略 + Pro 权限校验 =====
-        String requestModel = hasImages ? 'deepseek-v4-flash' : _resolveModel();
-        if (!isActivated) {
-          useDeep = false;
-        }
-
-        // 自动策略：长文本/关键词触发 pro（仅 Pro 用户生效）
-        if (!hasImages && isActivated && requestModel != 'deepseek-v4-pro') {
-          final lower = text.toLowerCase();
-          final needsPro =
-              text.length > 300 ||
-              lower.contains('bug') ||
-              lower.contains('报错') ||
-              lower.contains('代码') ||
-              lower.contains('优化');
-          if (needsPro) {
-            requestModel = 'deepseek-v4-pro';
-          }
-        }
-
-        // Pro 降级提示
-        if (!isActivated && (currentModel == 'deepseek-v4-pro' || useDeep)) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text("Pro 模型需激活后才能使用，已自动切换为 Flash 模式"),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
-        }
+        final requestModel = selectedModel.modelName;
 
         // ====== Streaming with retry wrapper ======
         Future<void> runStream() {
@@ -4201,7 +4235,13 @@ class _ChatPageState extends State<ChatPage> {
                         );
                       }
                       if (!mounted || generationId != _generationSerial) return;
-                      setState(() => _remainingCount = normalized);
+                      if (currentUserNotifier.value?.id != user?.id) return;
+                      ++_usageRevision;
+                      setState(() {
+                        _remainingCount = normalized;
+                        _usageDate = chatUsageDate(DateTime.now());
+                      });
+                      unawaited(_checkActivation());
                     },
                   )
                   .timeout(
@@ -4502,6 +4542,9 @@ class _ChatPageState extends State<ChatPage> {
 
   @override
   void dispose() {
+    _usageTimer?.cancel();
+    _usageLifecycle?.dispose();
+    _usageService.close();
     _currentStreamSubscription?.cancel();
     unawaited(_endGenerationBackgroundTask());
     apiClient.close();
@@ -4962,130 +5005,95 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  Widget _modelItem({
-    required String name,
-    bool selected = false,
-    bool locked = false,
-    String assetPath = 'assets/deepseek.png',
-    double logoSize = 16,
-    String? label,
-    String? description,
-    required VoidCallback onTap,
-  }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-        decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFF22D3EE).withOpacity(0.15)
-              : Colors.transparent,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Row(
-          children: [
-            Image.asset(
-              assetPath,
-              width: logoSize,
-              height: logoSize,
-              fit: BoxFit.contain,
-              errorBuilder: (_, _, _) => const SizedBox(),
-            ),
-            const SizedBox(width: 8),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label ?? "DeepSeek $name",
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: locked ? Colors.grey : null,
-                  ),
-                ),
-                Text(
-                  description ?? (name == "Pro" ? "更强推理能力" : "更快响应速度"),
-                  style: TextStyle(fontSize: 11, color: Colors.grey),
-                ),
-              ],
-            ),
-            const Spacer(),
-            if (locked)
-              const Icon(Icons.lock, size: 14, color: Colors.grey)
-            else if (selected)
-              const Icon(Icons.check, size: 14),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showModelPicker() {
-    showModalBottomSheet<void>(
+  Future<void> _showModelPicker() async {
+    if (isGenerating) return;
+    final refresh = _refreshModelCatalog();
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (sheetContext) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('选择模型', style: Theme.of(context).textTheme.titleMedium),
-              const SizedBox(height: 8),
-              _modelItem(
-                name: 'Sunland',
-                label: 'Sunland AI · Beta',
-                description: '云端符号推理，不使用 DeepSeek',
-                assetPath: 'assets/studio.png',
-                logoSize: 24,
-                locked: !sunlandProvider.isSupported,
-                selected: _activeProvider == sunlandProviderId,
-                onTap: () async {
-                  final changed = await _selectConversationProvider(
-                    provider: sunlandProviderId,
-                    model: sunlandModelId,
-                  );
-                  if (changed && sheetContext.mounted) {
-                    Navigator.pop(sheetContext);
-                  }
-                },
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, setSheetState) => SafeArea(
+          child: SizedBox(
+            height: MediaQuery.sizeOf(sheetContext).height * 0.55,
+            child: FutureBuilder<void>(
+              future: refresh,
+              builder: (context, snapshot) => Column(
+                children: [
+                  const SizedBox(height: 12),
+                  Text('选择模型', style: Theme.of(context).textTheme.titleMedium),
+                  if (_catalogLoading)
+                    const Expanded(
+                      child: Center(child: CircularProgressIndicator()),
+                    )
+                  else if (_catalogFailed)
+                    Expanded(
+                      child: Center(
+                        child: TextButton(
+                          onPressed: () async {
+                            final retry = _refreshModelCatalog();
+                            setSheetState(() {});
+                            await retry;
+                            if (sheetContext.mounted) setSheetState(() {});
+                          },
+                          child: const Text('模型加载失败，点击重试'),
+                        ),
+                      ),
+                    )
+                  else if (_catalogModels.isEmpty)
+                    const Expanded(child: Center(child: Text('暂无可用模型')))
+                  else
+                    Expanded(
+                      child: ListView.builder(
+                        itemCount: _catalogModels.length,
+                        itemBuilder: (context, index) {
+                          final model = _catalogModels[index];
+                          final allowed =
+                              model.isAvailableFor(isPro: isActivated) &&
+                              (model.provider != sunlandProviderId ||
+                                  sunlandProvider.isSupported);
+                          final selected =
+                              model.provider == _activeProvider &&
+                              model.modelName == currentModel;
+                          return ListTile(
+                            leading: Image.asset(
+                              model.provider == sunlandProviderId
+                                  ? 'assets/studio.png'
+                                  : 'assets/deepseek.png',
+                              width: 24,
+                              height: 24,
+                              errorBuilder: (_, _, _) =>
+                                  const SizedBox(width: 24),
+                            ),
+                            title: Text(
+                              model.displayName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: allowed ? null : const Text('当前账户不可用'),
+                            trailing: !allowed
+                                ? const Icon(Icons.lock, size: 16)
+                                : selected
+                                ? const Icon(Icons.check, size: 16)
+                                : null,
+                            onTap: !allowed
+                                ? null
+                                : () async {
+                                    if (isGenerating) return;
+                                    final changed =
+                                        await _selectConversationProvider(
+                                          provider: model.provider,
+                                          model: model.modelName,
+                                        );
+                                    if (changed && sheetContext.mounted)
+                                      Navigator.pop(sheetContext);
+                                  },
+                          );
+                        },
+                      ),
+                    ),
+                ],
               ),
-              _modelItem(
-                name: 'Flash',
-                selected:
-                    _activeProvider == deepSeekProviderId &&
-                    currentModel.contains('flash'),
-                onTap: () async {
-                  final changed = await _selectConversationProvider(
-                    provider: deepSeekProviderId,
-                    model: 'deepseek-v4-flash',
-                  );
-                  if (changed && sheetContext.mounted) {
-                    Navigator.pop(sheetContext);
-                  }
-                },
-              ),
-              _modelItem(
-                name: 'Pro',
-                locked: !isActivated,
-                selected:
-                    _activeProvider == deepSeekProviderId &&
-                    currentModel.contains('pro'),
-                onTap: () async {
-                  if (!isActivated) {
-                    Navigator.pop(sheetContext);
-                    _showLimitSheet(featureName: 'Pro 模型');
-                    return;
-                  }
-                  final changed = await _selectConversationProvider(
-                    provider: deepSeekProviderId,
-                    model: 'deepseek-v4-pro',
-                  );
-                  if (changed && sheetContext.mounted) {
-                    Navigator.pop(sheetContext);
-                  }
-                },
-              ),
-            ],
+            ),
           ),
         ),
       ),
@@ -5431,7 +5439,9 @@ class _ChatPageState extends State<ChatPage> {
             if (!isActivated) ...[
               // 第二行：免费用户额度
               Text(
-                "今日剩余 $_remainingCount 次",
+                _usageDate == chatUsageDate(DateTime.now())
+                    ? "今日剩余 $_remainingCount 次"
+                    : "今日剩余 -- 次",
                 style: TextStyle(
                   fontSize: 11,
                   color: isDark ? Colors.white54 : Colors.black45,
@@ -5564,9 +5574,7 @@ class _ChatPageState extends State<ChatPage> {
                   attachmentsEnabled: !isSunlandConversation,
                   deepThinkingEnabled: useDeep,
                   deepThinkingAvailable: !isSunlandConversation && isActivated,
-                  modelLabel: isSunlandConversation
-                      ? 'Sunland AI · Beta'
-                      : (currentModel.contains('pro') ? 'Pro' : 'Flash'),
+                  modelLabel: _modelLabel,
                   onPickImage: pickImage,
                   onRemoveAttachment: (index) =>
                       setState(() => pickedImages.removeAt(index)),

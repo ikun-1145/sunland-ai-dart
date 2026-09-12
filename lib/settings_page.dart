@@ -12,6 +12,7 @@ import 'main.dart';
 
 import 'announcements_page.dart';
 import 'pro_purchase.dart';
+import 'services/chat_usage_service.dart';
 import 'sunland_beta_diagnostics.dart';
 import 'sunland_ai_core.dart';
 import 'sunland_remote_provider.dart';
@@ -76,6 +77,12 @@ class _SettingsPageState extends State<SettingsPage>
   SunlandUser? _user;
   bool _isActivated = false;
   int _usageCount = 0;
+  String? _usageDate;
+  int _usageRevision = 0;
+  Timer? _usageTimer;
+  late final ChatUsageService _usageService = ChatUsageService(
+    tokenProvider: () => readFreshAuthToken(),
+  );
   bool _loading = true;
   bool _uploadingAvatar = false;
   String? _avatarStatus;
@@ -101,6 +108,36 @@ class _SettingsPageState extends State<SettingsPage>
     }
     _load();
     _loadVersion();
+    _usageTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+        unawaited(_refreshUsage());
+      }
+    });
+  }
+
+  Future<void> _refreshUsage() async {
+    final userId = currentUserNotifier.value?.id;
+    if (userId == null || !mounted) return;
+    final revision = ++_usageRevision;
+    try {
+      final usage = await _usageService.read(userId);
+      if (!mounted ||
+          currentUserNotifier.value?.id != userId ||
+          revision != _usageRevision) {
+        return;
+      }
+      setState(() {
+        _isActivated = usage.isPro;
+        _usageDate = usage.date;
+        _usageCount = usage.isPro ? 0 : freeDailyLimit - usage.remaining;
+      });
+    } catch (_) {
+      if (mounted &&
+          currentUserNotifier.value?.id == userId &&
+          revision == _usageRevision) {
+        setState(() => _usageDate = null);
+      }
+    }
   }
 
   Future<void> _loadVersion() async {
@@ -130,8 +167,7 @@ class _SettingsPageState extends State<SettingsPage>
     }
 
     try {
-      final isActivated = await _repository.isActivated(user.id);
-      final remaining = await _store.readRemainingCount(user.id);
+      await _refreshUsage();
       final cloudProfile = await _repository.loadProfile(user.id);
       final nickname = await _repository.loadNickname(user.id);
       final updatedUser = _user ?? user;
@@ -147,8 +183,6 @@ class _SettingsPageState extends State<SettingsPage>
       if (!mounted) return;
       setState(() {
         _user = finalUser;
-        _isActivated = isActivated;
-        _usageCount = isActivated ? 0 : freeDailyLimit - remaining;
         _loading = false;
         _nickname = nickname;
       });
@@ -400,6 +434,8 @@ class _SettingsPageState extends State<SettingsPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _usageTimer?.cancel();
+    _usageService.close();
     _avatarStatusTimer?.cancel();
     _proActivationPollingTimer?.cancel();
     unawaited(_sunlandDataProvider.dispose());
@@ -408,6 +444,7 @@ class _SettingsPageState extends State<SettingsPage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_refreshUsage());
     if (state == AppLifecycleState.resumed && _awaitingProActivation) {
       unawaited(_checkPurchasedPro());
     }
@@ -726,7 +763,12 @@ class _SettingsPageState extends State<SettingsPage>
                                   ],
                                 ),
                                 Text(
-                                  _isActivated ? '∞' : '$remain 次',
+                                  _isActivated
+                                      ? '∞'
+                                      : _usageDate ==
+                                            chatUsageDate(DateTime.now())
+                                      ? '$remain 次'
+                                      : '--',
                                   style: TextStyle(
                                     color: Theme.of(
                                       context,

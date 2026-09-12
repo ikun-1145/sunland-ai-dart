@@ -300,11 +300,10 @@ class Conversation {
     final rawHistory = json['history'];
     final rawProvider = json['provider']?.toString();
     final provider = rawProvider == 'sunland' ? 'sunland' : 'deepseek';
-    final model = provider == 'sunland'
-        ? 'frost'
-        : (json['model']?.toString() == 'deepseek-v4-pro'
-              ? 'deepseek-v4-pro'
-              : 'deepseek-v4-flash');
+    // Only records predating model persistence use the legacy default.
+    final model =
+        json['model']?.toString() ??
+        (provider == 'sunland' ? 'frost' : 'deepseek-v4-flash');
     final id = (json['id'] ?? DateTime.now().millisecondsSinceEpoch).toString();
     final updatedAt =
         int.tryParse((json['updatedAt'] ?? json['id'] ?? '0').toString()) ??
@@ -724,7 +723,8 @@ class SunlandApiClient {
     }
 
     final remain = int.tryParse(streamed.headers['x-remain'] ?? '');
-    if (remain != null) {
+    final usageDate = streamed.headers['x-usage-date'];
+    if (remain != null && (usageDate == null || usageDate == _todayDateCN())) {
       onRemainUpdated?.call(remain);
     }
 

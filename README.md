@@ -47,8 +47,15 @@ Data URL。客户端单次最多准备 4 张图片（每张 3 MiB、合计 10 Mi
 `APP_JWT_LEGACY_SECRET`、`SUPABASE_LEGACY_JWT_SECRET`、
 `SUPABASE_SECRET_KEY`、`DEEPSEEK_API_KEY`、`GEETEST_SERVER_KEY` 和
 `RESEND_API_TOKEN` 等 Cloudflare Secret；`SUPABASE_PROJECT_URL`、
-`GEETEST_ID` 和 `ALLOWED_ORIGIN` 是普通变量。旧变量名仅作为无停机迁移兼容，
-不得把任何 Secret 写入仓库或 APK。
+`GEETEST_ID`、`ADMIN_EMAIL` 和 `ALLOWED_ORIGIN` 是普通变量。旧变量名
+（`JWT_SECRET`、`DEEPSEEK_KEY`、`GEETEST_KEY`、`RESEND_API_KEY`、
+`SUPABASE_JWT_SECRET`、`SUPABASE_SERVICE_ROLE_KEY`、`SUPABASE_URL`）的
+兼容回退已移除，Worker 只读取上表中的名称，不得把任何 Secret 写入仓库或 APK。
+
+`worker/wrangler.jsonc` 是绑定关系的唯一来源（`keep_vars` 为 `false`），
+部署会清除 Dashboard 中已删除的历史变量；新增明文变量必须同时写入该文件。
+清理历史变量后，用 `wrangler secret list --name ai` 与 Dashboard 确认
+「变量名 + 类型」清单，不要在终端或日志中回显 Secret 取值。
 
 `--env staging` 部署为独立的 `sunland-api-gateway-staging` Worker，使用独立
 KV，并通过 `ACTIVATION_CLAIM_ENABLED=false` 禁止 staging 消耗真实激活码。

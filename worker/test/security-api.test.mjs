@@ -76,10 +76,14 @@ function resetKvOperations(...namespaces) {
 
 function env(overrides = {}) {
   return {
-    JWT_SECRET: "application-secret",
-    SUPABASE_JWT_SECRET: "database-secret",
-    SUPABASE_URL: "https://database.example",
-    SUPABASE_SERVICE_ROLE_KEY: "service-secret",
+    APP_JWT_PRIMARY_SECRET: "application-secret",
+    APP_JWT_LEGACY_SECRET: "application-secret",
+    SUPABASE_LEGACY_JWT_SECRET: "database-secret",
+    SUPABASE_PROJECT_URL: "https://database.example",
+    SUPABASE_SECRET_KEY: "service-secret",
+    DEEPSEEK_API_KEY: "deepseek-secret",
+    GEETEST_SERVER_KEY: "captcha-secret",
+    RESEND_API_TOKEN: "resend-secret",
     ALLOWED_ORIGIN: "https://sunland.dev",
     CODE_STORE: memoryKv(),
     USAGE_KV: memoryKv(),
@@ -138,9 +142,126 @@ function verifiedAdminUser(overrides = {}) {
   };
 }
 
+function mockModelCatalogRpc(handler) {
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    const path = String(url);
+    if (path.endsWith("/auth/v1/user")) return Response.json(verifiedAdminUser());
+    if (path.includes("/rest/v1/user_profiles?email=")) return Response.json([{ user_id: "business-admin" }]);
+    const name = path.split("/rpc/")[1];
+    const body = JSON.parse(init.body || "{}");
+    calls.push({ name, body });
+    if (name === "sunland_admin_record_failed_action") return Response.json(true);
+    return handler(name, body);
+  };
+  return calls;
+}
+
+const modelCatalogInput = {
+  id: "33333333-3333-4333-8333-333333333333",
+  provider: "deepseek",
+  display_name: "DeepSeek V4 Flash",
+  model_name: "deepseek-v4-flash",
+  free_enabled: true,
+  pro_enabled: true,
+  enabled: true,
+  sort_order: 10,
+  updated_at: "2026-09-11T08:00:00.123456+00:00",
+};
+
+test("model catalogue lists disabled rows only after existing admin authorization", async () => {
+  const items = [{ ...modelCatalogInput, enabled: false }];
+  const calls = mockModelCatalogRpc(name => {
+    assert.equal(name, "sunland_admin_list_ai_models");
+    return Response.json({ items });
+  });
+  const denied = await worker.fetch(adminRequest("/v1/admin/ai/models", { token: "" }), adminEnv());
+  assert.equal(denied.status, 401);
+  assert.equal(calls.length, 0);
+  const result = await worker.fetch(adminRequest("/v1/admin/ai/models"), adminEnv());
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { items });
+});
+
+test("model catalogue saves through atomic RPC and preserves timestamp microseconds", async () => {
+  const calls = mockModelCatalogRpc((name, body) => {
+    assert.equal(name, "sunland_admin_save_ai_model");
+    assert.equal(body.p_updated_at, modelCatalogInput.updated_at);
+    assert.equal(body.p_admin_user_id, verifiedAdminUser().id);
+    assert.equal(body.p_provider, "deepseek");
+    assert.equal(body.p_display_name, "自定义显示名");
+    return Response.json({ ...modelCatalogInput, display_name: body.p_display_name });
+  });
+  const result = await worker.fetch(adminRequest("/v1/admin/ai/models", {
+    method: "POST", body: { ...modelCatalogInput, display_name: " 自定义显示名 " },
+  }), adminEnv());
+  assert.equal(result.status, 200);
+  assert.equal((await result.json()).display_name, "自定义显示名");
+  assert.equal(calls.length, 1);
+});
+
+test("model catalogue rejects invalid routes, plan flags, identifiers, order and stale-token shapes before writes", async () => {
+  const calls = mockModelCatalogRpc(() => { throw new Error("unexpected write"); });
+  const invalid = [
+    { provider: "external" }, { model_name: "unknown-model" },
+    { model_name: "deepseek-v4-pro", free_enabled: true },
+    { provider: "sunland", model_name: "deepseek-v4-flash" },
+    { display_name: " " }, { display_name: "x".repeat(81) }, { display_name: "bad\nname" },
+    { enabled: "true" }, { free_enabled: null }, { pro_enabled: 1 },
+    { id: "bad-id" }, { id: 1 }, { updated_at: null }, { updated_at: "invalid" },
+    { id: null }, { sort_order: 0.5 }, { sort_order: -1 }, { sort_order: 10001 },
+  ];
+  for (const fields of invalid) {
+    const result = await worker.fetch(adminRequest("/v1/admin/ai/models", {
+      method: "POST", body: { ...modelCatalogInput, ...fields },
+    }), adminEnv());
+    assert.equal(result.status, 400, JSON.stringify(fields));
+    assert.equal((await result.json()).error, "VALIDATION_ERROR");
+  }
+  assert.equal(calls.length, invalid.length);
+  assert.ok(calls.every(call => call.name === "sunland_admin_record_failed_action"));
+});
+
+test("model catalogue creates Sunland entries and maps concurrency, uniqueness and plan guards to conflicts", async () => {
+  mockModelCatalogRpc((name, body) => {
+    assert.equal(body.p_id, null);
+    assert.equal(body.p_updated_at, null);
+    assert.equal(body.p_provider, "sunland");
+    return Response.json({ ...modelCatalogInput, provider: "sunland", model_name: "frost" });
+  });
+  const created = await worker.fetch(adminRequest("/v1/admin/ai/models", {
+    method: "POST", body: { ...modelCatalogInput, id: null, updated_at: null, provider: "sunland", model_name: "frost" },
+  }), adminEnv());
+  assert.equal(created.status, 200);
+  for (const error of [
+    { message: "AI_MODEL_CONFLICT" }, { message: "AI_MODEL_REQUIRED" },
+    { message: "duplicate key", code: "23505" },
+  ]) {
+    const calls = mockModelCatalogRpc(() => Response.json(error, { status: 400 }));
+    const result = await worker.fetch(adminRequest("/v1/admin/ai/models", {
+      method: "POST", body: modelCatalogInput,
+    }), adminEnv());
+    assert.equal(result.status, 409);
+    assert.equal((await result.json()).error, "CONFLICT");
+    assert.equal(calls.at(-1).body.p_result, "CONFLICT");
+  }
+});
+
+test("model catalogue keeps request size limits and does not expose database errors", async () => {
+  mockModelCatalogRpc(() => Response.json({ message: "internal database detail" }, { status: 500 }));
+  const tooLarge = await worker.fetch(adminRequest("/v1/admin/ai/models", {
+    method: "POST", body: { ...modelCatalogInput, display_name: "x".repeat(17000) },
+  }), adminEnv());
+  assert.equal(tooLarge.status, 413);
+  const failed = await worker.fetch(adminRequest("/v1/admin/ai/models", {
+    method: "POST", body: modelCatalogInput,
+  }), adminEnv());
+  assert.equal(failed.status, 503);
+  assert.deepEqual(await failed.json(), { error: "DATABASE_ERROR", message: "操作暂时不可用" });
+});
+
 test("rotation bridge verifies primary and legacy tokens but still signs with legacy", async () => {
   const environment = env({
-    JWT_SECRET: "",
     APP_JWT_PRIMARY_SECRET: "primary-secret",
     APP_JWT_LEGACY_SECRET: "legacy-secret",
   });
@@ -186,19 +307,18 @@ test("database token is short-lived, authenticated, and ignores a body user id",
 test("database token fails closed when its signing secret is unavailable", async () => {
   const response = await worker.fetch(
     request("/v1/database-token"),
-    env({ SUPABASE_JWT_SECRET: "" }),
+    env({ SUPABASE_LEGACY_JWT_SECRET: "" }),
   );
   assert.equal(response.status, 503);
 });
 
-test("database token supports the explicit legacy Supabase JWT alias", async () => {
+test("database token signs with the configured Supabase legacy JWT secret", async () => {
   globalThis.fetch = async () => Response.json([
     { is_banned: false, pro: false, identity_status: "active" },
   ]);
   const response = await worker.fetch(
     request("/v1/database-token"),
     env({
-      SUPABASE_JWT_SECRET: "",
       SUPABASE_LEGACY_JWT_SECRET: "database-alias-secret",
     }),
   );
@@ -368,8 +488,6 @@ test("public announcement reads use the configured Supabase project and server-k
   const response = await worker.fetch(
     new Request("https://api.sunland.dev/v1/announcements"),
     env({
-      SUPABASE_URL: "",
-      SUPABASE_SERVICE_ROLE_KEY: "",
       SUPABASE_PROJECT_URL: "https://database-alias.example",
       SUPABASE_SECRET_KEY: "sb_secret_server-alias",
     }),
@@ -1475,4 +1593,21 @@ test("a successful client chat and the web usage endpoint report the same remain
     assert.equal((await usage.json()).remain, remain);
   }
   assert.equal(environment.USAGE_KV.operations.put, 4); // two rate timestamps and two quota writes
+});
+
+test('usage resets at UTC+8 midnight without deleting yesterday KV entries', async t => {
+  let now = Date.parse('2026-09-11T15:59:59Z');
+  t.mock.method(Date, 'now', () => now);
+  const environment = env();
+  environment.USAGE_KV.values.set('usage:user-a:2026-09-11', '3');
+  globalThis.fetch = async () => Response.json([{ pro: false, is_banned: false, identity_status: 'active' }]);
+  const before = await (await worker.fetch(request('/v1/usage'), environment)).json();
+  assert.equal(before.date, '2026-09-11');
+  assert.equal(before.remain, 17);
+  now = Date.parse('2026-09-11T16:00:00Z');
+  const after = await (await worker.fetch(request('/v1/usage'), environment)).json();
+  assert.equal(after.date, '2026-09-12');
+  assert.equal(after.remain, 20);
+  assert.equal(environment.USAGE_KV.values.get('usage:user-a:2026-09-11'), '3');
+  assert.equal(environment.USAGE_KV.operations.put, 0);
 });

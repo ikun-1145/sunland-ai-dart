@@ -28,6 +28,10 @@ dependencies:
   characters: ^1.4.0
   image: ^4.5.4
   crypto: ^3.0.7
+  # 本地离线语音输入：sherpa-onnx 官方 Dart/Flutter 绑定（预编译 .so / xcframework）
+  sherpa_onnx: ^1.13.8
+  # 麦克风 PCM16 流采集。7.x 需要 Dart ^3.12 / Flutter >= 3.44，本项目为 3.11 / 3.41。
+  record: ^6.2.1
 
 dev_dependencies:
   flutter_test:
