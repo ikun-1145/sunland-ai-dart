@@ -27,8 +27,10 @@ import 'services/ai_haptic_service.dart';
 import 'services/app_config_service.dart';
 import 'services/background_execution_service.dart';
 import 'services/image_attachment_service.dart';
+import 'services/local_speech_recognition_service.dart';
 import 'services/model_catalog_service.dart';
 import 'services/network_connectivity_service.dart';
+import 'services/speech_text_merger.dart';
 import 'services/user_status_service.dart';
 import 'theme/sunland_theme.dart';
 import 'widgets/assistant_reasoning_panel.dart';
@@ -1470,6 +1472,8 @@ class _ChatPageState extends State<ChatPage> {
       useDeep = false;
       pickedImages.clear();
     });
+    // 切换会话时不能留下正在进行的语音输入。
+    _onVoiceCancel();
   }
 
   List<Map<String, dynamic>> normalizeMessages(
@@ -2966,6 +2970,122 @@ class _ChatPageState extends State<ChatPage> {
   final BackgroundExecutionService _backgroundExecution =
       const BackgroundExecutionService();
   final AiHapticService _aiHaptics = AiHapticService();
+
+  // 🎙 本地离线语音输入（sherpa-onnx + SenseVoiceSmall）。
+  // 长按输入框说话：录音 -> 本地识别 -> 追加写入输入框，绝不自动发送。
+  final LocalSpeechRecognitionService _speech = LocalSpeechRecognitionService();
+  AppLifecycleListener? _voiceLifecycle;
+  VoiceInputState _voiceState = VoiceInputState.idle;
+  int _voiceGeneration = 0;
+
+  /// 桌面端不提供语音输入，长按保持透传。
+  bool get _voiceInputSupported => Platform.isAndroid || Platform.isIOS;
+
+  /// 长按达到阈值：收键盘并进入语音流程。
+  Future<void> _onVoiceStart() async {
+    // 一次只允许一个语音任务：录音中 / 识别中 / 准备中再次长按一律忽略。
+    if (_voiceState != VoiceInputState.idle &&
+        _voiceState != VoiceInputState.error) {
+      return;
+    }
+    final generation = ++_voiceGeneration;
+    setState(() => _voiceState = VoiceInputState.preparing);
+
+    // 长按进入语音时主动收起键盘。
+    if (mounted) FocusScope.of(context).unfocus();
+
+    try {
+      // 只在首次真正使用语音时申请权限，App 启动不弹权限框。
+      final granted = await _speech.preparePermission();
+      if (!mounted || generation != _voiceGeneration) return;
+      if (!granted) {
+        setState(() => _voiceState = VoiceInputState.error);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('未获得麦克风权限，可继续使用文字输入'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+        return;
+      }
+
+      // 首次会下载并加载模型，之后一直复用同一个 recognizer。
+      await _speech.initialize();
+      if (!mounted || generation != _voiceGeneration) return;
+
+      await _speech.startRecording();
+      if (!mounted || generation != _voiceGeneration) return;
+
+      setState(() => _voiceState = VoiceInputState.recording);
+      unawaited(_aiHaptics.voiceRecordingStarted());
+    } catch (error) {
+      if (!mounted || generation != _voiceGeneration) return;
+      setState(() => _voiceState = VoiceInputState.error);
+      _showVoiceFailure(error);
+    }
+  }
+
+  /// 松手：停止录音并执行本地识别，结果追加到输入框。
+  Future<void> _onVoiceStop() async {
+    if (_voiceState != VoiceInputState.recording) return;
+    final generation = _voiceGeneration;
+    setState(() => _voiceState = VoiceInputState.recognizing);
+    unawaited(_aiHaptics.voiceRecordingStopped());
+
+    try {
+      final result = await _speech.stopAndRecognize();
+      if (!mounted || generation != _voiceGeneration) return;
+      if (result != null) _appendRecognizedText(result.text);
+    } catch (error) {
+      if (!mounted || generation != _voiceGeneration) return;
+      _showVoiceFailure(error);
+    } finally {
+      if (mounted && generation == _voiceGeneration) {
+        setState(() => _voiceState = VoiceInputState.idle);
+      }
+    }
+  }
+
+  /// 手势被系统取消（滑出输入框、被上层抢走、切走页面）。
+  void _onVoiceCancel() {
+    // 普通点击也可能走到这里，必须按自身状态判断，避免误伤正常输入。
+    if (_voiceState != VoiceInputState.recording &&
+        _voiceState != VoiceInputState.preparing) {
+      return;
+    }
+    _voiceGeneration++;
+    unawaited(_speech.cancel());
+    if (mounted) setState(() => _voiceState = VoiceInputState.idle);
+  }
+
+  /// App 退到后台 / 被电话抢占：丢弃本次录音，不留下卡死状态。
+  void _onVoiceAppInactive() {
+    if (_voiceState == VoiceInputState.idle) return;
+    _voiceGeneration++;
+    unawaited(_speech.cancel());
+    if (mounted) setState(() => _voiceState = VoiceInputState.idle);
+  }
+
+  /// 识别结果只写进输入框、不自动发送；保留原有文字并把光标移到末尾。
+  void _appendRecognizedText(String recognized) {
+    final merged = mergeRecognizedText(
+      existing: controller.text,
+      recognized: recognized,
+    );
+    controller.value = TextEditingValue(
+      text: merged,
+      selection: TextSelection.collapsed(offset: merged.length),
+    );
+  }
+
+  void _showVoiceFailure(Object error) {
+    final message = error is VoiceRecognitionException
+        ? error.message
+        : '语音识别失败，请重试';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+    );
+  }
   int? _generationBackgroundTaskId;
   bool _ocrPrivacyTipShown = false;
   bool isUploadingAvatar = false;
@@ -3513,6 +3633,11 @@ class _ChatPageState extends State<ChatPage> {
     _usageService = ChatUsageService(tokenProvider: _readFreshAuthToken);
     _usageLifecycle = AppLifecycleListener(
       onResume: () => unawaited(_checkActivation()),
+    );
+    _voiceLifecycle = AppLifecycleListener(
+      onInactive: _onVoiceAppInactive,
+      onPause: _onVoiceAppInactive,
+      onHide: _onVoiceAppInactive,
     );
     _usageTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       if (WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
@@ -4545,6 +4670,9 @@ class _ChatPageState extends State<ChatPage> {
     _usageTimer?.cancel();
     _usageLifecycle?.dispose();
     _usageService.close();
+    _voiceLifecycle?.dispose();
+    // 页面销毁时仍在录音：直接取消并释放，绝不让 recorder 悬空。
+    unawaited(_speech.dispose());
     _currentStreamSubscription?.cancel();
     unawaited(_endGenerationBackgroundTask());
     apiClient.close();
@@ -5589,6 +5717,11 @@ class _ChatPageState extends State<ChatPage> {
                   onSelectModel: _showModelPicker,
                   onSend: sendMessage,
                   onStop: cancelGeneration,
+                  voiceInputEnabled: _voiceInputSupported,
+                  voiceState: _voiceState,
+                  onVoiceStart: () => unawaited(_onVoiceStart()),
+                  onVoiceStop: () => unawaited(_onVoiceStop()),
+                  onVoiceCancel: _onVoiceCancel,
                 ),
               ],
             ),

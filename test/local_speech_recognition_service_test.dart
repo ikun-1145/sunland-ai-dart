@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:record/record.dart';
 import 'package:sunland_ai_app/services/local_speech_model_store.dart';
@@ -39,10 +40,11 @@ class _FakeEngine implements LocalSpeechEngine {
 }
 
 /// 立刻成功的假下载器，避免测试碰网络与 path_provider。
-class _InstantDownloader implements HttpDownloader {
-  _InstantDownloader(this.payload);
+/// 按 URL 区分 model 与 tokens，避免两个文件互相覆盖。
+class _UrlAwareDownloader implements HttpDownloader {
+  _UrlAwareDownloader(this.modelPayload);
 
-  final List<int> payload;
+  final List<int> modelPayload;
 
   @override
   Future<HttpDownloadResponse> open(
@@ -50,9 +52,12 @@ class _InstantDownloader implements HttpDownloader {
     int? rangeStart,
     Duration idleTimeout = const Duration(seconds: 30),
   }) async {
+    final bytes = uri.path.endsWith('tokens.txt')
+        ? _tokensPayload
+        : modelPayload;
     return HttpDownloadResponse(
       statusCode: 200,
-      bytes: Stream<List<int>>.value(payload),
+      bytes: Stream<List<int>>.value(bytes),
     );
   }
 
@@ -60,6 +65,25 @@ class _InstantDownloader implements HttpDownloader {
   void close() {}
 }
 
+/// 服务测试用的固定假载荷。生产常量已填入真实的 239 MB / SHA-256，所以这里
+/// 必须显式把期望长度与哈希注入 store，否则任何小载荷都会被正确地判为损坏。
+final _payload = List<int>.generate(4096, (index) => (index * 17) % 256);
+const _tokensPayload = <int>[116, 111, 107, 101, 110, 115];
+
+String _digestOf(List<int> bytes) => sha256.convert(bytes).toString();
+
+/// 一个与 [_payload] / [_tokensPayload] 自洽的模型仓储。
+SenseVoiceModelStore _modelStoreIn(Directory directory, {List<int>? payload}) {
+  final bytes = payload ?? _payload;
+  return SenseVoiceModelStore(
+    downloader: _UrlAwareDownloader(bytes),
+    directory: directory,
+    expectedModelBytes: bytes.length,
+    expectedTokensBytes: _tokensPayload.length,
+    expectedModelSha256: _digestOf(bytes),
+    expectedTokensSha256: _digestOf(_tokensPayload),
+  );
+}
 
 /// 用假的 [RecordPlatform] 接管 record 插件，测试环境不加载任何原生插件。
 ///
@@ -74,6 +98,8 @@ class _FakeRecordPlatform extends RecordPlatform {
   int cancelCalls = 0;
   RecordConfig? lastConfig;
 
+  final List<StreamController<Uint8List>> _controllers = [];
+
   @override
   Future<void> create(String recorderId) async => createCalls++;
 
@@ -86,24 +112,6 @@ class _FakeRecordPlatform extends RecordPlatform {
   @override
   Future<bool> hasPermission(String recorderId, {bool request = true}) async =>
       permissionGranted;
-
-  /// 测试可主动把 PCM16 数据推给 service，模拟麦克风采集。
-  void emit(List<int> pcm16) {
-    for (final controller in List<StreamController<Uint8List>>.from(_controllers)) {
-      if (controller.isClosed) continue;
-      controller.add(Uint8List.fromList(pcm16));
-    }
-  }
-
-  /// 停止时关闭数据流，模拟原生侧停止采集，避免测试进程被未关闭的流挂住。
-  void closeStreams() {
-    for (final controller in _controllers) {
-      if (!controller.isClosed) controller.close();
-    }
-    _controllers.clear();
-  }
-
-  final List<StreamController<Uint8List>> _controllers = [];
 
   @override
   Future<Stream<Uint8List>> startStream(
@@ -128,6 +136,24 @@ class _FakeRecordPlatform extends RecordPlatform {
   Future<void> cancel(String recorderId) async {
     cancelCalls++;
     closeStreams();
+  }
+
+  /// 测试可主动把 PCM16 数据推给 service，模拟麦克风采集。
+  void emit(List<int> pcm16) {
+    for (final controller in List<StreamController<Uint8List>>.from(
+      _controllers,
+    )) {
+      if (controller.isClosed) continue;
+      controller.add(Uint8List.fromList(pcm16));
+    }
+  }
+
+  /// 停止时关闭数据流，模拟原生侧停止采集，避免测试进程被未关闭的流挂住。
+  void closeStreams() {
+    for (final controller in _controllers) {
+      if (!controller.isClosed) controller.close();
+    }
+    _controllers.clear();
   }
 
   /// `AudioRecorder.startStream` 会顺带监听录音状态，给一个空流即可。
@@ -192,10 +218,7 @@ void main() {
     RecordPlatform.instance = recordPlatform;
     service = LocalSpeechRecognitionService(
       engine: engine,
-      modelStore: SenseVoiceModelStore(
-        downloader: _InstantDownloader(const [1, 2, 3, 4]),
-        directory: tempDir,
-      ),
+      modelStore: _modelStoreIn(tempDir),
     );
   });
 
@@ -279,10 +302,7 @@ void main() {
       final failing = _FakeEngine(initError: const VoiceRecognitionException('boom'));
       final broken = LocalSpeechRecognitionService(
         engine: failing,
-        modelStore: SenseVoiceModelStore(
-          downloader: _InstantDownloader(const [1, 2, 3, 4]),
-          directory: tempDir,
-        ),
+        modelStore: _modelStoreIn(tempDir),
       );
       await broken.startRecording();
       recordPlatform.emit(List<int>.filled(32000, 0));
@@ -345,10 +365,7 @@ void main() {
         engine: _FakeEngine(
           initError: const VoiceRecognitionException('语音识别初始化失败'),
         ),
-        modelStore: SenseVoiceModelStore(
-          downloader: _InstantDownloader(const [1]),
-          directory: tempDir,
-        ),
+        modelStore: _modelStoreIn(tempDir, payload: const [1]),
       );
       await expectLater(
         failing.initialize(),
@@ -360,10 +377,7 @@ void main() {
     test('模型下载失败被翻译成 VoiceRecognitionException', () async {
       final failing = LocalSpeechRecognitionService(
         engine: _FakeEngine(),
-        modelStore: SenseVoiceModelStore(
-          downloader: _InstantDownloader(const []),
-          directory: tempDir,
-        ),
+        modelStore: _modelStoreIn(tempDir, payload: const []),
       );
       await expectLater(
         failing.initialize(),

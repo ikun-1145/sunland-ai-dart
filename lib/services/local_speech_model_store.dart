@@ -36,20 +36,24 @@ abstract final class SenseVoiceModelSource {
     'tokens.txt',
   );
 
-  /// TODO(release): 发布前用上面的命令实测并填入。
+  /// SenseVoiceSmall int8 模型实测字节数。
   ///
-  /// 留空表示"未知"，此时下载只做字节数上限与文件可解析性校验，跳过哈希
-  /// 比对；填入后启用完整的 SHA-256 完整性校验与损坏自动重下。
-  static const String modelSha256 = '';
+  /// 来源：`modelUrl` 的实际响应体（`Content-Length: 239233841`）。用于下载
+  /// 完成后的长度校验，以及"文件损坏/未下载完"的自动重新下载判定。
+  static const int modelBytes = 239233841;
 
-  /// TODO(release): 同上，int8 模型约 228 MiB。
-  static const int modelBytes = 0;
+  /// SenseVoiceSmall int8 模型实测 SHA-256。
+  ///
+  /// 由下载完成的响应文件直接计算，并与该文件的 LFS 内容哈希
+  /// （`x-linked-etag`）逐位一致。任一字节不符即判定损坏并重新下载。
+  static const String modelSha256 =
+      'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51';
 
-  /// TODO(release): 同上，tokens.txt 约 308 KiB。
-  static const String tokensSha256 = '';
+  /// 词表实测字节数与 SHA-256。
+  static const int tokensBytes = 315894;
 
-  /// TODO(release): 同上。
-  static const int tokensBytes = 0;
+  static const String tokensSha256 =
+      'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc';
 }
 
 /// 一次下载的进度快照。

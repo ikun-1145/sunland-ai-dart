@@ -118,26 +118,64 @@ void main() {
 
   File modelPartFile() => File('${modelFile().path}.part');
 
-  test('默认模型来源使用 HTTPS 且文件名稳定', () {
+  // 生产常量已填入真实的 239 MB / SHA-256，测试不能再依赖"未知"占位。这里的
+  // fixture 显式把长度与哈希注入进来，从而用一个 4 KiB 假载荷完整覆盖
+  // "长度校验 + 哈希校验 + 续传 + 损坏重下"四条路径。
+  final modelPayload = List<int>.generate(4096, (index) => (index * 31) % 256);
+
+  /// 构造一个与 [modelPayload] / [tokensBytes] 自洽的 store。
+  SenseVoiceModelStore storeWith(_FakeDownloader downloader, {int? modelBytes}) {
+    return SenseVoiceModelStore(
+      downloader: downloader,
+      directory: tempDir,
+      expectedModelBytes: modelBytes ?? modelPayload.length,
+      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
+      expectedModelSha256: _sha256Of(modelPayload),
+      expectedTokensSha256: _sha256Of(_FakeDownloader.tokensBytes),
+    );
+  }
+
+  test('默认模型来源固定为 HTTPS 且文件名稳定', () {
     expect(SenseVoiceModelSource.modelUrl.scheme, 'https');
     expect(SenseVoiceModelSource.tokensUrl.scheme, 'https');
     expect(SenseVoiceModelSource.modelUrl.path, endsWith('model.int8.onnx'));
     expect(SenseVoiceModelSource.tokensUrl.path, endsWith('tokens.txt'));
+    expect(SenseVoiceModelSource.modelFileName, 'model.int8.onnx');
+    expect(SenseVoiceModelSource.tokensFileName, 'tokens.txt');
+  });
+
+  test('生产常量是实测值而不是占位（防止回退成"跳过校验"）', () {
+    // 239233841 字节 = modelUrl 实际响应体长度。
+    expect(SenseVoiceModelSource.modelBytes, 239233841);
+    expect(SenseVoiceModelSource.tokensBytes, 315894);
+    expect(
+      SenseVoiceModelSource.modelSha256,
+      'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51',
+    );
+    expect(
+      SenseVoiceModelSource.tokensSha256,
+      'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc',
+    );
+    // SHA-256 十六进制必须是 64 位小写，否则比对永远失败。
+    for (final digest in [
+      SenseVoiceModelSource.modelSha256,
+      SenseVoiceModelSource.tokensSha256,
+    ]) {
+      expect(digest.length, 64);
+      expect(RegExp(r'^[0-9a-f]{64}$').hasMatch(digest), isTrue);
+    }
+    expect(SenseVoiceModelSource.modelBytes, greaterThan(200 * 1024 * 1024));
   });
 
   test('下载成功后写入正式文件，不残留 .part', () async {
-    final payload = List<int>.generate(4096, (index) => index % 251);
-    final downloader = _FakeDownloader(payload: payload);
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
-    );
+    final downloader = _FakeDownloader(payload: modelPayload);
+    final store = storeWith(downloader);
 
     final progress = <ModelDownloadProgress>[];
     await store.ensureReady(onProgress: progress.add);
 
     expect(modelFile().existsSync(), isTrue);
-    expect(modelFile().readAsBytesSync(), payload);
+    expect(modelFile().readAsBytesSync(), modelPayload);
     expect(tokensFile().existsSync(), isTrue);
     expect(tokensFile().readAsBytesSync(), _FakeDownloader.tokensBytes);
     expect(modelPartFile().existsSync(), isFalse);
@@ -147,10 +185,7 @@ void main() {
   });
 
   test('模型落在应用私有目录的 speech_models 子目录中', () async {
-    final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: const [1, 2, 3, 4]),
-      directory: tempDir,
-    );
+    final store = storeWith(_FakeDownloader(payload: modelPayload));
     await store.ensureReady();
 
     expect(store.modelPath, contains('speech_models'));
@@ -164,13 +199,8 @@ void main() {
   });
 
   test('已就绪时不重复下载', () async {
-    final downloader = _FakeDownloader(
-      payload: List<int>.generate(2048, (index) => index % 97),
-    );
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
-    );
+    final downloader = _FakeDownloader(payload: modelPayload);
+    final store = storeWith(downloader);
 
     await store.ensureReady();
     expect(downloader.openCalls, 2);
@@ -183,12 +213,8 @@ void main() {
   });
 
   test('下载中断时保留 .part 并在下次续传', () async {
-    final payload = List<int>.generate(8192, (index) => index % 233);
-    final failing = _FakeDownloader(payload: payload, failAfterBytes: 1024);
-    final store = SenseVoiceModelStore(
-      downloader: failing,
-      directory: tempDir,
-    );
+    final failing = _FakeDownloader(payload: modelPayload, failAfterBytes: 1024);
+    final store = storeWith(failing);
 
     await expectLater(
       store.ensureReady(),
@@ -200,40 +226,60 @@ void main() {
     expect(modelFile().existsSync(), isFalse);
 
     // 第二次换成正常下载器，校验续传起点与最终内容。
-    final healthy = _FakeDownloader(payload: payload);
-    final resumedStore = SenseVoiceModelStore(
-      downloader: healthy,
-      directory: tempDir,
-    );
+    final healthy = _FakeDownloader(payload: modelPayload);
+    final resumedStore = storeWith(healthy);
     await resumedStore.ensureReady();
 
     expect(healthy.lastModelRangeStart, partialLength);
-    expect(modelFile().readAsBytesSync(), payload);
+    expect(modelFile().readAsBytesSync(), modelPayload);
     expect(modelPartFile().existsSync(), isFalse);
     store.dispose();
     resumedStore.dispose();
   });
 
-  test('服务端不支持 Range 时丢弃半成品并重新下载', () async {
-    final payload = List<int>.generate(4096, (index) => index % 199);
-    await modelPartFile().create(recursive: true);
-    await modelPartFile().writeAsBytes(payload.sublist(0, 512));
-
-    final downloader = _FakeDownloader(payload: payload, supportsRange: false);
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
+  test('续传后哈希仍然覆盖完整文件（而非只有后半段）', () async {
+    final failing = _FakeDownloader(payload: modelPayload, failAfterBytes: 1536);
+    final store = storeWith(failing);
+    await expectLater(
+      store.ensureReady(),
+      throwsA(isA<ModelDownloadException>()),
     );
+
+    // 用同一个自洽 fixture 续传：只有"续传字节也计入哈希"才可能校验通过。
+    final healthy = _FakeDownloader(payload: modelPayload);
+    final resumedStore = storeWith(healthy);
+    await resumedStore.ensureReady();
+
+    expect(healthy.lastModelRangeStart, 1536);
+    expect(modelFile().readAsBytesSync(), modelPayload);
+    expect(_sha256Of(modelFile().readAsBytesSync()), _sha256Of(modelPayload));
+    store.dispose();
+    resumedStore.dispose();
+  });
+
+  test('服务端不支持 Range 时丢弃半成品并重新下载', () async {
+    await modelPartFile().create(recursive: true);
+    await modelPartFile().writeAsBytes(modelPayload.sublist(0, 512));
+
+    final downloader = _FakeDownloader(
+      payload: modelPayload,
+      supportsRange: false,
+    );
+    final store = storeWith(downloader);
     await store.ensureReady();
 
-    expect(modelFile().readAsBytesSync(), payload);
+    // 服务端回 200（而非 206）时必须从头重下，最终内容要完整且哈希正确，
+    // 不能把 512 字节半成品当成本次下载的数据继续拼接。
+    expect(downloader.lastModelRangeStart, 512);
+    expect(modelFile().readAsBytesSync(), modelPayload);
+    expect(modelFile().lengthSync(), modelPayload.length);
+    expect(modelPartFile().existsSync(), isFalse);
     store.dispose();
   });
 
   test('HTTP 非 200 时抛出可读错误且不写入正式文件', () async {
-    final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: const [], statusCode: 404),
-      directory: tempDir,
+    final store = storeWith(
+      _FakeDownloader(payload: const [], statusCode: 404),
     );
 
     await expectLater(
@@ -245,10 +291,12 @@ void main() {
   });
 
   test('取消下载时保留 .part 并抛出取消异常', () async {
-    final payload = List<int>.generate(64 * 1024, (index) => index % 211);
+    final bigPayload = List<int>.generate(64 * 1024, (index) => index % 211);
     final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: payload),
+      downloader: _FakeDownloader(payload: bigPayload),
       directory: tempDir,
+      expectedModelBytes: bigPayload.length,
+      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
     );
     final token = ModelDownloadCancellationToken();
 
@@ -260,14 +308,10 @@ void main() {
     store.dispose();
   });
 
-  test('字节数超过预期时中止且不入库', () async {
-    final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(
-        payload: List<int>.generate(4096, (index) => index % 71),
-      ),
-      directory: tempDir,
-      expectedModelBytes: 1024,
-      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
+  test('实际字节数超过预期时中止且不入库', () async {
+    final store = storeWith(
+      _FakeDownloader(payload: modelPayload),
+      modelBytes: 1024,
     );
 
     await expectLater(
@@ -278,12 +322,10 @@ void main() {
     store.dispose();
   });
 
-  test('字节数不足时判定为不完整且不入库', () async {
-    final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: const [1, 2, 3, 4]),
-      directory: tempDir,
-      expectedModelBytes: 4096,
-      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
+  test('实际字节数少于预期时判定为不完整且不入库', () async {
+    final store = storeWith(
+      _FakeDownloader(payload: const [1, 2, 3, 4]),
+      modelBytes: 4096,
     );
 
     await expectLater(
@@ -295,29 +337,20 @@ void main() {
   });
 
   test('长度不符的已有文件会被重新下载', () async {
-    final payload = List<int>.generate(2048, (index) => index % 89);
     await modelFile().create(recursive: true);
     await modelFile().writeAsBytes(List<int>.filled(64, 7));
 
-    final downloader = _FakeDownloader(payload: payload);
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
-      expectedModelBytes: payload.length,
-      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
-    );
+    final downloader = _FakeDownloader(payload: modelPayload);
+    final store = storeWith(downloader);
     await store.ensureReady();
 
-    expect(modelFile().readAsBytesSync(), payload);
+    expect(modelFile().readAsBytesSync(), modelPayload);
     expect(downloader.modelOpenCalls, 1);
     store.dispose();
   });
 
   test('isReady 反映两个文件是否都已就绪', () async {
-    final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: const [1, 2, 3, 4]),
-      directory: tempDir,
-    );
+    final store = storeWith(_FakeDownloader(payload: modelPayload));
     expect(await store.isReady, isFalse);
     await store.ensureReady();
     expect(await store.isReady, isTrue);
@@ -325,10 +358,7 @@ void main() {
   });
 
   test('未就绪时访问路径抛出可读错误', () {
-    final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: const []),
-      directory: tempDir,
-    );
+    final store = storeWith(_FakeDownloader(payload: const []));
     expect(() => store.modelPath, throwsA(isA<ModelDownloadException>()));
     expect(() => store.tokensPath, throwsA(isA<ModelDownloadException>()));
     store.dispose();
@@ -336,8 +366,10 @@ void main() {
 
   test('哈希不匹配时不写入正式文件', () async {
     final store = SenseVoiceModelStore(
-      downloader: _FakeDownloader(payload: List<int>.filled(2048, 3)),
+      downloader: _FakeDownloader(payload: modelPayload),
       directory: tempDir,
+      expectedModelBytes: modelPayload.length,
+      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
       expectedModelSha256: _sha256Of(const [9, 9, 9, 9]),
       expectedTokensSha256: _sha256Of(_FakeDownloader.tokensBytes),
     );
@@ -350,38 +382,39 @@ void main() {
     store.dispose();
   });
 
-  test('哈希匹配时正常落盘', () async {
-    final payload = List<int>.generate(2048, (index) => index % 89);
-    final downloader = _FakeDownloader(payload: payload);
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
-      expectedModelSha256: _sha256Of(payload),
-      expectedTokensSha256: _sha256Of(_FakeDownloader.tokensBytes),
+  test('字节数正确但内容被篡改时同样被拒绝', () async {
+    final tampered = List<int>.from(modelPayload);
+    tampered[2048] = (tampered[2048] + 1) % 256;
+    final store = storeWith(_FakeDownloader(payload: tampered));
+
+    await expectLater(
+      store.ensureReady(),
+      throwsA(isA<ModelDownloadException>()),
     );
+    expect(modelFile().existsSync(), isFalse);
+    store.dispose();
+  });
+
+  test('哈希匹配时正常落盘', () async {
+    final downloader = _FakeDownloader(payload: modelPayload);
+    final store = storeWith(downloader);
 
     await store.ensureReady();
-    expect(modelFile().readAsBytesSync(), payload);
+    expect(modelFile().readAsBytesSync(), modelPayload);
     expect(downloader.modelOpenCalls, 1);
     store.dispose();
   });
 
   test('已存在但内容损坏的文件会被删除并重新下载', () async {
     await modelFile().create(recursive: true);
-    await modelFile().writeAsBytes(List<int>.filled(2048, 1));
+    await modelFile().writeAsBytes(List<int>.filled(modelPayload.length, 1));
 
-    final payload = List<int>.generate(2048, (index) => index % 89);
-    final downloader = _FakeDownloader(payload: payload);
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
-      expectedModelSha256: _sha256Of(payload),
-      expectedTokensSha256: _sha256Of(_FakeDownloader.tokensBytes),
-    );
+    final downloader = _FakeDownloader(payload: modelPayload);
+    final store = storeWith(downloader);
 
     await store.ensureReady();
     expect(downloader.modelOpenCalls, 1);
-    expect(modelFile().readAsBytesSync(), payload);
+    expect(modelFile().readAsBytesSync(), modelPayload);
     store.dispose();
   });
 
@@ -430,6 +463,10 @@ void main() {
     final store = SenseVoiceModelStore(
       downloader: _FakeDownloader(payload: payload),
       directory: tempDir,
+      expectedModelBytes: payload.length,
+      expectedTokensBytes: _FakeDownloader.tokensBytes.length,
+      expectedModelSha256: _sha256Of(payload),
+      expectedTokensSha256: _sha256Of(_FakeDownloader.tokensBytes),
     );
     await store.ensureReady();
     expect(modelFile().readAsBytesSync(), payload);
@@ -437,13 +474,8 @@ void main() {
   });
 
   test('并发 ensureReady 复用同一个请求', () async {
-    final downloader = _FakeDownloader(
-      payload: List<int>.generate(8192, (index) => index % 61),
-    );
-    final store = SenseVoiceModelStore(
-      downloader: downloader,
-      directory: tempDir,
-    );
+    final downloader = _FakeDownloader(payload: modelPayload);
+    final store = storeWith(downloader);
 
     await Future.wait(<Future<void>>[
       store.ensureReady(),

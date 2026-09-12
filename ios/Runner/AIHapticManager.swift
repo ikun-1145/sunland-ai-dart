@@ -6,6 +6,8 @@ final class AIHapticManager {
     case aiStarted
     case answerStarted
     case answerCompleted
+    case voiceRecordingStarted
+    case voiceRecordingStopped
   }
 
   private let hapticQueue = DispatchQueue(
@@ -154,6 +156,12 @@ final class AIHapticManager {
         transient(time: 0.00, intensity: 0.32, sharpness: 0.80),
         transient(time: 0.19, intensity: 0.50, sharpness: 0.90),
       ]
+    case .voiceRecordingStarted:
+      // 长按进入语音识别：一段轻触觉，提示"开始聆听"。
+      return [transient(time: 0.0, intensity: 0.38, sharpness: 0.72)]
+    case .voiceRecordingStopped:
+      // 松手停止录音：另一段略轻的触觉，与开始区分开，且不连续震动。
+      return [transient(time: 0.0, intensity: 0.26, sharpness: 0.58)]
     }
   }
 
@@ -207,6 +215,14 @@ final class AIHapticManager {
           second.prepare()
           second.impactOccurred(intensity: 0.65)
         }
+      case .voiceRecordingStarted:
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.55)
+      case .voiceRecordingStopped:
+        let generator = UIImpactFeedbackGenerator(style: .soft)
+        generator.prepare()
+        generator.impactOccurred(intensity: 0.40)
       }
     }
   }

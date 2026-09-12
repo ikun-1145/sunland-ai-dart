@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../services/local_speech_recognition_service.dart';
 import '../theme/sunland_theme.dart';
+import 'voice_input_pointer_layer.dart';
 
 class ChatComposer extends StatefulWidget {
   const ChatComposer({
@@ -19,6 +21,11 @@ class ChatComposer extends StatefulWidget {
     required this.onSelectModel,
     required this.onSend,
     required this.onStop,
+    this.voiceInputEnabled = false,
+    this.voiceState = VoiceInputState.idle,
+    this.onVoiceStart,
+    this.onVoiceStop,
+    this.onVoiceCancel,
     super.key,
   });
 
@@ -36,11 +43,26 @@ class ChatComposer extends StatefulWidget {
   final VoidCallback onSend;
   final VoidCallback onStop;
 
+  /// 是否启用"长按输入框说话"。为 false 时输入框行为与接入语音前完全一致。
+  final bool voiceInputEnabled;
+
+  /// 语音输入状态，仅用于替换 hintText 文案。
+  final VoiceInputState voiceState;
+
+  final VoidCallback? onVoiceStart;
+  final VoidCallback? onVoiceStop;
+  final VoidCallback? onVoiceCancel;
+
   @override
   State<ChatComposer> createState() => _ChatComposerState();
 }
 
 class _ChatComposerState extends State<ChatComposer> {
+  /// 语音按住期间置为 true，用于关闭该 `TextField` 的交互式选择与选择菜单。
+  ///
+  /// 只在按住期间生效，松手立刻恢复，因此不影响用户主动选择/复制已有文字。
+  bool _voiceHolding = false;
+
   @override
   void initState() {
     super.initState();
@@ -64,12 +86,52 @@ class _ChatComposerState extends State<ChatComposer> {
 
   void _refreshSendState() => setState(() {});
 
+  /// 当前是否需要抑制文本选择与上下文菜单（长按语音期间）。
+  bool get _suppressSelection =>
+      _voiceHolding ||
+      widget.voiceState == VoiceInputState.recording ||
+      widget.voiceState == VoiceInputState.preparing ||
+      widget.voiceState == VoiceInputState.recognizing;
+
+  /// 固定身份的 contextMenuBuilder（方法 tear-off）。
+  ///
+  /// 语音按住时返回零尺寸组件，确定性阻止长按弹出剪切/复制/粘贴工具栏；
+  /// 其余时刻完全走 Flutter 默认实现，不影响用户正常选择/复制。
+  Widget _buildContextMenu(
+    BuildContext context,
+    EditableTextState editableTextState,
+  ) {
+    if (_suppressSelection) return const SizedBox.shrink();
+    return AdaptiveTextSelectionToolbar.editableText(
+      editableTextState: editableTextState,
+    );
+  }
+
+  /// 语音状态只影响 hintText 文案，不改变任何布局结构。
+  String get _hintText {
+    switch (widget.voiceState) {
+      case VoiceInputState.preparing:
+        return '正在准备语音识别…';
+      case VoiceInputState.recording:
+        return '🎙 正在聆听… 松开发送到输入框';
+      case VoiceInputState.recognizing:
+        return '正在识别…';
+      case VoiceInputState.idle:
+      case VoiceInputState.error:
+        return '输入消息…';
+    }
+  }
+
+  static void _noop() {}
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final canSend =
         widget.controller.text.trim().isNotEmpty ||
         (widget.attachmentsEnabled && widget.attachments.isNotEmpty);
+    // 语音流程进行中时关闭交互式选择并抑制上下文菜单。
+    final suppressSelection = _suppressSelection;
     return SafeArea(
       top: false,
       child: Padding(
@@ -86,7 +148,11 @@ class _ChatComposerState extends State<ChatComposer> {
             padding: const EdgeInsets.all(AppSpacing.sm),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(AppRadius.input),
-              border: Border.all(color: colorScheme.outlineVariant),
+              border: Border.all(
+                color: widget.voiceState == VoiceInputState.recording
+                    ? colorScheme.primary
+                    : colorScheme.outlineVariant,
+              ),
               boxShadow: [
                 BoxShadow(
                   color: Colors.black.withValues(alpha: 0.08),
@@ -117,26 +183,46 @@ class _ChatComposerState extends State<ChatComposer> {
                   ),
                   const SizedBox(height: AppSpacing.xs),
                 ],
-                TextField(
-                  controller: widget.controller,
-                  minLines: 1,
-                  maxLines: 6,
-                  keyboardType: TextInputType.multiline,
-                  textCapitalization: TextCapitalization.sentences,
-                  style: const TextStyle(
-                    fontSize: AppTypography.supportingSize,
-                    height: 1.45,
-                  ),
-                  decoration: const InputDecoration(
-                    hintText: '输入消息…',
-                    isDense: true,
-                    filled: false,
-                    border: InputBorder.none,
-                    enabledBorder: InputBorder.none,
-                    focusedBorder: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: AppSpacing.xs,
-                      vertical: AppSpacing.xs,
+                // 只包住 TextField：Listener 是单子布局中立组件，仅把约束原样
+                // 下传，不改变尺寸 / padding / Column 关系；deferToChild 让长按
+                // 只在文字输入区域内生效，不会波及下方按钮。
+                VoiceInputPointerLayer(
+                  enabled: widget.voiceInputEnabled,
+                  onVoiceActiveChanged: (active) {
+                    if (!mounted || _voiceHolding == active) return;
+                    setState(() => _voiceHolding = active);
+                  },
+                  onRecordingStart: widget.onVoiceStart ?? _noop,
+                  onRecordingEnd: widget.onVoiceStop ?? _noop,
+                  onRecordingCancel: widget.onVoiceCancel ?? _noop,
+                  child: TextField(
+                    controller: widget.controller,
+                    minLines: 1,
+                    maxLines: 6,
+                    keyboardType: TextInputType.multiline,
+                    textCapitalization: TextCapitalization.sentences,
+                    enableInteractiveSelection: !suppressSelection,
+                    // 用**固定身份**的 tear-off：若每次 build 传入新闭包，
+                    // EditableText.didUpdateWidget 会因
+                    // `contextMenuBuilder != oldWidget.contextMenuBuilder`
+                    // 反复重建 selection overlay，反而会破坏选择与长按手势。
+                    // 抑制与否在调用时读取当前状态，因此无需更换 builder 身份。
+                    contextMenuBuilder: _buildContextMenu,
+                    style: const TextStyle(
+                      fontSize: AppTypography.supportingSize,
+                      height: 1.45,
+                    ),
+                    decoration: InputDecoration(
+                      hintText: _hintText,
+                      isDense: true,
+                      filled: false,
+                      border: InputBorder.none,
+                      enabledBorder: InputBorder.none,
+                      focusedBorder: InputBorder.none,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: AppSpacing.xs,
+                        vertical: AppSpacing.xs,
+                      ),
                     ),
                   ),
                 ),

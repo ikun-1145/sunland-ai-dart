@@ -65,6 +65,12 @@ import UIKit
       case "answerCompleted":
         hapticManager.play(.answerCompleted)
         result(nil)
+      case "voiceRecordingStarted":
+        hapticManager.play(.voiceRecordingStarted)
+        result(nil)
+      case "voiceRecordingStopped":
+        hapticManager.play(.voiceRecordingStopped)
+        result(nil)
       default:
         result(FlutterMethodNotImplemented)
       }

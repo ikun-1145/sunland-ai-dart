@@ -19,7 +19,17 @@ class AiHapticService {
     );
   }
 
+  /// 长按进入语音录音时的轻触觉。
+  ///
+  /// 与 AI 生成的三段反馈相互独立（不共用 [AiHapticRequest] 的去重状态），
+  /// 且只在 iOS 生效，不改动 Android 现有触觉策略。
+  Future<void> voiceRecordingStarted() => _invoke('voiceRecordingStarted');
+
+  /// 松手停止录音时的另一段轻触觉。识别失败不会再震动。
+  Future<void> voiceRecordingStopped() => _invoke('voiceRecordingStopped');
+
   Future<void> _invoke(String method) async {
+    if (!_isIOS) return;
     try {
       await _channel.invokeMethod<void>(method);
     } catch (_) {
