@@ -12,7 +12,7 @@ void main() {
     expect(mainSource, contains('📄 随便聊聊'));
     expect(mainSource, contains('ModelCatalogService'));
     expect(mainSource, contains('_refreshModelCatalog()'));
-    expect(mainSource, contains('云端符号推理，不使用 DeepSeek'));
+    expect(mainSource, contains('model.displayName'));
     expect(mainSource, contains('服务器开小差了，稍后再试试'));
     expect(mainSource, contains('请求超时了，稍后再试一下'));
     expect(mainSource, contains('网络好像断了，检查一下连接'));
