@@ -10,7 +10,8 @@ void main() {
     expect(mainSource, contains('🐾 查找下个月的兽聚'));
     expect(mainSource, contains('✨ 给我一点灵感'));
     expect(mainSource, contains('📄 随便聊聊'));
-    expect(mainSource, contains('Sunland AI · Beta'));
+    expect(mainSource, contains('ModelCatalogService'));
+    expect(mainSource, contains('_refreshModelCatalog()'));
     expect(mainSource, contains('云端符号推理，不使用 DeepSeek'));
     expect(mainSource, contains('服务器开小差了，稍后再试试'));
     expect(mainSource, contains('请求超时了，稍后再试一下'));
