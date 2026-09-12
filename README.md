@@ -15,7 +15,7 @@ Sunland AI 的 Flutter 客户端。DeepSeek 对话继续通过
   `sb_secret_...` 只存在于 Worker Secret。
 - Sunland 的知识、称呼记忆和语义 Context 只通过远程 AI API 访问。
 - DeepSeek 对话支持最多 4 张图片：客户端会压缩为受控的 JPEG Data URL，
-  Worker 校验后改用 `deepseek-v4-flash-vision-exp`；Base64 不写入本地或云端
+  Worker 校验后改用 `deepseek-flash`；Base64 不写入本地或云端
   会话。Sunland AI 仍不接收图片。
 - 首次远程请求会幂等迁移旧本地状态；收到匹配回执后才删除旧数据，损坏数据
   会保留在设备上。
@@ -40,7 +40,7 @@ npm test
 AI 路由支持在最后一条 `user` 消息中提交 DeepSeek 兼容的 `image_url`
 Data URL。客户端单次最多准备 4 张图片（每张 3 MiB、合计 10 MiB），Worker
 只接受 JPEG、PNG、GIF 或 WebP，按文件签名校验并自动使用
-`deepseek-v4-flash-vision-exp`；含图请求不会降级到纯文本模型。大请求必须先
+`deepseek-flash`；含图请求不会降级到纯文本模型。大请求必须先
 通过应用 JWT 鉴权，JSON 请求上限为 16 MiB。
 
 部署 Worker 时，使用 `APP_JWT_PRIMARY_SECRET`、

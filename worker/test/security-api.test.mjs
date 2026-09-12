@@ -1258,11 +1258,11 @@ test("image content is preserved and routed to the DeepSeek vision model", async
   );
 
   assert.equal(response.status, 200);
-  assert.equal(response.headers.get("x-model"), "deepseek-v4-flash-vision-exp");
+  assert.equal(response.headers.get("x-model"), "deepseek-flash");
   assert.equal(response.headers.get("x-deep"), "1");
   assert.match(await response.text(), /看到了/);
   const upstreamBody = JSON.parse(calls[1].init.body);
-  assert.equal(upstreamBody.model, "deepseek-v4-flash-vision-exp");
+  assert.equal(upstreamBody.model, "deepseek-flash");
   assert.deepEqual(upstreamBody.thinking, { type: "enabled" });
   assert.deepEqual(upstreamBody.messages[1].content[1], {
     type: "image_url",
@@ -1309,7 +1309,7 @@ test("vision requests never fall back to a text-only model", async () => {
 
   assert.equal(response.status, 502);
   assert.deepEqual(upstreamRequests, [{
-    model: "deepseek-v4-flash-vision-exp",
+    model: "deepseek-flash",
     thinking: { type: "disabled" },
   }]);
 });

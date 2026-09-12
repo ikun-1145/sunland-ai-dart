@@ -9,7 +9,7 @@ const MAX_VISION_TOTAL_BYTES = 12 * 1024 * 1024;
 const MAX_TITLE_SOURCE_CHARS = 4000;
 const FREE_DAILY_TITLE_LIMIT = 20;
 const PRO_DAILY_TITLE_LIMIT = 100;
-const DEEPSEEK_VISION_MODEL = "deepseek-v4-flash-vision-exp";
+const DEEPSEEK_VISION_MODEL = "deepseek-flash";
 const RELEASE_REPO = "ikun-1145/sunland-ai-dart";
 const DOWNLOAD_PATH_PREFIX = "/v1/download/";
 const DOWNLOAD_CACHE_CONTROL = "public, max-age=31536000, immutable";
